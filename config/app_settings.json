@@ -1,7 +1,7 @@
 {
   "directories": {
-    "open_image": "/Users/v7/Workspace/Photography/Film/Code/Ultramax ColorChecker",
-    "save_image": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/TestScan",
+    "open_image": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/test_scans",
+    "save_image": "/Users/v7/Desktop",
     "save_lut": ""
   },
   "ui": {

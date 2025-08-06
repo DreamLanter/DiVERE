@@ -634,6 +634,9 @@ class CurveEditorWidget(QWidget):
                 # 兼容旧格式
                 points = curve_data.get("points", [(0.0, 0.0), (1.0, 1.0)])
                 self.curve_edit_widget.set_curve_points(points, emit_signal=False)
+            
+            # 手动触发曲线改变信号，通知主窗口更新预览
+            self.curve_changed.emit(self.current_curve_name, self.curve_edit_widget.get_curve_points())
     
     def _reset_to_linear(self):
         """重置为线性曲线"""

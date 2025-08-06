@@ -59,10 +59,18 @@ class TheEnlarger:
     def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, include_curve: bool = True) -> np.ndarray:
         adjusted_density = density_array.copy()
         if params.enable_correction_matrix and params.correction_matrix_file:
-            matrix_data = self._load_correction_matrix(params.correction_matrix_file)
-            if matrix_data and matrix_data.get("matrix_space") == "density":
-                matrix = np.array(matrix_data["matrix"])
+            # 处理自定义矩阵
+            if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
+                matrix = params.correction_matrix
+                print(f"  应用自定义矩阵:\n{matrix}")
                 adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
+            # 处理预设矩阵
+            else:
+                matrix_data = self._load_correction_matrix(params.correction_matrix_file)
+                if matrix_data and matrix_data.get("matrix_space") == "density":
+                    matrix = np.array(matrix_data["matrix"])
+                    print(f"  应用预设矩阵 {params.correction_matrix_file}:\n{matrix}")
+                    adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
         if params.enable_rgb_gains:
             # RGB增益在密度空间的应用
             # 正增益 -> 降低密度（变亮）

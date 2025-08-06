@@ -26,7 +26,7 @@
 
 #### 方法零：手动下载
 1.首先点Code -> Download ZIP 下载本项目源码（400多MB，大多是校色示例图片）
-2.进入https://github.com/mahmoudnafifi/Deep_White_Balance，同样下载ZIP，并解压到divere/colorConstancyModels/Deep_White_Balance/ 注意“Deep_White_Balance”文件夹名要改一下。
+2.进入 https://github.com/mahmoudnafifi/Deep_White_Balance 同样下载ZIP，并解压到divere/colorConstancyModels/Deep_White_Balance/ 注意“Deep_White_Balance”文件夹名要改一下。
 3.安装python
 4.安装依赖、运行程序：
 ```bash

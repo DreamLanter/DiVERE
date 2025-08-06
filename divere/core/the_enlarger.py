@@ -49,8 +49,11 @@ class TheEnlarger:
         if image.array is None: return image
         # 避免除以零或对零取对数
         safe_array = np.maximum(image.array, 1e-10)
-        density = -np.log10(safe_array) * gamma
-        result_array = np.power(10, density - dmax)
+        # density = -np.log10(safe_array) * gamma
+        # result_array = np.power(10, density - dmax)
+        original_density = -np.log10(safe_array)
+        adjusted_density = dmax - (dmax - original_density) * gamma
+        result_array = np.power(10, adjusted_density)
         return image.copy_with_new_array(result_array)
 
     def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, include_curve: bool = True) -> np.ndarray:

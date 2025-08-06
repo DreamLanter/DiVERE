@@ -1,0 +1,3 @@
+[submodule "divere/colorConstancyModels/Deep_White_Balance"]
+	path = divere/colorConstancyModels/Deep_White_Balance
+	url = https://github.com/mahmoudnafifi/Deep_White_Balance.git

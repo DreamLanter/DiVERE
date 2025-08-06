@@ -115,22 +115,6 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 
-# Project specific
-config/app_settings.json
-TestScan/
-*.cube
-*.tiff
-*.tif
-*.jpg
-*.jpeg
-*.png
-*.bmp
-*.webp
-*.raw
-*.dng
-*.cr2
-*.nef
-*.arw
 
 # Test outputs
 test_*.py

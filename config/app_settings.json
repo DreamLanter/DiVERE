@@ -1,0 +1,21 @@
+{
+  "directories": {
+    "open_image": "/Users/v7/Desktop/云南",
+    "save_image": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/TestScan",
+    "save_lut": ""
+  },
+  "ui": {
+    "window_size": [
+      1200,
+      800
+    ],
+    "window_position": [
+      100,
+      100
+    ]
+  },
+  "defaults": {
+    "input_color_space": "sRGB",
+    "output_color_space": "sRGB"
+  }
+}

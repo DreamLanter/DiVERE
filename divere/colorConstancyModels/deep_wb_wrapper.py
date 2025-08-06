@@ -10,7 +10,7 @@ from typing import Tuple, Optional
 from PIL import Image
 
 # Add the Deep White Balance path
-DEEP_WB_PATH = os.path.join(os.path.dirname(__file__), 'Deep_White_Balance-master', 'PyTorch')
+DEEP_WB_PATH = os.path.join(os.path.dirname(__file__), 'Deep_White_Balance', 'PyTorch')
 sys.path.append(DEEP_WB_PATH)
 
 try:

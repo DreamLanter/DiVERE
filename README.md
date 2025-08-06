@@ -25,15 +25,39 @@
 - **操作系统**: Windows 10+, macOS 10.14+, Ubuntu 18.04+
 - **内存**: 建议 4GB 或更多
 - **存储**: 至少 1GB 可用空间
+- **Git**: 支持子模块的Git版本
+
+### 🚀 快速开始
+
+```bash
+# 1. 克隆项目（包含所有子模块）
+git clone --recursive https://github.com/V7CN/DiVERE.git
+cd DiVERE
+
+# 2. 创建虚拟环境
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# 或 venv\Scripts\activate  # Windows
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 运行应用
+python -m divere
+```
 
 ### 快速安装
 
 #### 方法一：使用pip
 
 ```bash
-# 克隆项目
-git clone https://github.com/V7CN/DiVERE.git
+# 克隆项目（包含子模块）
+git clone --recursive https://github.com/V7CN/DiVERE.git
 cd DiVERE
+
+# 如果克隆时没有包含子模块，请运行：
+# git submodule init
+# git submodule update
 
 # 创建虚拟环境（推荐）
 python -m venv venv
@@ -51,6 +75,14 @@ python -m divere
 #### 方法二：使用conda
 
 ```bash
+# 克隆项目（包含子模块）
+git clone --recursive https://github.com/V7CN/DiVERE.git
+cd DiVERE
+
+# 如果克隆时没有包含子模块，请运行：
+# git submodule init
+# git submodule update
+
 # 创建conda环境
 conda create -n divere python=3.9
 conda activate divere
@@ -64,6 +96,7 @@ python -m divere
 
 ### 依赖包说明
 
+#### 核心依赖
 ```
 PyQt6>=6.5.0          # GUI框架
 numpy>=1.24.0         # 数值计算
@@ -75,14 +108,28 @@ rawpy>=0.18.0         # RAW文件支持
 colour-science>=0.4.2 # 色彩科学计算
 ```
 
-### 可选依赖（AI功能）
+#### AI功能依赖（自动校色）
+```
+torch>=2.0.0          # 深度学习框架
+torchvision>=0.15.0   # 计算机视觉库
+scikit-learn>=1.3.0   # 机器学习工具
+matplotlib>=3.7.0     # 绘图库
+tqdm>=4.65.0          # 进度条
+```
 
+### 子模块说明
+
+本项目使用Git子模块管理第三方库：
+
+- **Deep_White_Balance**: 深度学习自动白平衡算法
+  - 来源: https://github.com/mahmoudnafifi/Deep_White_Balance
+  - 用途: 提供AI自动校色功能
+  - 位置: `divere/colorConstancyModels/Deep_White_Balance/`
+
+如果克隆时没有包含子模块，请运行：
 ```bash
-# 安装PyTorch（用于深度学习自动校色）
-pip install torch torchvision
-
-# 安装scikit-learn（用于多项式映射）
-pip install scikit-learn
+git submodule init
+git submodule update
 ```
 
 ## 🚀 使用指南
@@ -196,12 +243,13 @@ DiVERE/
 │   │   └── lut_generator/    # LUT生成器
 │   └── colorConstancyModels/ # AI自动校色
 │       ├── deep_wb_wrapper.py # Deep White Balance包装器
-│       └── Deep_White_Balance-master/ # 原始项目
+│       ├── utils/            # 工具函数
+│       └── Deep_White_Balance/ # Git子模块
 ├── config/                   # 配置文件
 │   ├── colorspace/          # 色彩空间配置
 │   ├── curves/              # 预设曲线
 │   └── matrices/            # 校正矩阵
-├── TestScan/                # 测试图像
+├── .gitmodules              # Git子模块配置
 ├── requirements.txt         # Python依赖
 ├── pyproject.toml          # 项目配置
 └── README.md               # 项目文档
@@ -211,15 +259,16 @@ DiVERE/
 
 ### 深度学习自动校色
 
-本项目集成了以下优秀的开源项目：
+本项目通过Git子模块集成了以下优秀的开源项目：
 
 #### Deep White Balance
 - **论文**: "Deep White-Balance Editing" (CVPR 2020)
 - **作者**: Mahmoud Afifi, Konstantinos G. Derpanis, Björn Ommer, Michael S. Brown
 - **GitHub**: https://github.com/mahmoudnafifi/Deep_White_Balance
 - **许可证**: MIT License
+- **集成方式**: Git子模块
 
-Deep White Balance提供了基于深度学习的自动白平衡算法，我们将其集成到DiVERE中，实现了自动校色功能。
+Deep White Balance提供了基于深度学习的自动白平衡算法，我们将其作为子模块集成到DiVERE中，实现了自动校色功能。
 
 ### 开源库
 

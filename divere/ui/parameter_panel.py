@@ -108,15 +108,15 @@ class ParameterPanel(QWidget):
         self.density_dmax_spinbox = QDoubleSpinBox()
         self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 50, 400, 0.5, 4.0, 0.01, 200)
         self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01, 350)
-        inversion_layout.addWidget(QLabel("密度Gamma:"), 0, 0)
+        inversion_layout.addWidget(QLabel("密度反差:"), 0, 0)
         inversion_layout.addWidget(self.density_gamma_slider, 0, 1)
         inversion_layout.addWidget(self.density_gamma_spinbox, 0, 2)
-        inversion_layout.addWidget(QLabel("密度Dmax:"), 1, 0)
+        inversion_layout.addWidget(QLabel("最大密度:"), 1, 0)
         inversion_layout.addWidget(self.density_dmax_slider, 1, 1)
         inversion_layout.addWidget(self.density_dmax_spinbox, 1, 2)
         layout.addWidget(inversion_group)
 
-        matrix_group = QGroupBox("校正矩阵")
+        matrix_group = QGroupBox("密度校正矩阵")
         matrix_layout = QVBoxLayout(matrix_group)
         self.matrix_editor_widgets = []
         matrix_grid = QGridLayout()

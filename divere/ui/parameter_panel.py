@@ -408,14 +408,26 @@ class ParameterPanel(QWidget):
         self.current_params.correction_matrix = matrix
         self.current_params.correction_matrix_file = "custom"
         self.current_params.enable_correction_matrix = True
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        
+        # 直接设置下拉菜单为"自定义"，避免update_ui_from_params的复杂逻辑
+        self._is_updating_ui = True
+        self.matrix_combo.setCurrentIndex(0)  # "自定义"是第一个项
+        self._is_updating_ui = False
+        
+        self.parameter_changed.emit()
     
     def _reset_matrix_to_identity(self):
         if self._is_updating_ui: return
         self.current_params.correction_matrix = np.eye(3, dtype=np.float32)
         self.current_params.correction_matrix_file = "custom"
         self.current_params.enable_correction_matrix = True
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        
+        # 直接设置下拉菜单为"自定义"，避免update_ui_from_params的复杂逻辑
+        self._is_updating_ui = True
+        self.matrix_combo.setCurrentIndex(0)  # "自定义"是第一个项
+        self._is_updating_ui = False
+        
+        self.parameter_changed.emit()
 
     def _on_red_gain_changed(self):
         if self._is_updating_ui: return

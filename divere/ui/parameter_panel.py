@@ -93,6 +93,16 @@ class ParameterPanel(QWidget):
         colorspace_layout.addWidget(QLabel("色彩空间:"), 0, 0)
         colorspace_layout.addWidget(self.input_colorspace_combo, 0, 1)
         layout.addWidget(colorspace_group)
+        
+        # 添加说明文字框
+        note_group = QGroupBox("重要说明")
+        note_layout = QVBoxLayout(note_group)
+        note_text = QLabel("Note: 当前版本的DiVERE用的色彩管理是石器时代手搓版，暂时没有读取照片ICC的能力，照片进来后会直接进行色彩空间的基色变换，这意味着要求扫描件数据的gamma=1。推荐的实践：用vuescan软件搭配平板扫描做gamma=1的tiff文件，并且不做任何额外的色彩管理。")
+        note_text.setWordWrap(True)  # 启用自动换行
+        note_text.setStyleSheet("QLabel { color: #666; font-size: 11px; padding: 8px; background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; }")
+        note_layout.addWidget(note_text)
+        layout.addWidget(note_group)
+        
         layout.addStretch()
         return widget
 

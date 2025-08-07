@@ -43,7 +43,7 @@ class ParameterPanel(QWidget):
     def initialize_defaults(self):
         """由主窗口调用，在加载图像后设置并应用默认参数"""
         self._sync_ui_defaults_to_params()
-        self.current_params.density_gamma = 2.0
+        self.current_params.density_gamma = 2.6
         self.current_params.correction_matrix_file = "Cineon_States_M_to_Print_Density"
         self.current_params.enable_correction_matrix = True
         self.current_params.enable_density_inversion = True
@@ -116,8 +116,8 @@ class ParameterPanel(QWidget):
         self.density_gamma_spinbox = QDoubleSpinBox()
         self.density_dmax_slider = QSlider(Qt.Orientation.Horizontal)
         self.density_dmax_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 50, 400, 0.5, 4.0, 0.01, 200)
-        self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01, 350)
+        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 50, 400, 0.5, 4.0, 0.01, 260)
+        self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01, 200)
         inversion_layout.addWidget(QLabel("密度反差:"), 0, 0)
         inversion_layout.addWidget(self.density_gamma_slider, 0, 1)
         inversion_layout.addWidget(self.density_gamma_spinbox, 0, 2)

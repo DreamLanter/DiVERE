@@ -527,7 +527,7 @@ class MainWindow(QMainWindow):
         # 创建一个新的默认参数对象
         self.current_params = ColorGradingParams()
         # 手动设置我们想要的非标准默认值
-        self.current_params.density_gamma = 2.0
+        self.current_params.density_gamma = 2.6
         self.current_params.correction_matrix_file = "Cineon_States_M_to_Print_Density"
         self.current_params.enable_correction_matrix = True
         

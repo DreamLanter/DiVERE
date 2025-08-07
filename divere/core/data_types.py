@@ -67,9 +67,9 @@ class ColorGradingParams:
     input_gain: float = 1.0
     
     # 密度反相参数
-    density_gamma: float = 2.0
+    density_gamma: float = 2.6
     density_gain: float = 1.0
-    density_dmax: float = 3.5
+    density_dmax: float = 2.0
     
     # 校正矩阵
     correction_matrix_file: str = ""
@@ -142,9 +142,9 @@ class ColorGradingParams:
         params = cls()
         params.input_gamma = data.get("input_gamma", 2.2)
         params.input_gain = data.get("input_gain", 1.0)
-        params.density_gamma = data.get("density_gamma", 1.0)
+        params.density_gamma = data.get("density_gamma", 2.6)
         params.density_gain = data.get("density_gain", 1.0)
-        params.density_dmax = data.get("density_dmax", 3.5)
+        params.density_dmax = data.get("density_dmax", 2.0)
         params.correction_matrix_file = data.get("correction_matrix_file", "")
         
         matrix_data = data.get("correction_matrix")

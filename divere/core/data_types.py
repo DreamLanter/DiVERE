@@ -78,6 +78,10 @@ class ColorGradingParams:
     # RGB增益
     rgb_gains: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     
+    # 分通道曝光
+    red_exposure: float = 0.0
+    blue_exposure: float = 0.0
+    
     # 密度曲线
     density_curve_points: List[Tuple[float, float]] = field(default_factory=list)
     
@@ -118,6 +122,8 @@ class ColorGradingParams:
             "correction_matrix_file": self.correction_matrix_file,
             "correction_matrix": self.correction_matrix.tolist() if self.correction_matrix is not None else None,
             "rgb_gains": list(self.rgb_gains),
+            "red_exposure": self.red_exposure,
+            "blue_exposure": self.blue_exposure,
             "density_curve_points": self.density_curve_points,
 
 
@@ -154,6 +160,9 @@ class ColorGradingParams:
         rgb_gains = data.get("rgb_gains", [0.0, 0.0, 0.0])
         params.rgb_gains = tuple(rgb_gains)
         
+        params.red_exposure = data.get("red_exposure", 0.0)
+        params.blue_exposure = data.get("blue_exposure", 0.0)
+        
         params.density_curve_points = data.get("density_curve_points", [])
 
         params.enable_density_curve = data.get("enable_density_curve", False)
@@ -183,6 +192,8 @@ class ColorGradingParams:
         new_params.correction_matrix_file = self.correction_matrix_file
         new_params.correction_matrix = self.correction_matrix.copy() if self.correction_matrix is not None else None
         new_params.rgb_gains = self.rgb_gains
+        new_params.red_exposure = self.red_exposure
+        new_params.blue_exposure = self.blue_exposure
         new_params.density_curve_points = self.density_curve_points.copy()
         
         # 复制调试模式参数

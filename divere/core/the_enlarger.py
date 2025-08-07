@@ -81,6 +81,15 @@ class TheEnlarger:
             # 确保正确广播到每个通道
             for i, gain in enumerate(params.rgb_gains):
                 adjusted_density[:, :, i] -= gain
+        
+        # 分通道曝光调整
+        # 正曝光值 -> 降低密度（变亮）
+        # 负曝光值 -> 增加密度（变暗）
+        if params.red_exposure != 0.0:
+            adjusted_density[:, :, 0] -= params.red_exposure  # 红通道
+        if params.blue_exposure != 0.0:
+            adjusted_density[:, :, 2] -= params.blue_exposure  # 蓝通道
+        
         if include_curve and params.enable_density_curve and params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
             lut_size = 1024
             

@@ -198,7 +198,7 @@ def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=20.
         D_img_list.append(img_densities[patch_id])
         
         # 为特定色块分配权重
-        if patch_id in ['D2', 'D3', 'D4', 'D5', 'D6']: # D2-D6 灰阶
+        if patch_id in ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']: # D1-D6 灰阶
             weights_list.append(gray_patch_weight)
         elif patch_id in ['A1', 'A2']: # A1, A2 肤色
             weights_list.append(skin_tone_weight)

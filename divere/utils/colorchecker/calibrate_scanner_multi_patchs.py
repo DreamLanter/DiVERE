@@ -140,7 +140,7 @@ def prepare_data_for_fitting(ref_densities, all_img_densities, gray_patch_weight
             if patch_id in ref_densities:
                 D_ref_list.append(ref_densities[patch_id])
                 D_img_list.append(img_densities[patch_id])
-                if patch_id in ['D2', 'D3', 'D4', 'D5', 'D6']:
+                if patch_id in ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']:
                     weights_list.append(gray_patch_weight)
                 elif patch_id in ['A1', 'A2']:
                     weights_list.append(skin_tone_weight)

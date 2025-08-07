@@ -184,7 +184,7 @@ def process_image_data(image_path):
 
 # --- 部分 3: 矩阵拟合函数 ---
 
-def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.0, skin_tone_weight=5.0):
+def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=20.0, skin_tone_weight=20.0):
     """准备用于优化的Numpy数组和权重。"""
     print("\nStep 3: Preparing data for fitting...")
     D_ref_list, D_img_list, weights_list = [], [], []
@@ -198,7 +198,7 @@ def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.
         D_img_list.append(img_densities[patch_id])
         
         # 为特定色块分配权重
-        if patch_id.startswith('D'): # D1-D6 灰阶
+        if patch_id in ['D2', 'D3', 'D4', 'D5', 'D6']: # D2-D6 灰阶
             weights_list.append(gray_patch_weight)
         elif patch_id in ['A1', 'A2']: # A1, A2 肤色
             weights_list.append(skin_tone_weight)
@@ -217,10 +217,14 @@ def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.
     return D_ref, D_img, weights
 
 def objective_function(params, D_ref, D_img, weights):
-    """优化器使用的目标函数(加权均方误差)。"""
+    """优化器使用的目标函数(加权均方误差)。模型: D_ref^T = M @ D_img^T + g^T"""
     M = params[:9].reshape(3, 3)
     g = params[9:12]
-    D_pred = D_img @ M + g
+    
+    # D_img shape: (24, 3). D_img.T shape: (3, 24)
+    # M @ D_img.T shape: (3, 24)
+    # D_pred.T shape: (3, 24) -> D_pred shape: (24, 3)
+    D_pred = (M @ D_img.T + g.reshape(-1, 1)).T
     
     # 计算加权误差
     error = (D_ref - D_pred) ** 2
@@ -275,11 +279,17 @@ def apply_and_save_correction(image_path, M, g):
         image_density = -np.log10(np.clip(image_rgb_float, 1e-10, 1.0))
         
         # 3. 应用校正
-        # D_corrected = D_image @ M + g
+        # D_corrected^T = M @ D_image^T + g^T
         # Reshape image_density to (height*width, 3) for matrix multiplication
         height, width, _ = image_density.shape
-        image_density_flat = image_density.reshape(-1, 3)
-        corrected_density_flat = image_density_flat @ M + g
+        image_density_flat = image_density.reshape(-1, 3) # Shape: (N, 3)
+        
+        # Transpose for M @ D calculation
+        image_density_flat_T = image_density_flat.T # Shape: (3, N)
+        corrected_density_flat_T = M @ image_density_flat_T + g.reshape(-1, 1) # Shape: (3, N)
+        
+        # Transpose back and reshape
+        corrected_density_flat = corrected_density_flat_T.T # Shape: (N, 3)
         corrected_density = corrected_density_flat.reshape(height, width, 3)
         
         # 4. 将校正后的密度转换回RGB空间
@@ -347,7 +357,7 @@ def main():
         
         results_data = {
             'description': 'Scanner calibration matrix and offset vector.',
-            'relationship': 'D_reference = D_image @ M + g',
+            'relationship': 'D_reference^T = M @ D_image^T + g^T',
             'M_matrix': M.tolist(),
             'M_normalized': M_normalized.tolist(),
             'M11_value': M11,

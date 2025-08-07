@@ -150,9 +150,18 @@ class ParameterPanel(QWidget):
         combo_layout.addWidget(self.matrix_combo)
         matrix_layout.addLayout(combo_layout)
         matrix_layout.addLayout(matrix_grid)
+        
+        # 按钮布局
+        button_layout = QHBoxLayout()
         reset_button = QPushButton("重置为单位矩阵")
         reset_button.clicked.connect(self._reset_matrix_to_identity)
-        matrix_layout.addWidget(reset_button)
+        button_layout.addWidget(reset_button)
+        
+        save_button = QPushButton("保存矩阵")
+        save_button.clicked.connect(self._save_matrix)
+        button_layout.addWidget(save_button)
+        
+        matrix_layout.addLayout(button_layout)
         layout.addWidget(matrix_group)
         layout.addStretch()
         return widget
@@ -1057,3 +1066,115 @@ class ParameterPanel(QWidget):
         except Exception as e:
             print(f"保存1D LUT失败: {e}")
             return False
+
+    def _save_matrix(self):
+        """保存当前矩阵到文件"""
+        # 检查当前是否有自定义矩阵
+        if (self.current_params.correction_matrix_file != "custom" or 
+            self.current_params.correction_matrix is None):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, 
+                "警告", 
+                "请先编辑矩阵或选择'自定义'模式，然后保存。"
+            )
+            return
+        
+        # 获取矩阵名称
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, 
+            "保存矩阵", 
+            "请输入矩阵名称:"
+        )
+        
+        if not ok or not name:
+            return
+        
+        # 获取描述
+        description, ok = QInputDialog.getText(
+            self, 
+            "保存矩阵", 
+            "请输入矩阵描述（可选）:"
+        )
+        
+        if not ok:
+            return
+        
+        # 准备矩阵数据
+        matrix_data = {
+            "name": name,
+            "description": description,
+            "film_type": "custom",
+            "matrix_space": "density",  # 默认保存为密度空间矩阵
+            "matrix": self.current_params.correction_matrix.tolist()
+        }
+        
+        # 生成文件名（去除特殊字符）
+        safe_filename = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_filename = safe_filename.replace(' ', '_')
+        
+        # 打开文件保存对话框
+        from PyQt6.QtWidgets import QFileDialog
+        from pathlib import Path
+        from ..utils.config_manager import config_manager
+        
+        # 获取上次保存矩阵的目录
+        last_directory = config_manager.get_directory("save_matrix")
+        if not last_directory:
+            last_directory = "config/matrices"
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存矩阵文件",
+            f"{last_directory}/{safe_filename}.json",
+            "JSON文件 (*.json)"
+        )
+        
+        if file_path:
+            try:
+                # 确保文件有.json扩展名
+                if not file_path.endswith('.json'):
+                    file_path += '.json'
+                
+                # 保存当前目录
+                config_manager.set_directory("save_matrix", file_path)
+                
+                # 保存文件
+                import json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(matrix_data, f, indent=2, ensure_ascii=False)
+                
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.information(self, "成功", f"矩阵已保存到：\n{file_path}")
+                
+                # 重新加载矩阵列表
+                self._refresh_matrix_combo()
+                
+            except Exception as e:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "错误", f"保存矩阵时出错：\n{str(e)}")
+    
+    def _refresh_matrix_combo(self):
+        """刷新矩阵下拉列表"""
+        # 保存当前选择
+        current_data = self.matrix_combo.currentData()
+        
+        # 重新加载矩阵
+        self.main_window.the_enlarger.reload_matrices()
+        
+        # 清空并重新填充
+        self.matrix_combo.clear()
+        self.matrix_combo.addItem("自定义", "custom")
+        
+        # 重新加载可用矩阵
+        available = self.main_window.the_enlarger.get_available_matrices()
+        for matrix_id in available:
+            data = self.main_window.the_enlarger._load_correction_matrix(matrix_id)
+            if data: 
+                self.matrix_combo.addItem(data.get("name", matrix_id), matrix_id)
+        
+        # 恢复选择
+        index = self.matrix_combo.findData(current_data)
+        if index >= 0:
+            self.matrix_combo.setCurrentIndex(index)

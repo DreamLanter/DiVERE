@@ -52,7 +52,10 @@ class TheEnlarger:
         # density = -np.log10(safe_array) * gamma
         # result_array = np.power(10, density - dmax)
         original_density = -np.log10(safe_array)
-        adjusted_density = dmax - (dmax - original_density) * gamma
+
+        pivot = 0.9 #以三档曝光为转轴 
+        adjusted_density = pivot + (original_density - pivot) * gamma - dmax
+
         result_array = np.power(10, adjusted_density)
         return image.copy_with_new_array(result_array)
 
@@ -361,8 +364,16 @@ class TheEnlarger:
 
     def _apply_matrix_to_image(self, image_array, matrix):
         """将矩阵应用到图像"""
-        return np.dot(image_array.reshape(-1, 3), matrix.T).reshape(image_array.shape)
+        pivot = 0.9 #以三档曝光为转轴 
+        applyed_array = pivot + np.dot(image_array.reshape(-1, 3) - pivot, matrix.T).reshape(image_array.shape)
+
+        return applyed_array
 
     def get_available_matrices(self) -> List[str]:
         """获取可用的校正矩阵列表"""
-        return list(self._correction_matrices.keys()) 
+        return list(self._correction_matrices.keys())
+    
+    def reload_matrices(self):
+        """重新加载矩阵文件"""
+        self._correction_matrices = {}
+        self._load_default_matrices() 

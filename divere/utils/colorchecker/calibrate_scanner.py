@@ -184,7 +184,7 @@ def process_image_data(image_path):
 
 # --- 部分 3: 矩阵拟合函数 ---
 
-def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.0):
+def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.0, skin_tone_weight=5.0):
     """准备用于优化的Numpy数组和权重。"""
     print("\nStep 3: Preparing data for fitting...")
     D_ref_list, D_img_list, weights_list = [], [], []
@@ -197,18 +197,21 @@ def prepare_data_for_fitting(ref_densities, img_densities, gray_patch_weight=10.
         D_ref_list.append(ref_densities[patch_id])
         D_img_list.append(img_densities[patch_id])
         
-        # 为D1-D6的灰阶色块分配更高的权重
-        if patch_id.startswith('D'):
+        # 为特定色块分配权重
+        if patch_id.startswith('D'): # D1-D6 灰阶
             weights_list.append(gray_patch_weight)
+        elif patch_id in ['A1', 'A2']: # A1, A2 肤色
+            weights_list.append(skin_tone_weight)
         else:
             weights_list.append(1.0)
             
     D_ref = np.array(D_ref_list)
     D_img = np.array(D_img_list)
-    weights = np.array(weights_list).reshape(-1, 1) # Shape: (24, 1)
+    weights = np.array(weights_list).reshape(-1, 1)
     
     print(f"✓ Data prepared. Found {len(common_patches)} patch pairs.")
-    print(f"  Gray-scale patches (D1-D6) are given a weight of {gray_patch_weight}x.")
+    print(f"  - Gray-scale patches (D1-D6) weight: {gray_patch_weight}x")
+    print(f"  - Skin-tone patches (A1, A2) weight: {skin_tone_weight}x")
     print(f"  Reference density range: [{D_ref.min():.4f}, {D_ref.max():.4f}]")
     print(f"  Image density range:     [{D_img.min():.4f}, {D_img.max():.4f}]")
     return D_ref, D_img, weights

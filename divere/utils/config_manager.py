@@ -29,7 +29,8 @@ class ConfigManager:
             "directories": {
                 "open_image": "",
                 "save_image": "",
-                "save_lut": ""
+                "save_lut": "",
+                "save_matrix": ""
             },
             "ui": {
                 "window_size": [1200, 800],

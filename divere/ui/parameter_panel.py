@@ -550,7 +550,7 @@ class ParameterPanel(QWidget):
         
         # 初始化迭代状态
         self._auto_color_iteration = 0
-        self._auto_color_max_iterations = 1  # 最大迭代次数
+        self._auto_color_max_iterations = 10  # 最大迭代次数
         self._auto_color_total_gains = np.zeros(3)
         
         # 开始第一次迭代
@@ -636,7 +636,7 @@ class ParameterPanel(QWidget):
         self.parameter_changed.emit()  # 触发预览更新
         
         # 等待200ms让预览更新完成，然后进行下一次迭代
-        QTimer.singleShot(200, self._perform_auto_color_iteration)
+        QTimer.singleShot(50, self._perform_auto_color_iteration)
 
     def get_current_params(self) -> ColorGradingParams:
         return self.current_params

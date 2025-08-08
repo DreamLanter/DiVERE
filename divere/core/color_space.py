@@ -327,15 +327,18 @@ class ColorSpaceManager:
         original_shape = image_array.shape
         if len(original_shape) == 3:
             h, w, c = original_shape
-            reshaped = image_array.reshape(-1, c)
-            
-            # 应用矩阵变换
-            transformed = np.dot(reshaped, matrix.T)  # 注意转置，因为我们的矩阵是3x3列向量格式
-            
-            # 应用白点适应增益
-            transformed *= gain_vector[np.newaxis, :]
-            
-            return transformed.reshape(original_shape)
+            # 仅对前3个通道做矩阵变换（忽略Alpha），以避免RGBA与3x3矩阵乘法维度不匹配
+            if c >= 3:
+                rgb = image_array[..., :3].reshape(-1, 3)
+                # 应用矩阵与白点增益
+                transformed = np.dot(rgb, matrix.T)
+                transformed *= gain_vector[np.newaxis, :]
+                result = image_array.copy()
+                result[..., :3] = transformed.reshape(h, w, 3)
+                return result
+            else:
+                # 非3通道，直接返回
+                return image_array
         else:
             return image_array
     

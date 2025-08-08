@@ -29,16 +29,169 @@ class ImageManager:
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"图像文件不存在: {file_path}")
+        ext = file_path.suffix.lower()
         
-        # 尝试使用OpenCV加载
+        # 优先使用PIL处理TIFF以正确识别通道顺序（如RGBA/ARGB/CMYK等）
+        if ext in [".tif", ".tiff"]:
+            try:
+                pil_image = Image.open(file_path)
+                mode = pil_image.mode  # 例如: 'RGB', 'RGBA', 'CMYK', 'I;16', 'F', 'LA' 等
+                bands = pil_image.getbands()  # 例如: ('R','G','B','A') 或 ('A','R','G','B') 或 ('C','M','Y','K')
+
+                # 若为CMYK或其它非RGB空间，先转换到RGB
+                if mode in ["CMYK", "YCbCr", "LAB"]:
+                    pil_image = pil_image.convert("RGB")
+                    mode = pil_image.mode
+                    bands = pil_image.getbands()
+
+                image = np.array(pil_image)
+
+                # 归一化到[0,1]
+                if image.dtype != np.float32:
+                    image = image.astype(np.float32)
+                    if image.max() > 1.0:
+                        # 根据位深度推断范围
+                        if image.max() > 255:
+                            image /= 65535.0
+                        else:
+                            image /= 255.0
+
+                # 灰度转为单通道形状 (H,W,1)
+                if image.ndim == 2:
+                    image = image[:, :, np.newaxis]
+
+                # 处理4通道的通道顺序：优先识别Alpha；否则启发式识别红外IR通道（更“平滑/平均”）并移到最后
+                if image.ndim == 3 and image.shape[2] == 4:
+                    print(f"[ImageManager] 检测到4通道TIFF: {file_path.name}, mode={mode}, bands={bands}")
+                    handled = False
+                    # 1) 若bands可用且包含A，按RGBA重排
+                    if bands is not None:
+                        try:
+                            band_list = list(bands)
+                            if 'A' in band_list:
+                                alpha_idx = band_list.index('A')
+                                if set(['R','G','B']).issubset(set(band_list)):
+                                    r_idx = band_list.index('R')
+                                    g_idx = band_list.index('G')
+                                    b_idx = band_list.index('B')
+                                    image = image[..., [r_idx, g_idx, b_idx, alpha_idx]]
+                                    print(f"[ImageManager] 通过bands识别Alpha通道(index={alpha_idx})，已重排为RGBA顺序")
+                                else:
+                                    # 仅将Alpha放末尾
+                                    rgb_indices = [i for i in range(4) if i != alpha_idx]
+                                    image = image[..., rgb_indices + [alpha_idx]]
+                                    print(f"[ImageManager] 通过bands识别Alpha通道(index={alpha_idx})，已将Alpha移至最后")
+                                handled = True
+                        except Exception:
+                            handled = False
+                    
+                    if not handled:
+                        # 2) 启发式识别IR通道：其方差/Laplacian方差明显更低（更平滑/平均）
+                        # 采样以提速
+                        sample = image[::8, ::8, :]
+                        H, W, _ = sample.shape
+                        ch = sample.reshape(-1, 4)
+                        var_spatial = ch.var(axis=0)
+                        # 简单梯度能量（近似边缘能量）
+                        gx = np.diff(sample, axis=1, prepend=sample[:, :1, :])
+                        gy = np.diff(sample, axis=0, prepend=sample[:1, :, :])
+                        edge_energy = (gx**2 + gy**2).mean(axis=(0, 1))
+                        score = var_spatial + 0.5 * edge_energy
+                        candidate = int(np.argmin(score))
+                        # 与次小值比较，确保明显更低
+                        sorted_scores = np.sort(score)
+                        if sorted_scores[0] < 0.5 * sorted_scores[1]:
+                            # 将IR放到最后，其余通道保持原相对顺序
+                            order = [i for i in range(4) if i != candidate] + [candidate]
+                            image = image[..., order]
+                            print(f"[ImageManager] 通过启发式识别IR通道(index={candidate})，score={score.round(6).tolist()}，已重排为RGB+IR")
+                        else:
+                            print(f"[ImageManager] 启发式无法明确识别IR通道，保持原通道顺序，score={score.round(6).tolist()}")
+
+                    # 3) 若存在Alpha通道，则在导入时直接丢弃Alpha，避免影响后续流程
+                    drop_alpha = False
+                    alpha_index = None
+                    # 明确的bands包含A
+                    if bands is not None and 'A' in list(bands):
+                        # 若前面按bands重排过，此时A应在末位；稳妥起见再次定位索引
+                        alpha_index = list(bands).index('A')
+                        # 若已重排至RGBA，alpha_index应为3；否则按当前位置删除
+                        drop_alpha = True
+                    else:
+                        # 启发式判断Alpha（近乎常量且接近0或1）
+                        sample = image[::8, ::8, :]
+                        ch = sample.reshape(-1, 4)
+                        vars_ = ch.var(axis=0)
+                        means_ = ch.mean(axis=0)
+                        for idx in range(4):
+                            if vars_[idx] < 1e-6 and (means_[idx] < 0.01 or means_[idx] > 0.99):
+                                alpha_index = idx
+                                drop_alpha = True
+                                break
+                    if drop_alpha and alpha_index is not None and 0 <= alpha_index < 4:
+                        image = np.delete(image, alpha_index, axis=2)
+                        print(f"[ImageManager] 检测到Alpha通道(index={alpha_index})，已在导入时移除。当前shape={image.shape}")
+
+                # 创建ImageData并返回
+                image_data = ImageData(
+                    array=image,
+                    color_space="Film_KodakRGB_Linear",
+                    file_path=str(file_path),
+                    is_proxy=False,
+                    proxy_scale=1.0
+                )
+                return image_data
+            except Exception as e:
+                # 回退到OpenCV路径
+                pass
+        
+        # 尝试使用OpenCV加载（非TIFF优先走此分支）
         try:
             image = cv2.imread(str(file_path), cv2.IMREAD_UNCHANGED)
             if image is None:
                 raise ValueError("OpenCV无法加载图像")
             
-            # OpenCV使用BGR格式，转换为RGB
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # OpenCV使用BGR(A)格式，转换为RGB(A)
+            if len(image.shape) == 3:
+                if image.shape[2] == 3:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                elif image.shape[2] == 4:
+                    print(f"[ImageManager] 检测到4通道图像(BGRA→RGBA): {file_path.name}")
+                    image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+                    # 对OpenCV读取的4通道图也进行IR启发式识别（若不存在明显Alpha）
+                    sample = image[::8, ::8, :].astype(np.float32) / (255.0 if image.dtype!=np.float32 and image.max()>1.0 else 1.0)
+                    ch = sample.reshape(-1, 4)
+                    var_spatial = ch.var(axis=0)
+                    gx = np.diff(sample, axis=1, prepend=sample[:, :1, :])
+                    gy = np.diff(sample, axis=0, prepend=sample[:1, :, :])
+                    edge_energy = (gx**2 + gy**2).mean(axis=(0, 1))
+                    score = var_spatial + 0.5 * edge_energy
+                    candidate = int(np.argmin(score))
+                    sorted_scores = np.sort(score)
+                    # 若第4通道近似透明掩码（极低方差且均值接近0或1），放行不改。否则按IR处理。
+                    means = ch.mean(axis=0)
+                    is_alpha_like = (var_spatial[candidate] < 1e-6) and (means[candidate] < 0.01 or means[candidate] > 0.99)
+                    if (sorted_scores[0] < 0.5 * sorted_scores[1]) and not is_alpha_like:
+                        order = [i for i in range(4) if i != candidate] + [candidate]
+                        image = image[..., order]
+                        print(f"[ImageManager] 通过启发式识别IR通道(index={candidate})，score={score.round(6).tolist()}，已重排为RGB+IR")
+                    else:
+                        print(f"[ImageManager] 4通道保持顺序，score={score.round(6).tolist()}，alpha_like={bool(is_alpha_like)}")
+
+                    # 导入时移除Alpha（若存在）
+                    # 再次采用启发式：近乎常量且接近0/1的通道视为Alpha
+                    sample2 = image[::8, ::8, :].astype(np.float32) / (255.0 if image.dtype!=np.float32 and image.max()>1.0 else 1.0)
+                    ch2 = sample2.reshape(-1, 4)
+                    vars2 = ch2.var(axis=0)
+                    means2 = ch2.mean(axis=0)
+                    alpha_idx = None
+                    for idx in range(4):
+                        if vars2[idx] < 1e-6 and (means2[idx] < 0.01 or means2[idx] > 0.99):
+                            alpha_idx = idx
+                            break
+                    if alpha_idx is not None:
+                        image = np.delete(image, alpha_idx, axis=2)
+                        print(f"[ImageManager] 检测到Alpha通道(index={alpha_idx})，已在导入时移除。当前shape={image.shape}")
             
             # 转换为float32并归一化到[0,1]
             if image.dtype != np.float32:
@@ -95,6 +248,7 @@ class ImageManager:
             except Exception as e2:
                 raise RuntimeError(f"无法加载图像文件: {e}, {e2}")
         
+        # 如果存在Alpha通道，暂不丢弃，但在后续色彩空间转换时会自动忽略
         # 创建ImageData对象（默认Film_KodakRGB_Linear，色彩空间将由用户手动选择）
         image_data = ImageData(
             array=image,

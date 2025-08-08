@@ -10,6 +10,7 @@ from scipy.ndimage import binary_dilation
 import json
 from pathlib import Path
 from collections import OrderedDict
+import time
 
 from .data_types import ImageData, ColorGradingParams, LUT3D
 
@@ -32,6 +33,11 @@ class TheEnlarger:
         self._curve_lut_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
         self._max_cache_size: int = 64
         self._LOG65536: np.float32 = np.float32(np.log10(65536.0))
+        # 缓存深度白平衡包装器，避免重复加载模型
+        self._deep_wb_wrapper = None
+        # 预览Profiling（可开关）
+        self._profiling_enabled: bool = False
+        self._last_profile: Dict[str, float] = {}
         if not DEEP_WB_AVAILABLE:
             print("Warning: Deep White Balance not available, learning-based auto gain will be disabled")
 
@@ -50,46 +56,82 @@ class TheEnlarger:
             except Exception as e:
                 print(f"Failed to load matrix {matrix_file}: {e}")
 
+    def set_profiling_enabled(self, enabled: bool) -> None:
+        """启用/关闭预览管线Profiling"""
+        self._profiling_enabled = bool(enabled)
+
+    def is_profiling_enabled(self) -> bool:
+        return self._profiling_enabled
+
     def apply_density_inversion(self, image: ImageData, gamma: float, dmax: float) -> ImageData:
-        """应用密度反转"""
-        if image.array is None: return image
-        # 使用预计算的1D LUT进行查表，替代逐像素的log10/pow
-        pivot = 0.9  # 以三档曝光为转轴（保持现有算法一致）
-        xs, ys = self._get_density_inversion_lut(gamma, dmax, pivot, size=8192)
-        # 插值查表（逐值独立，同一映射作用于所有通道）
-        flat = image.array.reshape(-1).astype(np.float32, copy=False)
-        flat_clamped = np.clip(flat, 0.0, 1.0)
-        mapped = np.interp(flat_clamped, xs, ys).astype(image.array.dtype, copy=False)
-        result_array = mapped.reshape(image.array.shape)
+        """应用密度反转（优化版：使用整数索引查表）"""
+        if image.array is None: 
+            return image
+        
+        pivot = 0.9  # 以三档曝光为转轴
+        
+        # 使用更高精度的LUT（65536个点）进行直接索引
+        # 这样可以避免插值，直接用整数索引查表
+        lut_size = 65536
+        lut = self._get_density_inversion_lut_fast(gamma, dmax, pivot, size=lut_size)
+        
+        # 将浮点图像转换为16位整数索引
+        # 限制在[0,1]范围并转换为[0,65535]的整数
+        img_clipped = np.clip(image.array, 0.0, 1.0)
+        
+        # 直接转换为整数索引，避免中间的float32转换
+        # 使用round而不是floor以获得更准确的结果
+        indices = np.round(img_clipped * (lut_size - 1)).astype(np.uint16)
+        
+        # 使用高级索引直接查表，这比interp快得多
+        # np.take在连续内存上特别快
+        result_array = np.take(lut, indices)
+        
+        # 确保输出dtype与输入一致
+        if result_array.dtype != image.array.dtype:
+            result_array = result_array.astype(image.array.dtype, copy=False)
+        
         return image.copy_with_new_array(result_array)
 
-    def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, include_curve: bool = True) -> np.ndarray:
+    def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, include_curve: bool = True, profile: Optional[Dict[str, float]] = None) -> np.ndarray:
         adjusted_density = density_array.copy()
+        if profile is not None:
+            profile.clear()
         if params.enable_correction_matrix and params.correction_matrix_file:
             # 处理自定义矩阵
             if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
+                t_m0 = time.time()
                 matrix = params.correction_matrix
                 #print(f"  应用自定义矩阵:\n{matrix}")
                 adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
+                if profile is not None:
+                    profile['matrix_ms'] = (time.time() - t_m0) * 1000.0
             # 处理预设矩阵
             else:
+                t_m1 = time.time()
                 matrix_data = self._load_correction_matrix(params.correction_matrix_file)
                 if matrix_data and matrix_data.get("matrix_space") == "density":
                     matrix = np.array(matrix_data["matrix"])
                     #print(f"  应用预设矩阵 {params.correction_matrix_file}:\n{matrix}")
                     adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
+                if profile is not None:
+                    profile['matrix_ms'] = profile.get('matrix_ms', 0.0) + (time.time() - t_m1) * 1000.0
         if params.enable_rgb_gains:
             # RGB增益在密度空间的应用
             # 正增益 -> 降低密度（变亮）
             # 负增益 -> 增加密度（变暗）
             # 确保正确广播到每个通道
+            t_g = time.time()
             for i, gain in enumerate(params.rgb_gains):
                 adjusted_density[:, :, i] -= gain
+            if profile is not None:
+                profile['rgb_gains_ms'] = (time.time() - t_g) * 1000.0
         
         if include_curve and params.enable_density_curve and params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
             lut_size = 1024
             
             # 使用与UI一致的单调插值算法生成曲线（带缓存）
+            t_curve = time.time()
             lut = self._get_curve_lut_cached(params.curve_points, lut_size)
 
             # 曲线直接作用在密度空间上
@@ -114,6 +156,8 @@ class TheEnlarger:
             
             # 将曲线输出映射到输出密度范围
             adjusted_density = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
+            if profile is not None:
+                profile['rgb_curve_ms'] = (time.time() - t_curve) * 1000.0
         
         # 应用单通道曲线（在RGB曲线之后）
         if include_curve and params.enable_density_curve:
@@ -123,6 +167,7 @@ class TheEnlarger:
                 (params.enable_curve_b, params.curve_points_b)   # B通道
             ]
             
+            t_ch = time.time()
             for channel_idx, (enabled, curve_points) in enumerate(channel_curves):
                 if enabled and curve_points and len(curve_points) >= 2:
                     lut_size = 1024
@@ -148,6 +193,8 @@ class TheEnlarger:
                     
                     # 将曲线输出映射到输出密度范围
                     adjusted_density[:, :, channel_idx] = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
+            if profile is not None:
+                profile['channel_curves_ms'] = (time.time() - t_ch) * 1000.0
         
         return adjusted_density
 
@@ -182,6 +229,32 @@ class TheEnlarger:
             xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
             ys = lut_y
         return xs, ys
+    
+    def _get_density_inversion_lut_fast(self, gamma: float, dmax: float, pivot: float, size: int = 65536) -> np.ndarray:
+        """获取密度反相LUT（仅返回y值用于直接索引）
+        专门为高性能整数索引设计的版本
+        """
+        key = ("dens_inv_fast", round(float(gamma), 6), round(float(dmax), 6), round(float(pivot), 6), int(size))
+        lut = self._lut1d_cache.get(key)
+        
+        if lut is None:
+            # 生成输入值 [0, 1]
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
+            
+            # 避免log(0)，使用更小的epsilon
+            safe = np.maximum(xs, np.float32(1e-10))
+            
+            # 密度反相公式
+            original_density = -np.log10(safe)
+            adjusted_density = pivot + (original_density - pivot) * gamma - dmax
+            
+            # 使用float32以节省内存和提高缓存效率
+            lut = np.power(np.float32(10.0), adjusted_density).astype(np.float32)
+            
+            # 缓存结果
+            self._cache_put(self._lut1d_cache, key, lut)
+        
+        return lut
 
     def _get_curve_lut_cached(self, control_points: List[Tuple[float, float]], num_samples: int) -> np.ndarray:
         """获取或生成曲线LUT（单调三次插值后的y值，长度为num_samples）"""
@@ -197,17 +270,60 @@ class TheEnlarger:
         return lut
 
     def apply_full_pipeline(self, image: ImageData, params: ColorGradingParams, include_curve: bool = True) -> ImageData:
-        if image is None: return None
+        if image is None:
+            return None
         result = image.copy()
+        t_start = time.time()
+        stage: Dict[str, float] = {}
+
+        # 密度反相
         if params.enable_density_inversion:
+            t0 = time.time()
             result = self.apply_density_inversion(result, params.density_gamma, params.density_dmax)
-        # 将线性值转换为密度值（注意使用负log）
+            stage['density_inversion_ms'] = (time.time() - t0) * 1000.0
+        else:
+            stage['density_inversion_ms'] = 0.0
+
+        # 转为密度
+        t1 = time.time()
         initial_density = -np.log10(np.maximum(result.array, 1e-10))
-        final_density = self._process_in_density_space(initial_density, params, include_curve)
-        # 将密度值转换回线性值
+        stage['to_density_ms'] = (time.time() - t1) * 1000.0
+
+        # 在密度空间处理
+        t2 = time.time()
+        sub_profile: Dict[str, float] = {}
+        final_density = self._process_in_density_space(initial_density, params, include_curve, sub_profile)
+        stage['process_density_ms'] = (time.time() - t2) * 1000.0
+
+        # 回到线性
+        t3 = time.time()
         final_array = np.power(10, -final_density)
-        # 确保最终结果在合理范围内，防止极端值
+        stage['to_linear_ms'] = (time.time() - t3) * 1000.0
+
+        # 裁剪
+        t4 = time.time()
         final_array = np.clip(final_array, 0.0, 1.0)
+        stage['clip_ms'] = (time.time() - t4) * 1000.0
+
+        total_ms = (time.time() - t_start) * 1000.0
+        stage['total_pipeline_ms'] = total_ms
+        for k, v in sub_profile.items():
+            stage[f"process/{k}"] = v
+        self._last_profile = stage
+
+        if self._profiling_enabled:
+            print(
+                "预览管线Profiling: "
+                f"密度反相={stage['density_inversion_ms']:.1f}ms, "
+                f"转为密度={stage['to_density_ms']:.1f}ms, "
+                f"密度处理={stage['process_density_ms']:.1f}ms "
+                f"(矩阵={stage.get('process/matrix_ms', 0.0):.1f}ms, "
+                f"RGB增益={stage.get('process/rgb_gains_ms', 0.0):.1f}ms, "
+                f"RGB曲线={stage.get('process/rgb_curve_ms', 0.0):.1f}ms, "
+                f"单通道曲线={stage.get('process/channel_curves_ms', 0.0):.1f}ms), "
+                f"回到线性={stage['to_linear_ms']:.1f}ms, 裁剪={stage['clip_ms']:.1f}ms, 总={stage['total_pipeline_ms']:.1f}ms"
+            )
+
         return image.copy_with_new_array(final_array)
 
     def calculate_auto_gain_legacy(self, image: ImageData, njet: int = 1, p_norm: float = 6.0, sigma: float = 1.0) -> Tuple[float, float, float, float, float, float]:
@@ -286,17 +402,30 @@ class TheEnlarger:
 
         try:
             # 确保图像数据在 [0, 255] 范围内
+            t0 = time.time()
             img_uint8 = image.array.copy()
             if img_uint8.max() <= 1.0:
                 img_uint8 = (img_uint8 * 255).astype(np.uint8)
 
             # 使用深度学习模型进行白平衡
-            deep_wb_wrapper = create_deep_wb_wrapper()
+            # 缓存与复用模型，避免每次加载
+            if self._deep_wb_wrapper is None:
+                # 优先尝试GPU
+                try:
+                    deep_wb_wrapper = create_deep_wb_wrapper(device='cuda')
+                except Exception:
+                    deep_wb_wrapper = create_deep_wb_wrapper(device='cpu')
+                self._deep_wb_wrapper = deep_wb_wrapper
+            deep_wb_wrapper = self._deep_wb_wrapper
             if deep_wb_wrapper is None:
                 return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 
             # 应用深度学习白平衡
-            result = deep_wb_wrapper.process_image(img_uint8)
+            # 降低推理输入最大边长以提升速度（例如512），保持效果可用
+            inference_size = 512
+            t1 = time.time()
+            result = deep_wb_wrapper.process_image(img_uint8, max_size=inference_size)
+            t2 = time.time()
             
             if result is None:
                 return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
@@ -316,6 +445,9 @@ class TheEnlarger:
             
             # 计算光源估计（归一化的原始均值）
             illuminant = original_mean / np.sum(original_mean)
+            
+            t3 = time.time()
+            print(f"AI自动校色耗时: 预处理={(t1 - t0)*1000:.1f}ms, 推理={(t2 - t1)*1000:.1f}ms, 统计/收尾={(t3 - t2)*1000:.1f}ms, 总={(t3 - t0)*1000:.1f}ms")
             
             # print(f"  深度学习自动校色，光源估计值为：R={illuminant[0]:.2f}, G={illuminant[1]:.2f}, B={illuminant[2]:.2f}")
             # print(f"  计算出的增益：R={gains[0]:.3f}, G={gains[1]:.3f}, B={gains[2]:.3f}")

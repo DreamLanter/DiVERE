@@ -24,6 +24,13 @@ class ColorSpaceManager:
         # 不再需要预计算转换矩阵，使用在线计算
         # 增加一个简单的转换缓存，加速重复转换
         self._convert_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
+        # Profiling 开关
+        self._profiling_enabled: bool = False
+    def set_profiling_enabled(self, enabled: bool) -> None:
+        self._profiling_enabled = bool(enabled)
+
+    def is_profiling_enabled(self) -> bool:
+        return self._profiling_enabled
     
     def _load_colorspaces_from_json(self):
         """从JSON文件加载色彩空间定义"""
@@ -258,13 +265,23 @@ class ColorSpaceManager:
         source_space = source_profile if source_profile else image.color_space
         
         # 先转换到线性空间
+        import time
+        t0 = time.time()
         linear_image = self._convert_to_linear(image, source_space)
+        t1 = time.time()
         
         # 然后转换到ACEScg
         if source_space != "ACEScg":
             # 使用在线计算的转换矩阵和增益向量
+            t2 = time.time()
             conversion_matrix, gain_vector = self.calculate_color_space_conversion(source_space, "ACEScg")
+            t3 = time.time()
             linear_image.array = self._apply_color_conversion(linear_image.array, conversion_matrix, gain_vector)
+            t4 = time.time()
+            if self._profiling_enabled:
+                print(
+                    f"到工作空间Profiling: gamma逆变换={(t1 - t0)*1000:.1f}ms, 计算矩阵={(t3 - t2)*1000:.1f}ms, 应用矩阵={(t4 - t3)*1000:.1f}ms"
+                )
         
         linear_image.color_space = "ACEScg"
         return linear_image
@@ -277,13 +294,24 @@ class ColorSpaceManager:
         # 从ACEScg转换到目标空间
         if image.color_space == "ACEScg":
             # 使用在线计算的转换矩阵和增益向量
+            import time
+            t0 = time.time()
             conversion_matrix, gain_vector = self.calculate_color_space_conversion("ACEScg", target_space)
+            t1 = time.time()
             image.array = self._apply_color_conversion(image.array, conversion_matrix, gain_vector)
+            t2 = time.time()
         
         # 应用gamma校正
+        t3 = time.time()
         image.array = self._apply_gamma(image.array, self._color_spaces[target_space]["gamma"])
+        t4 = time.time()
         image.color_space = target_space
         
+        if self._profiling_enabled:
+            print(
+                f"显示空间转换Profiling: 计算矩阵={(t1 - t0)*1000 if 't1' in locals() else 0:.1f}ms, 应用矩阵={(t2 - t1)*1000 if 't2' in locals() else 0:.1f}ms, gamma={(t4 - t3)*1000:.1f}ms"
+            )
+
         return image
     
     def _convert_to_linear(self, image: ImageData, source_space: str) -> ImageData:

@@ -174,6 +174,13 @@ class MainWindow(QMainWindow):
         estimate_film_action = QAction("估算胶片类型", self)
         estimate_film_action.triggered.connect(self._estimate_film_type)
         tools_menu.addAction(estimate_film_action)
+
+        # 启用预览Profiling
+        tools_menu.addSeparator()
+        profiling_action = QAction("启用预览Profiling", self)
+        profiling_action.setCheckable(True)
+        profiling_action.toggled.connect(self._toggle_profiling)
+        tools_menu.addAction(profiling_action)
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
@@ -621,27 +628,34 @@ class MainWindow(QMainWindow):
         
         try:
             import time
-            start_time = time.time()
+            t0 = time.time()
             # 使用统一的完整处理模式
             result_image = self.the_enlarger.apply_full_pipeline(
                 self.current_proxy, self.current_params
             )
-            
+            t1 = time.time()
             # 转换到显示色彩空间
             result_image = self.color_space_manager.convert_to_display_space(
                 result_image, "DisplayP3"
             )
+            t2 = time.time()
             
             # 更新预览
             self.preview_widget.set_image(result_image)
             
-            # 性能监控
-            end_time = time.time()
-            processing_time = (end_time - start_time) * 1000  # 转换为毫秒
-            print(f"  处理时间: {processing_time:.1f}ms")
+            # 性能监控（细分阶段）
+            print(
+                f"预览耗时: 管线={(t1 - t0)*1000:.1f}ms, 显示色彩转换={(t2 - t1)*1000:.1f}ms, 总={(t2 - t0)*1000:.1f}ms"
+            )
             
         except Exception as e:
             print(f"更新预览失败: {e}")
+
+    def _toggle_profiling(self, enabled: bool):
+        """切换预览Profiling"""
+        self.the_enlarger.set_profiling_enabled(enabled)
+        self.color_space_manager.set_profiling_enabled(enabled)
+        self.statusBar().showMessage("预览Profiling已开启" if enabled else "预览Profiling已关闭")
     
     def on_parameter_changed(self):
         """参数改变时的回调"""

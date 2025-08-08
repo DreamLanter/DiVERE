@@ -99,9 +99,9 @@ class ColorSpaceManager:
             # 计算白点适应增益向量
             gain_vector = self._calculate_white_point_adaptation(src_space, dst_space)
             
-            print(f"计算色彩空间转换: {src_space_name} -> {dst_space_name}")
-            print(f"转换矩阵:\n{conversion_matrix}")
-            print(f"增益向量: {gain_vector}")
+            # print(f"计算色彩空间转换: {src_space_name} -> {dst_space_name}")
+            # print(f"转换矩阵:\n{conversion_matrix}")
+            # print(f"增益向量: {gain_vector}")
             
             return conversion_matrix, gain_vector
             

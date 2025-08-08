@@ -126,23 +126,6 @@ class ParameterPanel(QWidget):
         inversion_layout.addWidget(self.density_dmax_spinbox, 1, 2)
         layout.addWidget(inversion_group)
 
-        # 分通道曝光组
-        exposure_group = QGroupBox("分通道曝光")
-        exposure_layout = QGridLayout(exposure_group)
-        self.red_exposure_slider = QSlider(Qt.Orientation.Horizontal)
-        self.red_exposure_spinbox = QDoubleSpinBox()
-        self.blue_exposure_slider = QSlider(Qt.Orientation.Horizontal)
-        self.blue_exposure_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.red_exposure_slider, self.red_exposure_spinbox, -200, 200, -2.0, 2.0, 0.01, 0)
-        self._setup_slider_spinbox(self.blue_exposure_slider, self.blue_exposure_spinbox, -200, 200, -2.0, 2.0, 0.01, 0)
-        exposure_layout.addWidget(QLabel("红通道:"), 0, 0)
-        exposure_layout.addWidget(self.red_exposure_slider, 0, 1)
-        exposure_layout.addWidget(self.red_exposure_spinbox, 0, 2)
-        exposure_layout.addWidget(QLabel("蓝通道:"), 1, 0)
-        exposure_layout.addWidget(self.blue_exposure_slider, 1, 1)
-        exposure_layout.addWidget(self.blue_exposure_spinbox, 1, 2)
-        layout.addWidget(exposure_group)
-
         matrix_group = QGroupBox("密度校正矩阵")
         matrix_layout = QVBoxLayout(matrix_group)
         self.matrix_editor_widgets = []
@@ -194,9 +177,9 @@ class ParameterPanel(QWidget):
         self.green_gain_spinbox = QDoubleSpinBox()
         self.blue_gain_slider = QSlider(Qt.Orientation.Horizontal)
         self.blue_gain_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.red_gain_slider, self.red_gain_spinbox, -200, 200, -2.0, 2.0, 0.01, 0)
-        self._setup_slider_spinbox(self.green_gain_slider, self.green_gain_spinbox, -200, 200, -2.0, 2.0, 0.01, 0)
-        self._setup_slider_spinbox(self.blue_gain_slider, self.blue_gain_spinbox, -200, 200, -2.0, 2.0, 0.01, 0)
+        self._setup_slider_spinbox(self.red_gain_slider, self.red_gain_spinbox, -300, 300, -3.0, 3.0, 0.01, 0)
+        self._setup_slider_spinbox(self.green_gain_slider, self.green_gain_spinbox, -300, 300, -3.0, 3.0, 0.01, 0)
+        self._setup_slider_spinbox(self.blue_gain_slider, self.blue_gain_spinbox, -300, 300, -3.0, 3.0, 0.01, 0)
         rgb_layout.addWidget(QLabel("R:"), 0, 0); rgb_layout.addWidget(self.red_gain_slider, 0, 1); rgb_layout.addWidget(self.red_gain_spinbox, 0, 2)
         rgb_layout.addWidget(QLabel("G:"), 1, 0); rgb_layout.addWidget(self.green_gain_slider, 1, 1); rgb_layout.addWidget(self.green_gain_spinbox, 1, 2)
         rgb_layout.addWidget(QLabel("B:"), 2, 0); rgb_layout.addWidget(self.blue_gain_slider, 2, 1); rgb_layout.addWidget(self.blue_gain_spinbox, 2, 2)
@@ -331,10 +314,6 @@ class ParameterPanel(QWidget):
         self.green_gain_spinbox.valueChanged.connect(self._on_green_gain_changed)
         self.blue_gain_slider.valueChanged.connect(self._on_blue_gain_changed)
         self.blue_gain_spinbox.valueChanged.connect(self._on_blue_gain_changed)
-        self.red_exposure_slider.valueChanged.connect(self._on_red_exposure_changed)
-        self.red_exposure_spinbox.valueChanged.connect(self._on_red_exposure_changed)
-        self.blue_exposure_slider.valueChanged.connect(self._on_blue_exposure_changed)
-        self.blue_exposure_spinbox.valueChanged.connect(self._on_blue_exposure_changed)
         self.auto_color_button.clicked.connect(self._on_auto_color_correct_clicked)
         self.curve_editor.curve_changed.connect(self._on_curve_changed)
 
@@ -375,12 +354,6 @@ class ParameterPanel(QWidget):
             self.blue_gain_slider.setValue(int(float(params.rgb_gains[2]) * 100))
             self.blue_gain_spinbox.setValue(float(params.rgb_gains[2]))
 
-            # 更新分通道曝光参数
-            self.red_exposure_slider.setValue(int(float(params.red_exposure) * 100))
-            self.red_exposure_spinbox.setValue(float(params.red_exposure))
-            self.blue_exposure_slider.setValue(int(float(params.blue_exposure) * 100))
-            self.blue_exposure_spinbox.setValue(float(params.blue_exposure))
-
             # 设置所有通道的曲线
             curves = {
                 'RGB': params.curve_points,
@@ -407,8 +380,6 @@ class ParameterPanel(QWidget):
         self.current_params.density_gamma = self.density_gamma_spinbox.value()
         self.current_params.density_dmax = self.density_dmax_spinbox.value()
         self.current_params.rgb_gains = (self.red_gain_spinbox.value(), self.green_gain_spinbox.value(), self.blue_gain_spinbox.value())
-        self.current_params.red_exposure = self.red_exposure_spinbox.value()
-        self.current_params.blue_exposure = self.blue_exposure_spinbox.value()
         
         # 获取所有通道的曲线
         all_curves = self.curve_editor.get_all_curves()
@@ -493,18 +464,6 @@ class ParameterPanel(QWidget):
         if self._is_updating_ui: return
         val = self.blue_gain_slider.value() / 100.0 if self.sender() == self.blue_gain_slider else self.blue_gain_spinbox.value()
         self.current_params.rgb_gains = (self.current_params.rgb_gains[0], self.current_params.rgb_gains[1], float(val))
-        self.update_ui_from_params(); self.parameter_changed.emit()
-
-    def _on_red_exposure_changed(self):
-        if self._is_updating_ui: return
-        val = self.red_exposure_slider.value() / 100.0 if self.sender() == self.red_exposure_slider else self.red_exposure_spinbox.value()
-        self.current_params.red_exposure = float(val)
-        self.update_ui_from_params(); self.parameter_changed.emit()
-
-    def _on_blue_exposure_changed(self):
-        if self._is_updating_ui: return
-        val = self.blue_exposure_slider.value() / 100.0 if self.sender() == self.blue_exposure_slider else self.blue_exposure_spinbox.value()
-        self.current_params.blue_exposure = float(val)
         self.update_ui_from_params(); self.parameter_changed.emit()
 
     def _on_curve_changed(self, curve_name: str, points: list):
@@ -601,12 +560,6 @@ class ParameterPanel(QWidget):
         current_rgb_gains = np.array(self.current_params.rgb_gains)
         new_rgb_gains = np.clip(current_rgb_gains + current_gains, -2.0, 2.0)
         
-        # 计算光源RGB的偏差（用于显示信息，不用于判断收敛）
-        illuminant_balance = np.std(current_illuminant) / np.mean(current_illuminant)  # 相对标准差
-        max_illuminant_diff = np.max(current_illuminant) - np.min(current_illuminant)
-        
-        print(f"  光源平衡度: 相对标准差={illuminant_balance:.3f}, 最大差值={max_illuminant_diff:.3f}")
-        
         # 检查是否达到最大迭代次数
         if self._auto_color_iteration >= self._auto_color_max_iterations:
             print(f"自动校色完成！共执行 {self._auto_color_iteration} 次迭代")
@@ -621,9 +574,6 @@ class ParameterPanel(QWidget):
         
         # 如果增益变化很小（接近收敛），也提前结束
         if np.allclose(current_rgb_gains, new_rgb_gains, atol=1e-6):
-            print("自动校色收敛，增益变化极小。")
-            print(f"最终累计增益: R={self._auto_color_total_gains[0]:.3f}, G={self._auto_color_total_gains[1]:.3f}, B={self._auto_color_total_gains[2]:.3f}")
-            
             # 更新参数和UI
             self.current_params.rgb_gains = tuple(new_rgb_gains)
             self.update_ui_from_params()

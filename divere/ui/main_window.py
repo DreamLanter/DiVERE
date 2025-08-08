@@ -565,7 +565,6 @@ class MainWindow(QMainWindow):
                             self.current_params.curve_points_b = data['curves']['B']
                             self.current_params.enable_curve_b = True
                         
-                        print(f"已加载默认曲线: Kodak Endura Paper")
                     else:
                         print("默认曲线文件格式不正确")
             else:
@@ -623,31 +622,10 @@ class MainWindow(QMainWindow):
         try:
             import time
             start_time = time.time()
-            
-            # 调试输出
-            print(f"更新预览 - 参数状态:")
-            print(f"  密度gamma: {self.current_params.density_gamma}")
-            print(f"  密度gain: {self.current_params.density_gain}")
-            print(f"  密度dmax: {self.current_params.density_dmax}")
-            print(f"  RGB增益: {self.current_params.rgb_gains}")
-
-            print(f"  启用密度反相: {self.current_params.enable_density_inversion}")
-            print(f"  启用RGB曝光: {self.current_params.enable_rgb_gains}")
-            print(f"  启用校正矩阵: {self.current_params.enable_correction_matrix}")
-            print(f"  校正矩阵文件: {self.current_params.correction_matrix_file}")
-            if self.current_params.correction_matrix is not None:
-                print(f"  校正矩阵:\n{self.current_params.correction_matrix}")
-            else:
-                print(f"  校正矩阵: None")
-            
             # 使用统一的完整处理模式
             result_image = self.the_enlarger.apply_full_pipeline(
                 self.current_proxy, self.current_params
             )
-            
-            # 调试输出结果
-            print(f"  处理后平均值: {np.mean(result_image.array):.4f}")
-            print(f"  原始平均值: {np.mean(self.current_proxy.array):.4f}")
             
             # 转换到显示色彩空间
             result_image = self.color_space_manager.convert_to_display_space(

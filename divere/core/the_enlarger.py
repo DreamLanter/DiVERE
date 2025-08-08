@@ -65,14 +65,14 @@ class TheEnlarger:
             # 处理自定义矩阵
             if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
                 matrix = params.correction_matrix
-                print(f"  应用自定义矩阵:\n{matrix}")
+                #print(f"  应用自定义矩阵:\n{matrix}")
                 adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
             # 处理预设矩阵
             else:
                 matrix_data = self._load_correction_matrix(params.correction_matrix_file)
                 if matrix_data and matrix_data.get("matrix_space") == "density":
                     matrix = np.array(matrix_data["matrix"])
-                    print(f"  应用预设矩阵 {params.correction_matrix_file}:\n{matrix}")
+                    #print(f"  应用预设矩阵 {params.correction_matrix_file}:\n{matrix}")
                     adjusted_density = self._apply_matrix_to_image(adjusted_density + params.density_dmax, matrix) - params.density_dmax
         if params.enable_rgb_gains:
             # RGB增益在密度空间的应用
@@ -81,14 +81,6 @@ class TheEnlarger:
             # 确保正确广播到每个通道
             for i, gain in enumerate(params.rgb_gains):
                 adjusted_density[:, :, i] -= gain
-        
-        # 分通道曝光调整
-        # 正曝光值 -> 降低密度（变亮）
-        # 负曝光值 -> 增加密度（变暗）
-        if params.red_exposure != 0.0:
-            adjusted_density[:, :, 0] -= params.red_exposure  # 红通道
-        if params.blue_exposure != 0.0:
-            adjusted_density[:, :, 2] -= params.blue_exposure  # 蓝通道
         
         if include_curve and params.enable_density_curve and params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
             lut_size = 1024
@@ -240,7 +232,6 @@ class TheEnlarger:
         返回: (r_gain, g_gain, b_gain, r_illuminant, g_illuminant, b_illuminant)
         """
         if not DEEP_WB_AVAILABLE:
-            print("Deep White Balance not available, returning default gains.")
             return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 
         if image.array is None or image.array.size == 0:
@@ -255,14 +246,12 @@ class TheEnlarger:
             # 使用深度学习模型进行白平衡
             deep_wb_wrapper = create_deep_wb_wrapper()
             if deep_wb_wrapper is None:
-                print("Failed to create Deep White Balance wrapper, returning default gains.")
                 return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 
             # 应用深度学习白平衡
             result = deep_wb_wrapper.process_image(img_uint8)
             
             if result is None:
-                print("Deep White Balance processing failed, returning default gains.")
                 return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 
             # 计算增益（原始图像与校正后图像的比值）
@@ -281,8 +270,8 @@ class TheEnlarger:
             # 计算光源估计（归一化的原始均值）
             illuminant = original_mean / np.sum(original_mean)
             
-            print(f"  深度学习自动校色，光源估计值为：R={illuminant[0]:.2f}, G={illuminant[1]:.2f}, B={illuminant[2]:.2f}")
-            print(f"  计算出的增益：R={gains[0]:.3f}, G={gains[1]:.3f}, B={gains[2]:.3f}")
+            # print(f"  深度学习自动校色，光源估计值为：R={illuminant[0]:.2f}, G={illuminant[1]:.2f}, B={illuminant[2]:.2f}")
+            # print(f"  计算出的增益：R={gains[0]:.3f}, G={gains[1]:.3f}, B={gains[2]:.3f}")
             
             return (gains[0], gains[1], gains[2], illuminant[0], illuminant[1], illuminant[2])
             

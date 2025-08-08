@@ -260,7 +260,7 @@ class ImageManager:
         
         return image_data
     
-    def generate_proxy(self, image: ImageData, max_size: Tuple[int, int] = (1920, 1080)) -> ImageData:
+    def generate_proxy(self, image: ImageData, max_size: Tuple[int, int] = (2000, 2000)) -> ImageData:
         """生成代理图像"""
         # 移除这个检查，允许对代理图像进行进一步缩放
         # if image.is_proxy:

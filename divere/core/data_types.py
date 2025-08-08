@@ -105,7 +105,7 @@ class ColorGradingParams:
     small_proxy: bool = True
     low_precision_lut: bool = True  # 使用低精度LUT
     lut_size: int = 16  # LUT大小，默认16x16x16
-    proxy_size: str = "1920x1080"  # 代理图像大小
+    proxy_size: str = "2000x2000"  # 代理图像大小
     
     def to_dict(self) -> Dict[str, Any]:
         """序列化为字典"""

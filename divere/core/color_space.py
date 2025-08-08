@@ -4,7 +4,7 @@
 """
 
 import numpy as np
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 from pathlib import Path
 import colour
 import json
@@ -22,6 +22,8 @@ class ColorSpaceManager:
         self._load_colorspaces_from_json()
         
         # 不再需要预计算转换矩阵，使用在线计算
+        # 增加一个简单的转换缓存，加速重复转换
+        self._convert_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
     
     def _load_colorspaces_from_json(self):
         """从JSON文件加载色彩空间定义"""
@@ -75,6 +77,12 @@ class ColorSpaceManager:
         if src_space_name == dst_space_name:
             return np.eye(3), np.array([1.0, 1.0, 1.0])
         
+        # 缓存命中
+        cache_key = (src_space_name, dst_space_name)
+        cached = self._convert_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         # 获取源和目标色彩空间信息
         src_space = self._color_spaces.get(src_space_name)
         dst_space = self._color_spaces.get(dst_space_name)
@@ -99,11 +107,9 @@ class ColorSpaceManager:
             # 计算白点适应增益向量
             gain_vector = self._calculate_white_point_adaptation(src_space, dst_space)
             
-            # print(f"计算色彩空间转换: {src_space_name} -> {dst_space_name}")
-            # print(f"转换矩阵:\n{conversion_matrix}")
-            # print(f"增益向量: {gain_vector}")
-            
-            return conversion_matrix, gain_vector
+            # 缓存结果
+            self._convert_cache[cache_key] = (conversion_matrix.astype(np.float32), gain_vector.astype(np.float32))
+            return self._convert_cache[cache_key]
             
         except Exception as e:
             print(f"色彩空间转换计算失败: {e}")

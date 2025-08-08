@@ -4,11 +4,12 @@
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import binary_dilation
 import json
 from pathlib import Path
+from collections import OrderedDict
 
 from .data_types import ImageData, ColorGradingParams, LUT3D
 
@@ -26,6 +27,11 @@ class TheEnlarger:
     def __init__(self):
         self._correction_matrices = {}
         self._load_default_matrices()
+        # 预计算与缓存（用于加速预览）
+        self._lut1d_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
+        self._curve_lut_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
+        self._max_cache_size: int = 64
+        self._LOG65536: np.float32 = np.float32(np.log10(65536.0))
         if not DEEP_WB_AVAILABLE:
             print("Warning: Deep White Balance not available, learning-based auto gain will be disabled")
 
@@ -47,16 +53,14 @@ class TheEnlarger:
     def apply_density_inversion(self, image: ImageData, gamma: float, dmax: float) -> ImageData:
         """应用密度反转"""
         if image.array is None: return image
-        # 避免除以零或对零取对数
-        safe_array = np.maximum(image.array, 1e-10)
-        # density = -np.log10(safe_array) * gamma
-        # result_array = np.power(10, density - dmax)
-        original_density = -np.log10(safe_array)
-
-        pivot = 0.9 #以三档曝光为转轴 
-        adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-
-        result_array = np.power(10, adjusted_density)
+        # 使用预计算的1D LUT进行查表，替代逐像素的log10/pow
+        pivot = 0.9  # 以三档曝光为转轴（保持现有算法一致）
+        xs, ys = self._get_density_inversion_lut(gamma, dmax, pivot, size=8192)
+        # 插值查表（逐值独立，同一映射作用于所有通道）
+        flat = image.array.reshape(-1).astype(np.float32, copy=False)
+        flat_clamped = np.clip(flat, 0.0, 1.0)
+        mapped = np.interp(flat_clamped, xs, ys).astype(image.array.dtype, copy=False)
+        result_array = mapped.reshape(image.array.shape)
         return image.copy_with_new_array(result_array)
 
     def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, include_curve: bool = True) -> np.ndarray:
@@ -85,9 +89,8 @@ class TheEnlarger:
         if include_curve and params.enable_density_curve and params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
             lut_size = 1024
             
-            # 使用与UI一致的单调插值算法生成曲线
-            curve_samples = self._generate_monotonic_curve(params.curve_points, lut_size)
-            lut = np.array([p[1] for p in curve_samples])
+            # 使用与UI一致的单调插值算法生成曲线（带缓存）
+            lut = self._get_curve_lut_cached(params.curve_points, lut_size)
 
             # 曲线直接作用在密度空间上
             # - 曲线输入X：[0, 1] 对应密度范围 [4.816, 0] (暗部到亮部，注意反转)
@@ -124,9 +127,8 @@ class TheEnlarger:
                 if enabled and curve_points and len(curve_points) >= 2:
                     lut_size = 1024
                     
-                    # 生成单通道曲线LUT
-                    curve_samples = self._generate_monotonic_curve(curve_points, lut_size)
-                    lut = np.array([p[1] for p in curve_samples])
+                    # 生成单通道曲线LUT（带缓存）
+                    lut = self._get_curve_lut_cached(curve_points, lut_size)
                     
                     # 只处理当前通道
                     channel_density = adjusted_density[:, :, channel_idx]
@@ -148,6 +150,51 @@ class TheEnlarger:
                     adjusted_density[:, :, channel_idx] = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
         
         return adjusted_density
+
+    # =====================
+    # 缓存与工具函数
+    # =====================
+    def clear_caches(self) -> None:
+        """清空内部缓存（调试用）"""
+        self._lut1d_cache.clear()
+        self._curve_lut_cache.clear()
+
+    def _cache_put(self, cache: "OrderedDict[Any, np.ndarray]", key: Any, value: np.ndarray) -> None:
+        cache[key] = value
+        cache.move_to_end(key)
+        if len(cache) > self._max_cache_size:
+            cache.popitem(last=False)
+
+    def _get_density_inversion_lut(self, gamma: float, dmax: float, pivot: float, size: int = 8192) -> Tuple[np.ndarray, np.ndarray]:
+        """获取或生成密度反相1D LUT: x∈[0,1] → y∈[0,1]
+        y = 10 ** ( pivot + (-log10(max(x,1e-10)) - pivot) * gamma - dmax )
+        """
+        key = ("dens_inv", round(float(gamma), 6), round(float(dmax), 6), round(float(pivot), 6), int(size))
+        lut_y = self._lut1d_cache.get(key)
+        if lut_y is None:
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
+            safe = np.maximum(xs, np.float32(1e-10))
+            original_density = -np.log10(safe)
+            adjusted_density = pivot + (original_density - pivot) * gamma - dmax
+            ys = np.power(np.float32(10.0), adjusted_density).astype(np.float32)
+            self._cache_put(self._lut1d_cache, key, ys)
+        else:
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
+            ys = lut_y
+        return xs, ys
+
+    def _get_curve_lut_cached(self, control_points: List[Tuple[float, float]], num_samples: int) -> np.ndarray:
+        """获取或生成曲线LUT（单调三次插值后的y值，长度为num_samples）"""
+        if not control_points or len(control_points) < 2:
+            return np.linspace(0.0, 1.0, int(num_samples), dtype=np.float32)
+        key_points = tuple((round(float(x), 6), round(float(y), 6)) for x, y in control_points)
+        key = ("curve", key_points, int(num_samples))
+        lut = self._curve_lut_cache.get(key)
+        if lut is None:
+            curve_samples = self._generate_monotonic_curve(control_points, int(num_samples))
+            lut = np.array([p[1] for p in curve_samples], dtype=np.float32)
+            self._cache_put(self._curve_lut_cache, key, lut)
+        return lut
 
     def apply_full_pipeline(self, image: ImageData, params: ColorGradingParams, include_curve: bool = True) -> ImageData:
         if image is None: return None

@@ -183,8 +183,11 @@ class ParameterPanel(QWidget):
         rgb_layout.addWidget(QLabel("R:"), 0, 0); rgb_layout.addWidget(self.red_gain_slider, 0, 1); rgb_layout.addWidget(self.red_gain_spinbox, 0, 2)
         rgb_layout.addWidget(QLabel("G:"), 1, 0); rgb_layout.addWidget(self.green_gain_slider, 1, 1); rgb_layout.addWidget(self.green_gain_spinbox, 1, 2)
         rgb_layout.addWidget(QLabel("B:"), 2, 0); rgb_layout.addWidget(self.blue_gain_slider, 2, 1); rgb_layout.addWidget(self.blue_gain_spinbox, 2, 2)
-        self.auto_color_button = QPushButton("AI自动校色 (多点几下)")
-        rgb_layout.addWidget(self.auto_color_button, 3, 1, 1, 2)
+        # AI自动校色按钮：单次与多次
+        self.auto_color_single_button = QPushButton("AI自动校色（单次）")
+        self.auto_color_multi_button = QPushButton("AI自动校色（多次）")
+        rgb_layout.addWidget(self.auto_color_single_button, 3, 1)
+        rgb_layout.addWidget(self.auto_color_multi_button, 3, 2)
         layout.addWidget(rgb_group)
         layout.addStretch()
         return widget
@@ -314,7 +317,9 @@ class ParameterPanel(QWidget):
         self.green_gain_spinbox.valueChanged.connect(self._on_green_gain_changed)
         self.blue_gain_slider.valueChanged.connect(self._on_blue_gain_changed)
         self.blue_gain_spinbox.valueChanged.connect(self._on_blue_gain_changed)
-        self.auto_color_button.clicked.connect(self._on_auto_color_correct_clicked)
+        # 绑定AI自动校色按钮
+        self.auto_color_single_button.clicked.connect(self._on_auto_color_single_clicked)
+        self.auto_color_multi_button.clicked.connect(self._on_auto_color_correct_clicked)
         self.curve_editor.curve_changed.connect(self._on_curve_changed)
 
         self.enable_density_inversion_checkbox.toggled.connect(self._on_debug_step_changed)
@@ -495,6 +500,20 @@ class ParameterPanel(QWidget):
         self.current_params.enable_rgb_gains = self.enable_rgb_gains_checkbox.isChecked()
         self.current_params.enable_density_curve = self.enable_density_curve_checkbox.isChecked()
         self.parameter_changed.emit()
+
+    def _on_auto_color_single_clicked(self):
+        """AI自动校色（单次）"""
+        if self._is_updating_ui: return
+        preview_image = self.main_window.preview_widget.get_current_image_data()
+        if preview_image is None or preview_image.array is None:
+            print("自动校色失败：没有可用的预览图像。")
+            return
+        # 初始化单次迭代状态
+        self._auto_color_iteration = 0
+        self._auto_color_max_iterations = 1
+        self._auto_color_total_gains = np.zeros(3)
+        # 执行一次
+        self._perform_auto_color_iteration()
 
     def _on_auto_color_correct_clicked(self):
         """处理自动校色按钮点击事件，使用迭代次数逻辑"""

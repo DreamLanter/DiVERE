@@ -97,7 +97,7 @@ class ParameterPanel(QWidget):
         # 添加说明文字框
         note_group = QGroupBox("重要说明")
         note_layout = QVBoxLayout(note_group)
-        note_text = QLabel("Note: 当前版本的DiVERE用的色彩管理是石器时代手搓版，暂时没有读取照片ICC的能力，照片进来后会直接进行色彩空间的基色变换，这意味着要求扫描件数据的gamma=1。推荐的实践：用vuescan软件搭配平板扫描做gamma=1的tiff文件，并且不做任何额外的色彩管理。")
+        note_text = QLabel("Note: 当前版本的DiVERE用的色彩管理是石器时代手搓版，暂时没有读取照片ICC的能力，照片进来后会直接进行色彩空间的基色变换，这意味着要求扫描件数据的gamma=1。推荐的实践：用vuescan软件搭配平板扫描做gamma=1的tiff文件，并且不做任何额外的色彩管理。\n Epson、X5推荐用AdobeRGB_Linear\n Nikon扫描推荐用Film_KodakRGB_Linear\n 翻拍由于与Status M相差太大，色彩会很难看（正在尝试用colorchecker辨识密度矩阵的功能）")
         note_text.setWordWrap(True)  # 启用自动换行
         note_text.setStyleSheet("QLabel { color: #666; font-size: 11px; padding: 8px; background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; }")
         note_layout.addWidget(note_text)

@@ -129,33 +129,45 @@ class TheEnlarger:
         
         if include_curve and params.enable_density_curve and params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
             lut_size = 1024
-            
             # 使用与UI一致的单调插值算法生成曲线（带缓存）
             t_curve = time.time()
             lut = self._get_curve_lut_cached(params.curve_points, lut_size)
 
-            # 曲线直接作用在密度空间上
-            # - 曲线输入X：[0, 1] 对应密度范围 [4.816, 0] (暗部到亮部，注意反转)
-            # - 曲线输出Y：[0, 1] 对应密度范围 [0, 3.0]
-            # 左下角(0,0) = 暗部输入->低密度输出（保持暗）
-            # 右上角(1,1) = 亮部输入->高密度输出（保持亮）
+            # 以下是原算法，现在使用LUT查表
+            # # 曲线直接作用在密度空间上
+            # # - 曲线输入X：[0, 1] 对应密度范围 [4.816, 0] (暗部到亮部，注意反转)
+            # # - 曲线输出Y：[0, 1] 对应密度范围 [0, 3.0]
+            # # 左下角(0,0) = 暗部输入->低密度输出（保持暗）
+            # # 右上角(1,1) = 亮部输入->高密度输出（保持亮）
             
-            # 定义密度映射范围
-            input_density_min = 0.0
-            input_density_max = np.log10(65536)  # ≈ 4.816
-            output_density_min = 0.0
-            output_density_max = np.log10(65536)
+            # # 定义密度映射范围
+            # input_density_min = 0.0
+            # input_density_max = np.log10(65536)  # ≈ 4.816
+            # output_density_min = 0.0
+            # output_density_max = np.log10(65536)
             
-            # 将当前密度值归一化到[0,1]用于查找LUT
-            # 注意：负密度值（超亮）会被钳制到0
-            normalized_density = 1 - np.clip((adjusted_density - input_density_min) / (input_density_max - input_density_min), 0, 1)
+            # # 将当前密度值归一化到[0,1]用于查找LUT
+            # # 注意：负密度值（超亮）会被钳制到0
+            # normalized_density = 1 - np.clip((adjusted_density - input_density_min) / (input_density_max - input_density_min), 0, 1)
             
-            # 查找LUT值
-            lut_indices = np.clip(normalized_density * (lut_size - 1), 0, lut_size - 1).astype(int)
-            curve_output = lut[lut_indices]
+            # # 查找LUT值
+            # lut_indices = np.clip(normalized_density * (lut_size - 1), 0, lut_size - 1).astype(int)
+            # curve_output = lut[lut_indices]
             
-            # 将曲线输出映射到输出密度范围
-            adjusted_density = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
+            # # 将曲线输出映射到输出密度范围
+            # adjusted_density = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
+
+
+            # 常量与缩放（使用预计算的LOG65536）
+            inv_range = 1.0 / float(self._LOG65536)
+            # 归一化到[0,1]并取反（注意：负密度值将被钳制到0）
+            normalized = 1.0 - np.clip(adjusted_density * inv_range, 0.0, 1.0)
+            # 计算LUT索引（int32更快，且与原逻辑等效于floor）
+            lut_indices = (normalized * (lut_size - 1)).astype(np.int32)
+            # 查表（np.take通常更快）
+            curve_output = np.take(lut, lut_indices)
+            # 将曲线输出映射回密度范围，原地写回，减少分配
+            adjusted_density[:] = (1.0 - curve_output) * float(self._LOG65536)
             if profile is not None:
                 profile['rgb_curve_ms'] = (time.time() - t_curve) * 1000.0
         
@@ -168,31 +180,20 @@ class TheEnlarger:
             ]
             
             t_ch = time.time()
+            inv_range = 1.0 / float(self._LOG65536)
             for channel_idx, (enabled, curve_points) in enumerate(channel_curves):
                 if enabled and curve_points and len(curve_points) >= 2:
                     lut_size = 1024
-                    
                     # 生成单通道曲线LUT（带缓存）
-                    lut = self._get_curve_lut_cached(curve_points, lut_size)
-                    
-                    # 只处理当前通道
+                    lut_c = self._get_curve_lut_cached(curve_points, lut_size)
+                    # 当前通道视图（避免拷贝）
                     channel_density = adjusted_density[:, :, channel_idx]
-                    
-                    # 定义密度映射范围（与RGB曲线相同）
-                    input_density_min = 0.0
-                    input_density_max = np.log10(65536)  # ≈ 4.816
-                    output_density_min = 0.0
-                    output_density_max = np.log10(65536)
-                    
-                    # 将当前密度值归一化到[0,1]用于查找LUT
-                    normalized_density = 1 - np.clip((channel_density - input_density_min) / (input_density_max - input_density_min), 0, 1)
-                    
-                    # 应用曲线
-                    lut_indices = np.clip(normalized_density * (lut_size - 1), 0, lut_size - 1).astype(int)
-                    curve_output = lut[lut_indices]
-                    
-                    # 将曲线输出映射到输出密度范围
-                    adjusted_density[:, :, channel_idx] = (1 - curve_output) * (output_density_max - output_density_min) + output_density_min
+                    # 归一化
+                    normalized_c = 1.0 - np.clip(channel_density * inv_range, 0.0, 1.0)
+                    # 索引
+                    lut_indices_c = (normalized_c * (lut_size - 1)).astype(np.int32)
+                    # 查表并写回（原地）
+                    adjusted_density[:, :, channel_idx] = (1.0 - np.take(lut_c, lut_indices_c)) * float(self._LOG65536)
             if profile is not None:
                 profile['channel_curves_ms'] = (time.time() - t_ch) * 1000.0
         
@@ -422,7 +423,7 @@ class TheEnlarger:
 
             # 应用深度学习白平衡
             # 降低推理输入最大边长以提升速度（例如512），保持效果可用
-            inference_size = 512
+            inference_size = 128
             t1 = time.time()
             result = deep_wb_wrapper.process_image(img_uint8, max_size=inference_size)
             t2 = time.time()

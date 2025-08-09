@@ -6,9 +6,9 @@
 import numpy as np
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QPointF
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton
+from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QPointF
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor
 
 from divere.core.data_types import ImageData
 
@@ -85,7 +85,7 @@ class PreviewWidget(QWidget):
     """图像预览组件"""
     
     # 发送图像旋转信号，参数为旋转方向：1=左旋，-1=右旋
-    image_rotated = pyqtSignal(int)
+    image_rotated = Signal(int)
     
     def __init__(self):
         super().__init__()
@@ -275,7 +275,7 @@ class PreviewWidget(QWidget):
         
         # 为DisplayP3图像应用Qt内置色彩管理
         if hasattr(self, 'current_image') and self.current_image and self.current_image.color_space == "Rec2020":
-            from PyQt6.QtGui import QColorSpace
+            from PySide6.QtGui import QColorSpace
             # 创建色彩空间（DisplayP3）
             displayp3_space = QColorSpace(QColorSpace.NamedColorSpace.DisplayP3)
             # 应用色彩空间到QImage

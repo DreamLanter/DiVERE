@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QMenuBar, QToolBar, QStatusBar, QFileDialog, QMessageBox,
     QSplitter, QLabel, QDockWidget, QDialog
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence
 import numpy as np
 
 from divere.core.image_manager import ImageManager
@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
     
     def _select_input_color_space(self):
         """选择输入色彩空间"""
-        from PyQt6.QtWidgets import QInputDialog
+        from PySide6.QtWidgets import QInputDialog
         
         # 获取可用的色彩空间列表
         available_spaces = self.color_space_manager.get_available_color_spaces()

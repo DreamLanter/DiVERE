@@ -10,8 +10,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
 
 from divere.ui.main_window import MainWindow
 

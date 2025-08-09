@@ -4,11 +4,11 @@
 """
 
 import numpy as np
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QComboBox, QGroupBox, QDoubleSpinBox,
                             QGridLayout, QSizePolicy, QFileDialog, QInputDialog, QMessageBox)
-from PyQt6.QtCore import Qt, QPointF, pyqtSignal, QRectF
-from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QPainterPath
+from PySide6.QtCore import Qt, QPointF, Signal, QRectF
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QPainterPath
 import json
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
@@ -19,7 +19,7 @@ from ..core.data_types import Curve
 class CurveEditWidget(QWidget):
     """曲线编辑画布"""
     
-    curve_changed = pyqtSignal(list)  # 当曲线改变时发出信号，传递控制点列表
+    curve_changed = Signal(list)  # 当曲线改变时发出信号，传递控制点列表
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -497,7 +497,7 @@ class CurveEditWidget(QWidget):
 class CurveEditorWidget(QWidget):
     """完整的曲线编辑器组件"""
     
-    curve_changed = pyqtSignal(str, list)  # 曲线名称和控制点
+    curve_changed = Signal(str, list)  # 曲线名称和控制点
     
     def __init__(self, parent=None):
         super().__init__(parent)

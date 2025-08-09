@@ -2,12 +2,12 @@
 保存图像对话框
 """
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QRadioButton, QComboBox, QCheckBox, QPushButton,
     QLabel, QGridLayout, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt
+from PySide6.QtCore import Qt
 from pathlib import Path
 
 

@@ -8,13 +8,13 @@ import numpy as np
 import json
 from pathlib import Path
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QSlider, QSpinBox, QDoubleSpinBox, QComboBox,
     QGroupBox, QPushButton, QCheckBox, QTabWidget,
     QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from divere.core.data_types import ColorGradingParams
 from divere.ui.curve_editor_widget import CurveEditorWidget
@@ -24,7 +24,7 @@ from divere.utils.config_manager import config_manager
 class ParameterPanel(QWidget):
     """参数面板 (重构版)"""
     
-    parameter_changed = pyqtSignal()
+    parameter_changed = Signal()
     
     def __init__(self, main_window):
         super().__init__()
@@ -661,7 +661,7 @@ class ParameterPanel(QWidget):
                 enabled_features.append("密度曲线")
             
             if not enabled_features:
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "警告", "没有启用任何调色功能，无法生成有意义的LUT。")
                 return
             
@@ -712,7 +712,7 @@ class ParameterPanel(QWidget):
             )
             
             # 选择保存路径
-            from PyQt6.QtWidgets import QFileDialog
+            from PySide6.QtWidgets import QFileDialog
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
@@ -739,18 +739,18 @@ class ParameterPanel(QWidget):
                 success = lut_manager.save_lut(lut_info, file_path)
                 
                 if success:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.information(
                         self, 
                         "成功", 
                         f"3D LUT已成功导出到:\n{file_path}\n\n包含功能: {', '.join(enabled_features)}"
                     )
                 else:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "错误", "保存LUT文件失败。")
             
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "错误", f"导出3D LUT时发生错误:\n{str(e)}")
             print(f"导出3D LUT错误: {e}")
             import traceback
@@ -764,7 +764,7 @@ class ParameterPanel(QWidget):
             # 获取当前输入色彩空间
             current_input_space = self.input_colorspace_combo.currentText()
             if not current_input_space:
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "警告", "请先选择输入色彩空间。")
                 return
             
@@ -773,12 +773,12 @@ class ParameterPanel(QWidget):
             
             # 检查色彩空间转换是否有效
             if not self.main_window.color_space_manager.validate_color_space(current_input_space):
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "警告", f"输入色彩空间 '{current_input_space}' 无效。")
                 return
             
             if not self.main_window.color_space_manager.validate_color_space(working_space):
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "警告", f"工作色彩空间 '{working_space}' 无效。")
                 return
             
@@ -834,7 +834,7 @@ class ParameterPanel(QWidget):
             )
             
             # 选择保存路径
-            from PyQt6.QtWidgets import QFileDialog
+            from PySide6.QtWidgets import QFileDialog
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
@@ -861,7 +861,7 @@ class ParameterPanel(QWidget):
                 success = lut_manager.save_lut(lut_info, file_path)
                 
                 if success:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.information(
                         self, 
                         "成功", 
@@ -870,11 +870,11 @@ class ParameterPanel(QWidget):
                         f"此LUT包含完整的输入色彩空间转换过程，与程序内置的色彩管理完全相同。"
                     )
                 else:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "错误", "保存LUT文件失败。")
             
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "错误", f"导出输入色彩管理LUT时发生错误:\n{str(e)}")
             print(f"导出输入色彩管理LUT错误: {e}")
             import traceback
@@ -900,7 +900,7 @@ class ParameterPanel(QWidget):
                 available_curves.append("B曲线")
             
             if not available_curves:
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "警告", "没有定义任何密度曲线，无法生成1D LUT。")
                 return
             
@@ -1008,7 +1008,7 @@ class ParameterPanel(QWidget):
             }
             
             # 选择保存路径
-            from PyQt6.QtWidgets import QFileDialog
+            from PySide6.QtWidgets import QFileDialog
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
@@ -1035,7 +1035,7 @@ class ParameterPanel(QWidget):
                 success = self._save_1dlut_as_cube(lut_data, file_path, lut_info['title'])
                 
                 if success:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.information(
                         self, 
                         "成功", 
@@ -1045,11 +1045,11 @@ class ParameterPanel(QWidget):
                         f"此1D LUT包含所有密度曲线，直接作用在密度空间上。"
                     )
                 else:
-                    from PyQt6.QtWidgets import QMessageBox
+                    from PySide6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "错误", "保存LUT文件失败。")
             
         except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "错误", f"导出密度曲线1D LUT时发生错误:\n{str(e)}")
             print(f"导出密度曲线1D LUT错误: {e}")
             import traceback
@@ -1082,7 +1082,7 @@ class ParameterPanel(QWidget):
         # 检查当前是否有自定义矩阵
         if (self.current_params.correction_matrix_file != "custom" or 
             self.current_params.correction_matrix is None):
-            from PyQt6.QtWidgets import QMessageBox
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self, 
                 "警告", 
@@ -1091,7 +1091,7 @@ class ParameterPanel(QWidget):
             return
         
         # 获取矩阵名称
-        from PyQt6.QtWidgets import QInputDialog
+        from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(
             self, 
             "保存矩阵", 
@@ -1125,7 +1125,7 @@ class ParameterPanel(QWidget):
         safe_filename = safe_filename.replace(' ', '_')
         
         # 打开文件保存对话框
-        from PyQt6.QtWidgets import QFileDialog
+        from PySide6.QtWidgets import QFileDialog
         from pathlib import Path
         from ..utils.config_manager import config_manager
         
@@ -1155,14 +1155,14 @@ class ParameterPanel(QWidget):
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(matrix_data, f, indent=2, ensure_ascii=False)
                 
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.information(self, "成功", f"矩阵已保存到：\n{file_path}")
                 
                 # 重新加载矩阵列表
                 self._refresh_matrix_combo()
                 
             except Exception as e:
-                from PyQt6.QtWidgets import QMessageBox
+                from PySide6.QtWidgets import QMessageBox
                 QMessageBox.critical(self, "错误", f"保存矩阵时出错：\n{str(e)}")
     
     def _refresh_matrix_combo(self):

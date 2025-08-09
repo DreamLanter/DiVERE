@@ -1,7 +1,7 @@
 # DiVERE - 胶片校色工具
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyQt6](https://img.shields.io/badge/PyQt6-6.5+-green.svg)](https://pypi.org/project/PyQt6/)
+[![PySide6](https://img.shields.io/badge/PySide6-6.5+-green.svg)](https://pypi.org/project/PySide6/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 基于ACEScg Linear工作流的胶片数字化后期处理工具，为胶片摄影师提供校色解决方案。
@@ -26,7 +26,6 @@
 
 #### 方法零：手动下载
 - .首先点Code -> Download ZIP 下载本项目源码（400多MB，大多是校色示例图片）
-- .进入 https://github.com/mahmoudnafifi/Deep_White_Balance 同样下载ZIP，并解压到divere/colorConstancyModels/Deep_White_Balance/ 注意“Deep_White_Balance”文件夹名要改一下。
 - .安装python
 - .安装依赖、运行程序：
 ```bash
@@ -87,7 +86,7 @@ python -m divere
 
 #### 核心依赖
 ```
-PyQt6>=6.5.0          # GUI框架
+PySide6>=6.5.0          # GUI框架
 numpy>=1.24.0         # 数值计算
 opencv-python>=4.8.0  # 图像处理
 pillow>=10.0.0        # 图像I/O
@@ -232,7 +231,7 @@ Deep White Balance提供了基于深度学习的自动白平衡算法，我们�
 
 ### 开源库
 
-- **PyQt6**: GUI框架
+- **PySide6**: GUI框架
 - **NumPy**: 数值计算
 - **OpenCV**: 图像处理
 - **colour-science**: 色彩科学计算

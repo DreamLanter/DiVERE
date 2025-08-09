@@ -42,19 +42,46 @@ class TheEnlarger:
             print("Warning: Deep White Balance not available, learning-based auto gain will be disabled")
 
     def _load_default_matrices(self):
-        """加载默认的校正矩阵"""
-        matrix_dir = Path("config/matrices")
-        if not matrix_dir.exists():
-            return
-        for matrix_file in matrix_dir.glob("*.json"):
-            try:
-                with open(matrix_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+        """加载默认的校正矩阵（支持用户配置优先）"""
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            
+            # 获取所有配置文件（用户配置优先）
+            config_files = enhanced_config_manager.get_config_files("matrices")
+            
+            for matrix_file in config_files:
+                try:
+                    data = enhanced_config_manager.load_config_file(matrix_file)
+                    if data is None:
+                        continue
+                    
                     # 使用文件名作为键，但保留name字段用于显示
                     matrix_key = matrix_file.stem
                     self._correction_matrices[matrix_key] = data
-            except Exception as e:
-                print(f"Failed to load matrix {matrix_file}: {e}")
+                    
+                    # 标记是否为用户配置
+                    if matrix_file.parent == enhanced_config_manager.user_matrices_dir:
+                        print(f"加载用户矩阵: {matrix_key}")
+                    else:
+                        print(f"加载内置矩阵: {matrix_key}")
+                        
+                except Exception as e:
+                    print(f"Failed to load matrix {matrix_file}: {e}")
+                    
+        except ImportError:
+            # 如果增强配置管理器不可用，使用原来的方法
+            matrix_dir = Path("config/matrices")
+            if not matrix_dir.exists():
+                return
+            for matrix_file in matrix_dir.glob("*.json"):
+                try:
+                    with open(matrix_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        # 使用文件名作为键，但保留name字段用于显示
+                        matrix_key = matrix_file.stem
+                        self._correction_matrices[matrix_key] = data
+                except Exception as e:
+                    print(f"Failed to load matrix {matrix_file}: {e}")
 
     def set_profiling_enabled(self, enabled: bool) -> None:
         """启用/关闭预览管线Profiling"""

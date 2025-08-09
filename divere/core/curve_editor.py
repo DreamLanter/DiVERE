@@ -19,23 +19,50 @@ class CurveEditor:
         self._load_preset_curves()
     
     def _load_preset_curves(self):
-        """从文件系统加载预设曲线（只读，不创建）"""
+        """从文件系统加载预设曲线（支持用户配置优先）"""
         self._preset_curves = {}
-        curve_dir = Path("config/curves")
         
-        # 如果目录不存在，直接返回
-        if not curve_dir.exists():
-            return
-        
-        # 加载已存在的曲线文件
-        for curve_path in curve_dir.glob("*.json"):
-            try:
-                with open(curve_path, 'r', encoding='utf-8') as f:
-                    curve_data = json.load(f)
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            
+            # 获取所有配置文件（用户配置优先）
+            config_files = enhanced_config_manager.get_config_files("curves")
+            
+            for curve_path in config_files:
+                try:
+                    curve_data = enhanced_config_manager.load_config_file(curve_path)
+                    if curve_data is None:
+                        continue
+                    
                     name = curve_path.stem
                     self._preset_curves[name] = curve_data
-            except Exception as e:
-                print(f"加载曲线文件 {curve_path} 时出错: {e}")
+                    
+                    # 标记是否为用户配置
+                    if curve_path.parent == enhanced_config_manager.user_curves_dir:
+                        print(f"加载用户曲线: {name}")
+                    else:
+                        print(f"加载内置曲线: {name}")
+                        
+                except Exception as e:
+                    print(f"加载曲线文件 {curve_path} 时出错: {e}")
+                    
+        except ImportError:
+            # 如果增强配置管理器不可用，使用原来的方法
+            curve_dir = Path("config/curves")
+            
+            # 如果目录不存在，直接返回
+            if not curve_dir.exists():
+                return
+            
+            # 加载已存在的曲线文件
+            for curve_path in curve_dir.glob("*.json"):
+                try:
+                    with open(curve_path, 'r', encoding='utf-8') as f:
+                        curve_data = json.load(f)
+                        name = curve_path.stem
+                        self._preset_curves[name] = curve_data
+                except Exception as e:
+                    print(f"加载曲线文件 {curve_path} 时出错: {e}")
     
     def create_curve(self, points: List[Tuple[float, float]]) -> Curve:
         """创建曲线"""

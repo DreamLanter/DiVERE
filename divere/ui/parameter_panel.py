@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 
 from divere.core.data_types import ColorGradingParams
 from divere.ui.curve_editor_widget import CurveEditorWidget
-from divere.utils.config_manager import config_manager
+from divere.utils.enhanced_config_manager import enhanced_config_manager
 
 
 class ParameterPanel(QWidget):
@@ -717,7 +717,7 @@ class ParameterPanel(QWidget):
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
             # 获取上次保存LUT的目录
-            last_directory = config_manager.get_directory("save_lut")
+            last_directory = enhanced_config_manager.get_directory("save_lut")
             default_filename = f"DiVERE_3D_{lut_size}_{', '.join(enabled_features)}_{timestamp}.cube"
             if last_directory:
                 default_path = str(Path(last_directory) / default_filename)
@@ -733,7 +733,7 @@ class ParameterPanel(QWidget):
             
             if file_path:
                 # 保存当前目录
-                config_manager.set_directory("save_lut", file_path)
+                enhanced_config_manager.set_directory("save_lut", file_path)
                 
                 # 保存LUT
                 success = lut_manager.save_lut(lut_info, file_path)
@@ -839,7 +839,7 @@ class ParameterPanel(QWidget):
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
             # 获取上次保存LUT的目录
-            last_directory = config_manager.get_directory("save_lut")
+            last_directory = enhanced_config_manager.get_directory("save_lut")
             default_filename = f"DiVERE_3D_{lut_size}x{lut_size}x{lut_size}_InputCC_{current_input_space}_to_{working_space}_{timestamp}.cube"
             if last_directory:
                 default_path = str(Path(last_directory) / default_filename)
@@ -855,7 +855,7 @@ class ParameterPanel(QWidget):
             
             if file_path:
                 # 保存当前目录
-                config_manager.set_directory("save_lut", file_path)
+                enhanced_config_manager.set_directory("save_lut", file_path)
                 
                 # 保存LUT
                 success = lut_manager.save_lut(lut_info, file_path)
@@ -1013,7 +1013,7 @@ class ParameterPanel(QWidget):
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             
             # 获取上次保存LUT的目录
-            last_directory = config_manager.get_directory("save_lut")
+            last_directory = enhanced_config_manager.get_directory("save_lut")
             default_filename = f"DiVERE_1D_{lut_size}_{', '.join(available_curves)}_{timestamp}.cube"
             if last_directory:
                 default_path = str(Path(last_directory) / default_filename)
@@ -1029,7 +1029,7 @@ class ParameterPanel(QWidget):
             
             if file_path:
                 # 保存当前目录
-                config_manager.set_directory("save_lut", file_path)
+                enhanced_config_manager.set_directory("save_lut", file_path)
                 
                 # 直接保存为CUBE格式
                 success = self._save_1dlut_as_cube(lut_data, file_path, lut_info['title'])
@@ -1130,7 +1130,7 @@ class ParameterPanel(QWidget):
         from ..utils.config_manager import config_manager
         
         # 获取上次保存矩阵的目录
-        last_directory = config_manager.get_directory("save_matrix")
+        last_directory = enhanced_config_manager.get_directory("save_matrix")
         if not last_directory:
             last_directory = "config/matrices"
         
@@ -1148,7 +1148,7 @@ class ParameterPanel(QWidget):
                     file_path += '.json'
                 
                 # 保存当前目录
-                config_manager.set_directory("save_matrix", file_path)
+                enhanced_config_manager.set_directory("save_matrix", file_path)
                 
                 # 保存文件
                 import json

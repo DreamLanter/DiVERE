@@ -33,36 +33,76 @@ class ColorSpaceManager:
         return self._profiling_enabled
     
     def _load_colorspaces_from_json(self):
-        """从JSON文件加载色彩空间定义"""
-        colorspace_dir = Path("config/colorspace")
-        if not colorspace_dir.exists():
-            print(f"警告：色彩空间配置目录 {colorspace_dir} 不存在")
-            return
+        """从JSON文件加载色彩空间定义（支持用户配置优先）"""
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
             
-        for json_file in colorspace_dir.glob("*.json"):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            # 获取所有配置文件（用户配置优先）
+            config_files = enhanced_config_manager.get_config_files("colorspace")
+            
+            for json_file in config_files:
+                try:
+                    data = enhanced_config_manager.load_config_file(json_file)
+                    if data is None:
+                        continue
                     
-                # 将primaries转换为numpy数组格式
-                if "primaries" in data and isinstance(data["primaries"], dict):
-                    primaries = np.array([
-                        data["primaries"]["R"],
-                        data["primaries"]["G"],
-                        data["primaries"]["B"]
-                    ])
-                    data["primaries"] = primaries
+                    # 将primaries转换为numpy数组格式
+                    if "primaries" in data and isinstance(data["primaries"], dict):
+                        primaries = np.array([
+                            data["primaries"]["R"],
+                            data["primaries"]["G"],
+                            data["primaries"]["B"]
+                        ])
+                        data["primaries"] = primaries
                     
-                # 将white_point转换为numpy数组
-                if "white_point" in data:
-                    data["white_point"] = np.array(data["white_point"])
+                    # 将white_point转换为numpy数组
+                    if "white_point" in data:
+                        data["white_point"] = np.array(data["white_point"])
                     
-                # 使用文件名（不含扩展名）作为色彩空间名称
-                colorspace_name = json_file.stem
-                self._color_spaces[colorspace_name] = data
+                    # 使用文件名（不含扩展名）作为色彩空间名称
+                    colorspace_name = json_file.stem
+                    self._color_spaces[colorspace_name] = data
+                    
+                    # 标记是否为用户配置
+                    if json_file.parent == enhanced_config_manager.user_colorspace_dir:
+                        print(f"加载用户色彩空间: {colorspace_name}")
+                    else:
+                        print(f"加载内置色彩空间: {colorspace_name}")
+                    
+                except Exception as e:
+                    print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
+                    
+        except ImportError:
+            # 如果增强配置管理器不可用，使用原来的方法
+            colorspace_dir = Path("config/colorspace")
+            if not colorspace_dir.exists():
+                print(f"警告：色彩空间配置目录 {colorspace_dir} 不存在")
+                return
                 
-            except Exception as e:
-                print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
+            for json_file in colorspace_dir.glob("*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        
+                    # 将primaries转换为numpy数组格式
+                    if "primaries" in data and isinstance(data["primaries"], dict):
+                        primaries = np.array([
+                            data["primaries"]["R"],
+                            data["primaries"]["G"],
+                            data["primaries"]["B"]
+                        ])
+                        data["primaries"] = primaries
+                        
+                    # 将white_point转换为numpy数组
+                    if "white_point" in data:
+                        data["white_point"] = np.array(data["white_point"])
+                        
+                    # 使用文件名（不含扩展名）作为色彩空间名称
+                    colorspace_name = json_file.stem
+                    self._color_spaces[colorspace_name] = data
+                    
+                except Exception as e:
+                    print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
     
     def _build_conversion_matrices(self):
         """构建色彩空间转换矩阵"""

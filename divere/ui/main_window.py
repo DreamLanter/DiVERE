@@ -22,7 +22,7 @@ from divere.core.the_enlarger import TheEnlarger
 from divere.core.lut_processor import LUTProcessor
 
 from divere.core.data_types import ImageData, ColorGradingParams
-from divere.utils.config_manager import config_manager
+from divere.utils.enhanced_config_manager import enhanced_config_manager
 
 from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
@@ -175,6 +175,12 @@ class MainWindow(QMainWindow):
         estimate_film_action.triggered.connect(self._estimate_film_type)
         tools_menu.addAction(estimate_film_action)
 
+        # 配置管理
+        tools_menu.addSeparator()
+        config_manager_action = QAction("配置管理器", self)
+        config_manager_action.triggered.connect(self._open_config_manager)
+        tools_menu.addAction(config_manager_action)
+
         # 启用预览Profiling
         tools_menu.addSeparator()
         profiling_action = QAction("启用预览Profiling", self)
@@ -247,7 +253,7 @@ class MainWindow(QMainWindow):
     def _open_image(self):
         """打开图像文件"""
         # 获取上次打开的目录
-        last_directory = config_manager.get_directory("open_image")
+        last_directory = enhanced_config_manager.get_directory("open_image")
         
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -258,7 +264,7 @@ class MainWindow(QMainWindow):
         
         if file_path:
             # 保存当前目录
-            config_manager.set_directory("open_image", file_path)
+            enhanced_config_manager.set_directory("open_image", file_path)
             
             try:
                 # 加载图像
@@ -467,7 +473,7 @@ class MainWindow(QMainWindow):
         default_filename = f"{original_filename}_CC_{settings['color_space']}{extension}"
         
         # 获取上次保存的目录
-        last_directory = config_manager.get_directory("save_image")
+        last_directory = enhanced_config_manager.get_directory("save_image")
         if last_directory:
             default_path = str(Path(last_directory) / default_filename)
         else:
@@ -483,7 +489,7 @@ class MainWindow(QMainWindow):
         
         if file_path:
             # 保存当前目录
-            config_manager.set_directory("save_image", file_path)
+            enhanced_config_manager.set_directory("save_image", file_path)
             
             try:
                 # 重要：将原图转换到工作色彩空间，保持与预览一致
@@ -651,6 +657,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"更新预览失败: {e}")
 
+    def _open_config_manager(self):
+        """打开配置管理器"""
+        from divere.ui.config_manager_dialog import ConfigManagerDialog
+        dialog = ConfigManagerDialog(self)
+        dialog.exec()
+        
     def _toggle_profiling(self, enabled: bool):
         """切换预览Profiling"""
         self.the_enlarger.set_profiling_enabled(enabled)

@@ -509,39 +509,85 @@ class CurveEditorWidget(QWidget):
         self._connect_signals()
     
     def _load_preset_curves(self):
-        """从curves目录加载已保存的曲线"""
+        """从curves目录加载已保存的曲线（支持用户配置优先）"""
         self.preset_curves = {}
-        curves_dir = Path("config/curves")
         
-        if curves_dir.exists():
-            for json_file in curves_dir.glob("*.json"):
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            
+            # 获取所有配置文件（用户配置优先）
+            config_files = enhanced_config_manager.get_config_files("curves")
+            
+            for json_file in config_files:
                 try:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                    data = enhanced_config_manager.load_config_file(json_file)
+                    if data is None:
+                        continue
+                    
+                    # 支持新旧两种格式
+                    if 'curves' in data and isinstance(data['curves'], dict):
+                        # 新格式（多通道）
+                        self.preset_curves[json_file.stem] = {
+                            "name": data.get("name", json_file.stem),
+                            "description": data.get("description", ""),
+                            "curves": data["curves"]
+                        }
+                    elif 'points' in data:
+                        # 旧格式（单曲线）- 转换为新格式
+                        points = data["points"]
+                        self.preset_curves[json_file.stem] = {
+                            "name": data.get("name", json_file.stem),
+                            "description": data.get("description", ""),
+                            "curves": {
+                                "RGB": points,
+                                "R": [(0.0, 0.0), (1.0, 1.0)],
+                                "G": [(0.0, 0.0), (1.0, 1.0)],
+                                "B": [(0.0, 0.0), (1.0, 1.0)]
+                            }
+                        }
+                    
+                    # 标记是否为用户配置
+                    if json_file.parent == enhanced_config_manager.user_curves_dir:
+                        print(f"加载用户曲线: {json_file.stem}")
+                    else:
+                        print(f"加载内置曲线: {json_file.stem}")
                         
-                        # 支持新旧两种格式
-                        if 'curves' in data and isinstance(data['curves'], dict):
-                            # 新格式（多通道）
-                            self.preset_curves[json_file.stem] = {
-                                "name": data.get("name", json_file.stem),
-                                "description": data.get("description", ""),
-                                "curves": data["curves"]
-                            }
-                        elif 'points' in data:
-                            # 旧格式（单曲线）- 转换为新格式
-                            points = data["points"]
-                            self.preset_curves[json_file.stem] = {
-                                "name": data.get("name", json_file.stem),
-                                "description": data.get("description", ""),
-                                "curves": {
-                                    "RGB": points,
-                                    "R": [(0.0, 0.0), (1.0, 1.0)],
-                                    "G": [(0.0, 0.0), (1.0, 1.0)],
-                                    "B": [(0.0, 0.0), (1.0, 1.0)]
-                                }
-                            }
                 except Exception as e:
                     print(f"加载曲线文件 {json_file} 时出错: {e}")
+                    
+        except ImportError:
+            # 如果增强配置管理器不可用，使用原来的方法
+            curves_dir = Path("config/curves")
+            
+            if curves_dir.exists():
+                for json_file in curves_dir.glob("*.json"):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            
+                            # 支持新旧两种格式
+                            if 'curves' in data and isinstance(data['curves'], dict):
+                                # 新格式（多通道）
+                                self.preset_curves[json_file.stem] = {
+                                    "name": data.get("name", json_file.stem),
+                                    "description": data.get("description", ""),
+                                    "curves": data["curves"]
+                                }
+                            elif 'points' in data:
+                                # 旧格式（单曲线）- 转换为新格式
+                                points = data["points"]
+                                self.preset_curves[json_file.stem] = {
+                                    "name": data.get("name", json_file.stem),
+                                    "description": data.get("description", ""),
+                                    "curves": {
+                                        "RGB": points,
+                                        "R": [(0.0, 0.0), (1.0, 1.0)],
+                                        "G": [(0.0, 0.0), (1.0, 1.0)],
+                                        "B": [(0.0, 0.0), (1.0, 1.0)]
+                                    }
+                                }
+                    except Exception as e:
+                        print(f"加载曲线文件 {json_file} 时出错: {e}")
     
     def _setup_ui(self):
         """设置用户界面"""

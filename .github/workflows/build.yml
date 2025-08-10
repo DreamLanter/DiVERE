@@ -115,6 +115,29 @@ jobs:
         echo "🔍 Looking for executable files:"
         find dist -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -10
 
+    - name: Sync resources into dist directory
+      run: |
+        set -e
+        echo "🔄 Syncing resources into .dist directory..."
+        
+        # 探测 .dist 目录
+        dist_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
+        echo "Detected dist_dir: ${dist_dir:-<not found>}"
+        
+        if [ -z "$dist_dir" ]; then
+          echo "❌ No .dist directory found. Available dirs:"
+          find dist -maxdepth 2 -type d | sort
+          exit 1
+        fi
+        
+        # 同步 config 与 models 到 .dist 内（保留顶层副本）
+        mkdir -p "$dist_dir/config" "$dist_dir/models"
+        cp -r dist/config/* "$dist_dir/config/"
+        cp -r dist/models/* "$dist_dir/models/" || true
+        
+        echo "📁 After sync, .dist content preview:"
+        find "$dist_dir" -maxdepth 2 -type f | sort | head -100
+
     - name: Prepare distribution package
       run: |
         echo "📁 Preparing distribution package..."

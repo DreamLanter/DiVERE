@@ -84,40 +84,74 @@ jobs:
         
         echo "✅ Nuitka build completed"
         
-        # 显示构建后的文件结构
-        echo "📁 Build output structure:"
+        # 显示构建后的文件结构（仅文件）
+        echo "📁 Build output structure (files):"
         find dist-test -type f | sort
         
-        # 检查Nuitka的输出
-        echo "🔍 Nuitka output directories:"
-        ls -la dist-test/
+        # 显示构建后的目录结构（仅目录）
+        echo "📁 Build output structure (dirs):"
+        find dist-test -type d -maxdepth 2 | sort
+
+    - name: Sync resources into dist directory
+      run: |
+        set -e
+        echo "🔄 Syncing resources into .dist directory..."
         
-        # 查找生成的可执行文件
-        echo "🔍 Looking for executable files:"
-        find dist-test -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -10
+        # 探测 .dist 目录
+        dist_dir=$(find dist-test -maxdepth 1 -type d -name "*.dist" | head -1)
+        echo "Detected dist_dir: ${dist_dir:-<not found>}"
+        
+        if [ -z "$dist_dir" ]; then
+          echo "❌ No .dist directory found. Available dirs:"
+          find dist-test -maxdepth 2 -type d | sort
+          exit 1
+        fi
+        
+        # 同步 config 与 models 到 .dist 内（保留顶层副本）
+        mkdir -p "$dist_dir/config" "$dist_dir/models"
+        cp -r dist-test/config/* "$dist_dir/config/"
+        cp -r dist-test/models/* "$dist_dir/models/" || true
+        
+        echo "📁 After sync, .dist content preview:"
+        find "$dist_dir" -maxdepth 2 -type f | sort | head -100
 
     - name: Check build output
       run: |
+        set -e
         echo "📁 Checking build output..."
         ls -la dist-test/
         
-        # 查找Nuitka生成的可执行文件
-        executable=$(find dist-test -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -1)
+        # 优先候选：顶层可执行文件
+        if [ -f "dist-test/__main__" ] && [ -x "dist-test/__main__" ]; then
+          executable="dist-test/__main__"
+        # 次优候选：.dist 目录内的可执行文件（常见于新版本Nuitka）
+        elif [ -f "dist-test/__main__.dist/__main__" ] && [ -x "dist-test/__main__.dist/__main__" ]; then
+          executable="dist-test/__main__.dist/__main__"
+        else
+          # 兜底：在 dist-test 及其 .dist 目录内查找可执行文件，排除常见的动态库/脚本
+          executable=$(find dist-test -type f -executable \
+            ! -name "*.so" ! -name "*.dll" ! -name "*.dylib" \
+            ! -name "*.py" ! -name "*.pyc" ! -name "*.pyd" \
+            | head -1)
+        fi
         
         if [ -n "$executable" ] && [ -f "$executable" ]; then
           echo "✅ Build successful! Found executable: $executable"
           echo "File size: $(du -h "$executable" | cut -f1)"
           
-          # 重命名为我们期望的名称
+          # 统一命名
           if [[ "$executable" != "dist-test/DiVERE-test" ]]; then
             echo "🔄 Renaming executable to DiVERE-test..."
-            mv "$executable" "dist-test/DiVERE-test"
+            cp "$executable" "dist-test/DiVERE-test"
+            chmod +x "dist-test/DiVERE-test"
             echo "✅ Renamed successfully"
           fi
         else
           echo "❌ Build failed! No executable found"
           echo "Available files:"
           find dist-test -type f | sort
+          echo "Available dirs:"
+          find dist-test -type d -maxdepth 2 | sort
           exit 1
         fi
 

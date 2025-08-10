@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            platform: linuxxiu fu
+            platform: linux
             arch: x64
           - os: windows-latest
             platform: windows
@@ -188,14 +188,7 @@ jobs:
         if [ -n "$executable" ] && [ -f "$executable" ]; then
           echo "✅ Build successful! Found executable: $executable"
           echo "File size: $(du -h "$executable" | cut -f1)"
-          
-          # 统一命名
-          if [[ "$executable" != "dist-test/DiVERE-test" ]]; then
-            echo "🔄 Renaming executable to DiVERE-test..."
-            cp "$executable" "dist-test/DiVERE-test"
-            chmod +x "dist-test/DiVERE-test"
-            echo "✅ Renamed successfully"
-          fi
+          echo "👉 On macOS/Linux, run it from within its folder to keep relative libraries resolved."
         else
           echo "❌ Build failed! No executable found"
           echo "Available files:"

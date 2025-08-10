@@ -97,7 +97,6 @@ jobs:
 
     - name: Build with Nuitka (Manual)
       run: |
-        # 现在运行Nuitka编译，此时文件已经在正确位置
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
@@ -105,7 +104,7 @@ jobs:
           --include-data-dir=dist/config=config \
           --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
-          ${{ matrix.os == 'windows-latest' && '--windows-disable-console' || '' }} \
+          ${{ matrix.platform == 'windows' && '--windows-disable-console' || '' }} \
           ${{ contains(matrix.os, 'macos') && '--macos-create-app-bundle' || '' }} \
           divere/__main__.py
         
@@ -113,81 +112,125 @@ jobs:
         
         # 显示构建后的文件结构
         echo "📁 Build output structure:"
-        find dist -type f | sort
+        find dist -type f | sort | head -200
         
-        # 检查Nuitka的输出
-        echo "🔍 Nuitka output directories:"
-        ls -la dist/
-        
-        # 查找生成的可执行文件
-        echo "🔍 Looking for executable files:"
-        find dist -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -10
-
-    - name: Sync resources into dist directory
-      run: |
-        set -e
-        echo "🔄 Syncing resources into .dist directory..."
-        
-        # 探测 .dist 目录
-        dist_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
-        echo "Detected dist_dir: ${dist_dir:-<not found>}"
-        
-        if [ -z "$dist_dir" ]; then
-          echo "❌ No .dist directory found. Available dirs:"
-          find dist -maxdepth 2 -type d | sort
-          exit 1
+        # 查找 .dist 目录与可执行文件
+        app_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
+        echo "Detected app_dir: ${app_dir:-<not found>}"
+        if [ -z "$app_dir" ]; then
+          echo "❌ No .dist directory found." && exit 1
         fi
         
-        # 同步 config 与 models 到 .dist 内（保留顶层副本）
-        mkdir -p "$dist_dir/config" "$dist_dir/models"
-        cp -r dist/config/* "$dist_dir/config/"
-        cp -r dist/models/* "$dist_dir/models/" || true
-        
-        echo "📁 After sync, .dist content preview:"
-        find "$dist_dir" -maxdepth 2 -type f | sort | head -100
-
-    - name: Prepare distribution package
-      run: |
-        echo "📁 Preparing distribution package..."
-        
-        # 查找Nuitka生成的可执行文件
-        executable=$(find dist -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -1)
-        
-        if [ -n "$executable" ] && [ -f "$executable" ]; then
-          echo "✅ Found executable: $executable"
-          
-          # 重命名为我们期望的名称
-          expected_name="DiVERE${{ matrix.extension }}"
-          if [[ "$executable" != "dist/$expected_name" ]]; then
-            echo "🔄 Renaming executable to $expected_name..."
-            mv "$executable" "dist/$expected_name"
-            echo "✅ Renamed successfully"
-          fi
+        # 寻找可执行文件（跨平台）
+        if [ "${{ matrix.platform }}" = "windows" ]; then
+          executable=$(find "$app_dir" -maxdepth 1 -type f -name "*.exe" | head -1)
         else
-          echo "❌ No executable found!"
-          find dist -type f | sort
-          exit 1
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            executable=$(find "$app_dir" -maxdepth 1 -type f -perm +111 | head -1)
+          else
+            executable=$(find "$app_dir" -maxdepth 1 -type f -perm /111 | head -1)
+          fi
+        fi
+        echo "Detected executable: ${executable:-<not found>}"
+        if [ -z "$executable" ]; then
+          echo "❌ No executable found inside $app_dir" && exit 1
+        fi
+        
+        # 生成启动脚本（Unix）
+        if [ "${{ matrix.platform }}" != "windows" ]; then
+          cat > dist/run-DiVERE.sh << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          APP_DIR="$(find "$SCRIPT_DIR" -maxdepth 1 -type d -name "*.dist" | head -1)"
+          if [ -z "$APP_DIR" ]; then
+            echo "No .dist directory found next to this script." >&2
+            exit 1
+          fi
+          EXECUTABLE=$(find "$APP_DIR" -maxdepth 1 -type f -perm +111 | head -1 2>/dev/null || true)
+          if [ -z "$EXECUTABLE" ]; then
+            EXECUTABLE=$(find "$APP_DIR" -maxdepth 1 -type f -perm /111 | head -1 2>/dev/null || true)
+          fi
+          if [ -z "$EXECUTABLE" ]; then
+            echo "No executable found in $APP_DIR" >&2
+            exit 1
+          fi
+          cd "$APP_DIR"
+          exec "$EXECUTABLE" "$@"
+          EOF
+          chmod +x dist/run-DiVERE.sh
+          echo "Created launcher: dist/run-DiVERE.sh"
+        fi
+
+    - name: Sync resources into .dist directory
+      run: |
+        set -e
+        app_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
+        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        if [ -n "$app_bundle" ]; then
+          echo "🔄 macOS app bundle detected: $app_bundle"
+          macos_bin_dir="$app_bundle/Contents/MacOS"
+          mkdir -p "$macos_bin_dir/config" "$macos_bin_dir/models"
+          cp -r dist/config/* "$macos_bin_dir/config/"
+          cp -r dist/models/* "$macos_bin_dir/models/" || true
+          echo "📁 After sync (app bundle), preview:"
+          find "$macos_bin_dir" -maxdepth 2 -type f | sort | head -100
+        else
+          if [ -z "$app_dir" ]; then
+            echo "❌ No .dist directory found and no .app found." && exit 1
+          fi
+          echo "🔄 Syncing resources into $app_dir ..."
+          mkdir -p "$app_dir/config" "$app_dir/models"
+          cp -r dist/config/* "$app_dir/config/"
+          cp -r dist/models/* "$app_dir/models/" || true
+          echo "📁 After sync, .dist content preview:"
+          find "$app_dir" -maxdepth 2 -type f | sort | head -100
         fi
 
     - name: Create distribution package (Windows)
       if: matrix.platform == 'windows'
       shell: pwsh
       run: |
+        $appDir = Get-ChildItem dist -Directory -Filter *.dist | Select-Object -First 1
+        if (-not $appDir) { throw "No .dist directory found." }
+        Write-Host "AppDir: $($appDir.FullName)"
+        # 顶层EXE（与.dist同级）
+        $exe = Get-ChildItem dist -File -Filter *.exe | Select-Object -First 1
+        if (-not $exe) { throw "No top-level exe found." }
         Set-Location dist
-        Compress-Archive -Path "DiVERE.exe", "models", "config" -DestinationPath "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        Compress-Archive -Path $exe.Name, $appDir.Name -DestinationPath "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
-    - name: Create distribution package (Unix)
-      if: matrix.platform != 'windows'
+    - name: Create distribution package (macOS)
+      if: matrix.platform == 'macos'
       run: |
+        set -e
+        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        if [ -z "$app_bundle" ]; then
+          echo "No .app bundle found; packaging .dist fallback."
+          app_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
+          if [ -z "$app_dir" ]; then echo "❌ No .dist found." && exit 1; fi
+          cd dist
+          tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_dir")"
+        else
+          echo "Packaging app bundle: $app_bundle"
+          cd dist
+          tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_bundle")"
+        fi
+
+    - name: Create distribution package (Linux)
+      if: matrix.platform == 'linux'
+      run: |
+        app_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
+        if [ -z "$app_dir" ]; then echo "❌ No .dist directory found." && exit 1; fi
         cd dist
-        tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" DiVERE models config
+        tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_dir")" run-DiVERE.sh
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
         path: |
-          dist/DiVERE${{ matrix.extension }}
           dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.*
-          dist/models/
-          dist/config/
+          dist/*.dist/**
+          dist/*.app/**
+          dist/run-DiVERE.*

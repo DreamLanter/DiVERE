@@ -7,7 +7,25 @@ on:
 
 jobs:
   test-build:
-    runs-on: ubuntu-latest  # 仅使用 Ubuntu 进行测试
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+          - os: macos-13
+            platform: macos
+            arch: x64
+          - os: macos-14
+            platform: macos
+            arch: arm64
     
     steps:
     - name: Checkout code
@@ -18,10 +36,16 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Install system dependencies
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
+
+    - name: Install system dependencies (macOS)
+      if: contains(matrix.os, 'macos')
+      run: |
+        brew install openssl readline sqlite3 xz zlib
 
     - name: Cache pip dependencies
       uses: actions/cache@v4
@@ -124,7 +148,7 @@ jobs:
         # 优先候选：顶层可执行文件
         if [ -f "dist-test/__main__" ] && [ -x "dist-test/__main__" ]; then
           executable="dist-test/__main__"
-        # 次优候选：.dist 目录内的可执行文件（常见于新版本Nuitka）
+        # 次优候选：.dist 目录内的可执行文件
         elif [ -f "dist-test/__main__.dist/__main__" ] && [ -x "dist-test/__main__.dist/__main__" ]; then
           executable="dist-test/__main__.dist/__main__"
         else
@@ -158,6 +182,6 @@ jobs:
     - name: Upload test artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: test-build-ubuntu
+        name: test-build-${{ matrix.platform }}-${{ matrix.arch }}
         path: dist-test/
         retention-days: 1  # 测试产物只保留1天

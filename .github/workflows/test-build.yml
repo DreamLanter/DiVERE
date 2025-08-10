@@ -77,7 +77,6 @@ jobs:
           --standalone \
           --enable-plugin=pyside6 \
           --output-dir=dist-test \
-          --output-filename=DiVERE-test \
           --include-data-dir=dist-test/config=config \
           --include-data-file=dist-test/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
@@ -88,15 +87,37 @@ jobs:
         # 显示构建后的文件结构
         echo "📁 Build output structure:"
         find dist-test -type f | sort
+        
+        # 检查Nuitka的输出
+        echo "🔍 Nuitka output directories:"
+        ls -la dist-test/
+        
+        # 查找生成的可执行文件
+        echo "🔍 Looking for executable files:"
+        find dist-test -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -10
 
     - name: Check build output
       run: |
+        echo "📁 Checking build output..."
         ls -la dist-test/
-        if [ -f "dist-test/DiVERE-test" ]; then
-          echo "✅ Build successful!"
-          echo "File size: $(du -h dist-test/DiVERE-test | cut -f1)"
+        
+        # 查找Nuitka生成的可执行文件
+        executable=$(find dist-test -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -1)
+        
+        if [ -n "$executable" ] && [ -f "$executable" ]; then
+          echo "✅ Build successful! Found executable: $executable"
+          echo "File size: $(du -h "$executable" | cut -f1)"
+          
+          # 重命名为我们期望的名称
+          if [[ "$executable" != "dist-test/DiVERE-test" ]]; then
+            echo "🔄 Renaming executable to DiVERE-test..."
+            mv "$executable" "dist-test/DiVERE-test"
+            echo "✅ Renamed successfully"
+          fi
         else
-          echo "❌ Build failed!"
+          echo "❌ Build failed! No executable found"
+          echo "Available files:"
+          find dist-test -type f | sort
           exit 1
         fi
 

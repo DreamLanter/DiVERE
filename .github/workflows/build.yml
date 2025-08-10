@@ -94,7 +94,6 @@ jobs:
           --standalone \
           --enable-plugin=pyside6 \
           --output-dir=dist \
-          --output-filename=DiVERE${{ matrix.extension }} \
           --include-data-dir=dist/config=config \
           --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
@@ -107,6 +106,37 @@ jobs:
         # 显示构建后的文件结构
         echo "📁 Build output structure:"
         find dist -type f | sort
+        
+        # 检查Nuitka的输出
+        echo "🔍 Nuitka output directories:"
+        ls -la dist/
+        
+        # 查找生成的可执行文件
+        echo "🔍 Looking for executable files:"
+        find dist -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -10
+
+    - name: Prepare distribution package
+      run: |
+        echo "📁 Preparing distribution package..."
+        
+        # 查找Nuitka生成的可执行文件
+        executable=$(find dist -name "DiVERE*" -o -name "__main__*" -o -name "*.exe" -o -name "*.bin" | head -1)
+        
+        if [ -n "$executable" ] && [ -f "$executable" ]; then
+          echo "✅ Found executable: $executable"
+          
+          # 重命名为我们期望的名称
+          expected_name="DiVERE${{ matrix.extension }}"
+          if [[ "$executable" != "dist/$expected_name" ]]; then
+            echo "🔄 Renaming executable to $expected_name..."
+            mv "$executable" "dist/$expected_name"
+            echo "✅ Renamed successfully"
+          fi
+        else
+          echo "❌ No executable found!"
+          find dist -type f | sort
+          exit 1
+        fi
 
     - name: Create distribution package
       run: |

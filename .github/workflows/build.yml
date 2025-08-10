@@ -58,21 +58,29 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Build with Nuitka
-      uses: Nuitka/Nuitka-Action@main
-      with:
-        script-name: divere/__main__.py
-        working-directory: .
-        enable-plugins: pyside6
-        mode: standalone
-        python-flag: |
-          --output-dir=dist
-          --output-filename=DiVERE${{ matrix.extension }}
-          --include-data-dir=config=config
-          --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
-          --assume-yes-for-downloads
-          --windows-disable-console
-          --macos-create-app-bundle
+    - name: Install Nuitka
+      run: |
+        pip install nuitka
+
+    - name: Build with Nuitka (Manual)
+      run: |
+        # 创建输出目录
+        mkdir -p dist
+        
+        # 运行Nuitka编译
+        python -m nuitka \
+          --standalone \
+          --enable-plugin=pyside6 \
+          --output-dir=dist \
+          --output-filename=DiVERE${{ matrix.extension }} \
+          --include-data-dir=config=config \
+          --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx \
+          --assume-yes-for-downloads \
+          ${{ matrix.os == 'windows-latest' && '--windows-disable-console' || '' }} \
+          ${{ matrix.os == 'macos-latest' && '--macos-create-app-bundle' || '' }} \
+          divere/__main__.py
+        
+        echo "✅ Nuitka build completed for ${{ matrix.os }}"
 
     - name: Copy additional configuration files
       run: |

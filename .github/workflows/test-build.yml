@@ -8,6 +8,7 @@ on:
 jobs:
   test-build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -15,7 +16,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            platform: linux
+            platform: linuxxiu fu
             arch: x64
           - os: windows-latest
             platform: windows
@@ -54,6 +55,14 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
+
+    - name: Cache Nuitka cache
+      uses: actions/cache@v4
+      with:
+        path: nuitka-cache
+        key: nuitka-${{ runner.os }}-py-3.11-v1
+        restore-keys: |
+          nuitka-${{ runner.os }}-py-3.11-
 
     - name: Install Python dependencies
       run: |
@@ -97,6 +106,15 @@ jobs:
     - name: Build with Nuitka (Manual)
       run: |
         # 现在运行Nuitka编译，此时文件已经在正确位置
+        export NUITKA_CACHE_DIR=$PWD/nuitka-cache
+        echo "Using Nuitka cache: $NUITKA_CACHE_DIR"
+        
+        extra_flags=""
+        if [ "${{ matrix.platform }}" = "windows" ]; then
+          # Windows 上开启低内存模式，避免大工程编译被取消
+          extra_flags="--low-memory"
+        fi
+        
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
@@ -104,6 +122,7 @@ jobs:
           --include-data-dir=dist-test/config=config \
           --include-data-file=dist-test/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
+          $extra_flags \
           divere/__main__.py
         
         echo "✅ Nuitka build completed"
@@ -152,11 +171,18 @@ jobs:
         elif [ -f "dist-test/__main__.dist/__main__" ] && [ -x "dist-test/__main__.dist/__main__" ]; then
           executable="dist-test/__main__.dist/__main__"
         else
-          # 兜底：在 dist-test 及其 .dist 目录内查找可执行文件，排除常见的动态库/脚本
-          executable=$(find dist-test -type f -executable \
-            ! -name "*.so" ! -name "*.dll" ! -name "*.dylib" \
-            ! -name "*.py" ! -name "*.pyc" ! -name "*.pyd" \
-            | head -1)
+          # 兜底：跨平台查找可执行文件（macOS 使用 -perm +111，Linux 使用 -perm /111）
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            executable=$(find dist-test -type f -perm +111 \
+              ! -name "*.so" ! -name "*.dll" ! -name "*.dylib" \
+              ! -name "*.py" ! -name "*.pyc" ! -name "*.pyd" \
+              | head -1)
+          else
+            executable=$(find dist-test -type f -perm /111 \
+              ! -name "*.so" ! -name "*.dll" ! -name "*.dylib" \
+              ! -name "*.py" ! -name "*.pyc" ! -name "*.pyd" \
+              | head -1)
+          fi
         fi
         
         if [ -n "$executable" ] && [ -f "$executable" ]; then

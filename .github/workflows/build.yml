@@ -1,0 +1,142 @@
+name: Build DiVERE Application
+
+on:
+  push:
+    tags: ['v*']  # 发布版本时触发
+  pull_request:
+    branches: [main, develop]  # PR 时触发
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.11']
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            extension: ''
+          - os: windows-latest
+            platform: windows
+            extension: '.exe'
+          - os: macos-latest
+            platform: macos
+            extension: ''
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
+
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install openssl readline sqlite3 xz zlib
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build with Nuitka
+      uses: Nuitka/Nuitka-Action@v1.3
+      with:
+        script: divere/__main__.py
+        output-dir: dist
+        output-filename: DiVERE${{ matrix.extension }}
+        include-data-dir: config=config
+        include-data-file: divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
+        enable-plugin: pyside6
+        standalone: true
+        assume-yes-for-downloads: true
+        # 平台特定配置
+        windows-disable-console: true
+        macos-create-app-bundle: false
+
+    - name: Create distribution package
+      run: |
+        cd dist
+        if [ "${{ matrix.platform }}" = "windows" ]; then
+          # Windows: 创建 zip 包
+          powershell Compress-Archive -Path "DiVERE.exe", "models", "config" -DestinationPath "DiVERE-${{ matrix.platform }}.zip"
+        elif [ "${{ matrix.platform }}" = "macos" ]; then
+          # macOS: 创建 tar.gz 包
+          tar -czf "DiVERE-${{ matrix.platform }}.tar.gz" DiVERE models config
+        else
+          # Linux: 创建 tar.gz 包
+          tar -czf "DiVERE-${{ matrix.platform }}.tar.gz" DiVERE models config
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: DiVERE-${{ matrix.platform }}
+        path: |
+          dist/DiVERE${{ matrix.extension }}
+          dist/DiVERE-${{ matrix.platform }}.*
+          dist/models/
+          dist/config/
+
+    # 自动发布到 GitHub Releases（已注释，用于测试）
+    # - name: Create Release
+    #   if: startsWith(github.ref, 'refs/tags/')
+    #   uses: actions/create-release@v1
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #   with:
+    #     tag_name: ${{ github.ref }}
+    #     release_name: DiVERE ${{ github.ref_name }}
+    #     body: |
+    #       ## DiVERE ${{ github.ref_name }}
+    #       
+    #       ### 支持的平台
+    #       - Windows (x64)
+    #       - macOS (x64)
+    #       - Linux (x64)
+    #       
+    #       ### 下载
+    #       请下载对应平台的压缩包：
+    #       - Windows: `DiVERE-windows.zip`
+    #       - macOS: `DiVERE-macos.tar.gz`
+    #       - Linux: `DiVERE-linux.tar.gz`
+    #       
+    #       ### 安装说明
+    #       1. 解压下载的压缩包
+    #       2. 运行 `DiVERE` 可执行文件
+    #       3. 配置文件位于 `config` 目录
+    #       
+    #       ### 更新日志
+    #       查看 [CHANGELOG.md](CHANGELOG.md) 了解详细更新内容
+    #     draft: false
+    #     prerelease: false
+
+    # - name: Upload Release Assets
+    #   if: startsWith(github.ref, 'refs/tags/')
+    #   uses: actions/upload-release-asset@v1
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #   with:
+    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
+    #     asset_path: dist/DiVERE-${{ matrix.platform }}.*
+    #     asset_name: DiVERE-${{ matrix.platform }}-${{ github.ref_name }}
+    #     asset_content_type: application/octet-stream

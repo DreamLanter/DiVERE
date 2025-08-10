@@ -7,7 +7,7 @@ echo "开始 Linux 打包..."
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 BUILD_DIR="$PROJECT_ROOT/build/linux"
 DIST_DIR="$PROJECT_ROOT/dist/linux"
 
@@ -23,7 +23,14 @@ mkdir -p "$DIST_DIR/models"
 
 # 复制模型文件
 echo "复制模型文件..."
-cp "$PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx" "$DIST_DIR/models/"
+if [ -f "$PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx" ]; then
+    cp "$PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx" "$DIST_DIR/models/"
+    echo "模型文件复制成功"
+else
+    echo "警告: 模型文件不存在: $PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx"
+    echo "请确保 ONNX 模型文件已正确放置"
+    exit 1
+fi
 
 # 复制配置文件
 echo "复制配置文件..."
@@ -41,13 +48,13 @@ cd "$PROJECT_ROOT"
 
 python -m nuitka \
     --standalone \
-    --include-data-dir=config:config \
-    --include-data-dir=divere:divere \
-    --include-data-file=divere/colorConstancyModels/net_awb.onnx:divere/colorConstancyModels/net_awb.onnx \
+    --include-data-dir=config=config \
+
+    --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx \
     --output-dir="$DIST_DIR" \
     --output-filename=DiVERE \
     --assume-yes-for-downloads \
-    --enable-plugin=py-side6 \
+    --enable-plugin=pyside6 \
     --linux-onefile-icon=config/app_icon.png \
     --linux-app-name="DiVERE" \
     --linux-app-version="1.0.0" \

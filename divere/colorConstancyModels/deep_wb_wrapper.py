@@ -131,14 +131,36 @@ class DeepWBWrapper:
         
         # 设置模型路径
         if model_dir is None:
-            self.model_dir = os.path.dirname(__file__)
+            # 尝试多个可能的路径
+            possible_paths = [
+                os.path.dirname(__file__),  # 源代码路径
+                os.path.join(os.path.dirname(__file__), '..', '..', 'models'),  # 打包后的路径
+                os.path.join(os.path.dirname(__file__), '..', '..', '..', 'models'),  # 另一种打包路径
+                'models'  # 当前工作目录下的 models
+            ]
+            
+            # 查找存在的路径
+            for path in possible_paths:
+                test_path = os.path.join(path, 'net_awb.onnx')
+                if os.path.exists(test_path):
+                    self.model_dir = path
+                    break
+            else:
+                # 如果都找不到，使用默认路径
+                self.model_dir = os.path.dirname(__file__)
         else:
             self.model_dir = model_dir
             
         self.onnx_model_path = os.path.join(self.model_dir, 'net_awb.onnx')
         
         if not os.path.exists(self.onnx_model_path):
-            raise FileNotFoundError(f"ONNX model not found at {self.onnx_model_path}")
+            # 尝试在当前工作目录下查找
+            cwd_model_path = os.path.join('models', 'net_awb.onnx')
+            if os.path.exists(cwd_model_path):
+                self.onnx_model_path = cwd_model_path
+                print(f"Found model at working directory: {self.onnx_model_path}")
+            else:
+                raise FileNotFoundError(f"ONNX model not found at {self.onnx_model_path}")
         
         # 创建推理会话
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if device == 'cuda' else ['CPUExecutionProvider']

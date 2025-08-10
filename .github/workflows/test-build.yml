@@ -1,0 +1,72 @@
+name: Test Build (Quick)
+
+on:
+  workflow_dispatch:  # 仅手动触发
+  push:
+    branches: [main]  # 主分支推送时也触发
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest  # 仅使用 Ubuntu 进行测试
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Test import
+      run: |
+        python -c "import divere; print('Import successful')"
+        python -c "from divere.colorConstancyModels.deep_wb_wrapper import DeepWBWrapper; print('DeepWB import successful')"
+
+    - name: Build with Nuitka (Test)
+      uses: Nuitka/Nuitka-Action@v1.3
+      with:
+        script: divere/__main__.py
+        output-dir: dist-test
+        output-filename: DiVERE-test
+        include-data-dir: config=config
+        include-data-file: divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
+        enable-plugin: pyside6
+        standalone: true
+        assume-yes-for-downloads: true
+
+    - name: Check build output
+      run: |
+        ls -la dist-test/
+        if [ -f "dist-test/DiVERE-test" ]; then
+          echo "✅ Build successful!"
+          echo "File size: $(du -h dist-test/DiVERE-test | cut -f1)"
+        else
+          echo "❌ Build failed!"
+          exit 1
+        fi
+
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-build-ubuntu
+        path: dist-test/
+        retention-days: 1  # 测试产物只保留1天

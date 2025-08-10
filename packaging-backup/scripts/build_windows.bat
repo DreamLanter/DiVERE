@@ -5,7 +5,7 @@ echo 开始 Windows 打包...
 
 REM 获取脚本所在目录
 set SCRIPT_DIR=%~dp0
-set PROJECT_ROOT=%SCRIPT_DIR%..
+set PROJECT_ROOT=%SCRIPT_DIR%..\..
 set BUILD_DIR=%PROJECT_ROOT%\build\windows
 set DIST_DIR=%PROJECT_ROOT%\dist\windows
 
@@ -21,7 +21,14 @@ mkdir "%DIST_DIR%\models"
 
 REM 复制模型文件
 echo 复制模型文件...
-copy "%PROJECT_ROOT%\divere\colorConstancyModels\net_awb.onnx" "%DIST_DIR%\models\"
+if exist "%PROJECT_ROOT%\divere\colorConstancyModels\net_awb.onnx" (
+    copy "%PROJECT_ROOT%\divere\colorConstancyModels\net_awb.onnx" "%DIST_DIR%\models\"
+    echo 模型文件复制成功
+) else (
+    echo 警告: 模型文件不存在: %PROJECT_ROOT%\divere\colorConstancyModels\net_awb.onnx
+    echo 请确保 ONNX 模型文件已正确放置
+    exit /b 1
+)
 
 REM 复制配置文件
 echo 复制配置文件...
@@ -40,13 +47,13 @@ cd /d "%PROJECT_ROOT%"
 
 python -m nuitka ^
     --standalone ^
-    --include-data-dir=config:config ^
-    --include-data-dir=divere:divere ^
-    --include-data-file=divere/colorConstancyModels/net_awb.onnx:divere/colorConstancyModels/net_awb.onnx ^
+    --include-data-dir=config=config ^
+
+    --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx ^
     --output-dir="%DIST_DIR%" ^
     --output-filename=DiVERE.exe ^
     --assume-yes-for-downloads ^
-    --enable-plugin=py-side6 ^
+    --enable-plugin=pyside6 ^
     --windows-icon-from-ico=config/app_icon.ico ^
     --windows-company-name="DiVERE" ^
     --windows-product-name="DiVERE" ^

@@ -10,29 +10,37 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.11']
         include:
           - os: ubuntu-latest
             platform: linux
+            arch: x64
             extension: ''
           - os: windows-latest
             platform: windows
+            arch: x64
             extension: '.exe'
-          - os: macos-latest
+          - os: macos-13
             platform: macos
+            arch: x64
+            extension: ''
+          - os: macos-14
+            platform: macos
+            arch: arm64
             extension: ''
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: '3.11'
 
     - name: Install system dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-latest'
@@ -41,7 +49,7 @@ jobs:
         sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
 
     - name: Install system dependencies (macOS)
-      if: matrix.os == 'macos-latest'
+      if: contains(matrix.os, 'macos')
       run: |
         brew install openssl readline sqlite3 xz zlib
 
@@ -98,7 +106,7 @@ jobs:
           --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
           ${{ matrix.os == 'windows-latest' && '--windows-disable-console' || '' }} \
-          ${{ matrix.os == 'macos-latest' && '--macos-create-app-bundle' || '' }} \
+          ${{ contains(matrix.os, 'macos') && '--macos-create-app-bundle' || '' }} \
           divere/__main__.py
         
         echo "✅ Nuitka build completed for ${{ matrix.os }}"
@@ -161,26 +169,25 @@ jobs:
           exit 1
         fi
 
-    - name: Create distribution package
+    - name: Create distribution package (Windows)
+      if: matrix.platform == 'windows'
+      shell: pwsh
+      run: |
+        Set-Location dist
+        Compress-Archive -Path "DiVERE.exe", "models", "config" -DestinationPath "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+
+    - name: Create distribution package (Unix)
+      if: matrix.platform != 'windows'
       run: |
         cd dist
-        if [ "${{ matrix.platform }}" = "windows" ]; then
-          # Windows: 创建 zip 包
-          powershell Compress-Archive -Path "DiVERE.exe", "models", "config" -DestinationPath "DiVERE-${{ matrix.platform }}.zip"
-        elif [ "${{ matrix.platform }}" = "macos" ]; then
-          # macOS: 创建 tar.gz 包
-          tar -czf "DiVERE-${{ matrix.platform }}.tar.gz" DiVERE models config
-        else
-          # Linux: 创建 tar.gz 包
-          tar -czf "DiVERE-${{ matrix.platform }}.tar.gz" DiVERE models config
-        fi
+        tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" DiVERE models config
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: DiVERE-${{ matrix.platform }}
+        name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
         path: |
           dist/DiVERE${{ matrix.extension }}
-          dist/DiVERE-${{ matrix.platform }}.*
+          dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.*
           dist/models/
           dist/config/

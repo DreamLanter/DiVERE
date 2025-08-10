@@ -59,15 +59,17 @@ jobs:
         pip install -r requirements.txt
 
     - name: Build with Nuitka
-      uses: Nuitka/Nuitka-Action@v1.3
+      uses: Nuitka/Nuitka-Action@main
       with:
-        script: divere/__main__.py
+        script-name: divere/__main__.py
         output-dir: dist
         output-filename: DiVERE${{ matrix.extension }}
-        include-data-dir: config=config
-        include-data-file: divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
-        enable-plugin: pyside6
-        standalone: true
+        include-data-dir: |
+          config=config
+        include-data-file: |
+          divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
+        enable-plugins: pyside6
+        mode: standalone
         assume-yes-for-downloads: true
         # 平台特定配置
         windows-disable-console: true

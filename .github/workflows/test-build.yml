@@ -45,51 +45,49 @@ jobs:
       run: |
         pip install nuitka
 
-    - name: Build with Nuitka (Manual)
+    - name: Prepare build directories
       run: |
         # 创建输出目录
-        mkdir -p dist-test
+        mkdir -p dist-test/config dist-test/models
         
-        # 运行Nuitka编译
+        # 预先复制配置文件，这样Nuitka就能找到它们
+        echo "📁 Copying configuration files..."
+        cp -r config/* dist-test/config/
+        
+        # 复制ONNX模型文件
+        echo "🤖 Copying ONNX model..."
+        cp divere/colorConstancyModels/net_awb.onnx dist-test/models/
+        
+        # 验证文件已复制
+        echo "🔍 Verifying files:"
+        ls -la dist-test/config/ | head -5
+        ls -la dist-test/models/
+        
+        if [ -f "dist-test/models/net_awb.onnx" ]; then
+          echo "✅ ONNX model ready: $(du -h dist-test/models/net_awb.onnx | cut -f1)"
+        else
+          echo "❌ ONNX model missing!"
+          exit 1
+        fi
+
+    - name: Build with Nuitka (Manual)
+      run: |
+        # 现在运行Nuitka编译，此时文件已经在正确位置
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
           --output-dir=dist-test \
           --output-filename=DiVERE-test \
-          --include-data-dir=config=config \
-          --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx \
+          --include-data-dir=dist-test/config=config \
+          --include-data-file=dist-test/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
           divere/__main__.py
         
         echo "✅ Nuitka build completed"
-
-    - name: Copy additional configuration files
-      run: |
-        # 确保输出目录存在
-        mkdir -p dist-test/config dist-test/models
         
-        # 复制所有配置文件（包括子目录）
-        cp -r config/* dist-test/config/
-        
-        # 复制ONNX模型文件到models目录
-        cp divere/colorConstancyModels/net_awb.onnx dist-test/models/
-        
-        # 显示复制后的文件结构
-        echo "📁 Test output directory structure:"
+        # 显示构建后的文件结构
+        echo "📁 Build output structure:"
         find dist-test -type f | sort
-        
-        # 验证关键文件是否存在
-        echo "🔍 Verifying key files:"
-        ls -la dist-test/config/
-        ls -la dist-test/models/
-        
-        # 检查ONNX模型文件大小
-        if [ -f "dist-test/models/net_awb.onnx" ]; then
-          echo "✅ ONNX model found: $(du -h dist-test/models/net_awb.onnx | cut -f1)"
-        else
-          echo "❌ ONNX model missing!"
-          exit 1
-        fi
 
     - name: Check build output
       run: |

@@ -62,53 +62,51 @@ jobs:
       run: |
         pip install nuitka
 
-    - name: Build with Nuitka (Manual)
+    - name: Prepare build directories
       run: |
         # 创建输出目录
-        mkdir -p dist
+        mkdir -p dist/config dist/models
         
-        # 运行Nuitka编译
+        # 预先复制配置文件，这样Nuitka就能找到它们
+        echo "📁 Copying configuration files..."
+        cp -r config/* dist/config/
+        
+        # 复制ONNX模型文件
+        echo "🤖 Copying ONNX model..."
+        cp divere/colorConstancyModels/net_awb.onnx dist/models/
+        
+        # 验证文件已复制
+        echo "🔍 Verifying files:"
+        ls -la dist/config/ | head -5
+        ls -la dist/models/
+        
+        if [ -f "dist/models/net_awb.onnx" ]; then
+          echo "✅ ONNX model ready: $(du -h dist/models/net_awb.onnx | cut -f1)"
+        else
+          echo "❌ ONNX model missing!"
+          exit 1
+        fi
+
+    - name: Build with Nuitka (Manual)
+      run: |
+        # 现在运行Nuitka编译，此时文件已经在正确位置
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
           --output-dir=dist \
           --output-filename=DiVERE${{ matrix.extension }} \
-          --include-data-dir=config=config \
-          --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx \
+          --include-data-dir=dist/config=config \
+          --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
           ${{ matrix.os == 'windows-latest' && '--windows-disable-console' || '' }} \
           ${{ matrix.os == 'macos-latest' && '--macos-create-app-bundle' || '' }} \
           divere/__main__.py
         
         echo "✅ Nuitka build completed for ${{ matrix.os }}"
-
-    - name: Copy additional configuration files
-      run: |
-        # 确保输出目录存在
-        mkdir -p dist/config dist/models
         
-        # 复制所有配置文件（包括子目录）
-        cp -r config/* dist/config/
-        
-        # 复制ONNX模型文件到models目录
-        cp divere/colorConstancyModels/net_awb.onnx dist/models/
-        
-        # 显示复制后的文件结构
-        echo "📁 Output directory structure:"
+        # 显示构建后的文件结构
+        echo "📁 Build output structure:"
         find dist -type f | sort
-        
-        # 验证关键文件是否存在
-        echo "🔍 Verifying key files:"
-        ls -la dist/config/
-        ls -la dist/models/
-        
-        # 检查ONNX模型文件大小
-        if [ -f "dist/models/net_awb.onnx" ]; then
-          echo "✅ ONNX model found: $(du -h dist/models/net_awb.onnx | cut -f1)"
-        else
-          echo "❌ ONNX model missing!"
-          exit 1
-        fi
 
     - name: Create distribution package
       run: |
@@ -133,47 +131,3 @@ jobs:
           dist/DiVERE-${{ matrix.platform }}.*
           dist/models/
           dist/config/
-
-    # 自动发布到 GitHub Releases（已注释，用于测试）
-    # - name: Create Release
-    #   if: startsWith(github.ref, 'refs/tags/')
-    #   uses: actions/create-release@v1
-    #   env:
-    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    #   with:
-    #     tag_name: ${{ github.ref }}
-    #     release_name: DiVERE ${{ github.ref_name }}
-    #     body: |
-    #       ## DiVERE ${{ github.ref_name }}
-    #       
-    #       ### 支持的平台
-    #       - Windows (x64)
-    #       - macOS (x64)
-    #       - Linux (x64)
-    #       
-    #       ### 下载
-    #       请下载对应平台的压缩包：
-    #       - Windows: `DiVERE-windows.zip`
-    #       - macOS: `DiVERE-macos.tar.gz`
-    #       - Linux: `DiVERE-linux.tar.gz`
-    #       
-    #       ### 安装说明
-    #       1. 解压下载的压缩包
-    #       2. 运行 `DiVERE` 可执行文件
-    #       3. 配置文件位于 `config` 目录
-    #       
-    #       ### 更新日志
-    #       查看 [CHANGELOG.md](CHANGELOG.md) 了解详细更新内容
-    #     draft: false
-    #     prerelease: false
-
-    # - name: Upload Release Assets
-    #   if: startsWith(github.ref, 'refs/tags/')
-    #   uses: actions/upload-release-asset@v1
-    #   env:
-    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    #   with:
-    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-    #     asset_path: dist/DiVERE-${{ matrix.platform }}.*
-    #     asset_name: DiVERE-${{ matrix.platform }}-${{ github.ref_name }}
-    #     asset_content_type: application/octet-stream

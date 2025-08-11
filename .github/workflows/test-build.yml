@@ -86,7 +86,7 @@ jobs:
         
         # 预先复制配置文件，这样Nuitka就能找到它们
         echo "📁 Copying configuration files..."
-        cp -r config/* dist-test/config/
+        cp -r divere/config/* dist-test/config/
         
         # 复制ONNX模型文件
         echo "🤖 Copying ONNX model..."

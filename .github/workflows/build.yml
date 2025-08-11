@@ -58,8 +58,8 @@ jobs:
         echo "Listing files at root:"
         ls -laF
         mkdir -p dist dist/models
-        # 递归复制整个 config 目录，避免通配符在空时失败
-        cp -r config dist/
+        # 递归复制整个 divere/config 目录
+        cp -r divere/config dist/
         cp divere/models/net_awb.onnx dist/models/
         ls -la dist/config/ | head -5
         ls -la dist/models/

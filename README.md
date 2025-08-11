@@ -20,7 +20,10 @@
 
 ### 系统要求
 
-- 我也不太清楚。
+- Python 3.9–3.11（推荐 3.11）
+- 操作系统：macOS 12+（Intel/Apple Silicon）、Windows 10/11、Ubuntu 20.04+
+- 显卡：非必须（本应用使用 ONNX Runtime 的 CPU 推理）
+- 包管理：pip 或 conda
 
 ### 🚀 快速开始
 
@@ -39,13 +42,9 @@ python -m divere
 #### 方法一：使用pip
 
 ```bash
-# 克隆项目（包含子模块）
-git clone --recursive https://github.com/V7CN/DiVERE.git
+# 克隆项目
+git clone https://github.com/V7CN/DiVERE.git
 cd DiVERE
-
-# 如果克隆时没有包含子模块，请运行：
-# git submodule init
-# git submodule update
 
 # 创建虚拟环境（推荐）
 python -m venv venv
@@ -63,16 +62,12 @@ python -m divere
 #### 方法二：使用conda
 
 ```bash
-# 克隆项目（包含子模块）
-git clone --recursive https://github.com/V7CN/DiVERE.git
+# 克隆项目
+git clone https://github.com/V7CN/DiVERE.git
 cd DiVERE
 
-# 如果克隆时没有包含子模块，请运行：
-# git submodule init
-# git submodule update
-
-# 创建conda环境
-conda create -n divere python=3.9
+# 创建conda环境（推荐 Python 3.11）
+conda create -n divere python=3.11 -y
 conda activate divere
 
 # 安装依赖
@@ -84,45 +79,29 @@ python -m divere
 
 ### 依赖包说明
 
-#### 核心依赖
+#### 必需依赖
 ```
 PySide6>=6.5.0          # GUI框架
-numpy>=1.24.0         # 数值计算
-opencv-python>=4.8.0  # 图像处理
-pillow>=10.0.0        # 图像I/O
-scipy>=1.11.0         # 科学计算
-imageio>=2.31.0       # 图像格式支持
-rawpy>=0.18.0         # RAW文件支持
-colour-science>=0.4.2 # 色彩科学计算
+numpy>=1.24.0           # 数值计算
+opencv-python>=4.8.0    # 图像处理
+pillow>=10.0.0          # 图像I/O
+scipy>=1.11.0           # 科学计算
+imageio>=2.31.0         # 图像格式支持
+rawpy>=0.18.0           # RAW文件支持
+colour-science>=0.4.2   # 色彩科学计算
+scikit-learn>=1.3.0     # 算法/工具（KMeans等）
+onnxruntime>=1.15.0     # ONNX 推理（自动校色）
 ```
 
-#### AI功能依赖（自动校色）
-```
-torch>=2.0.0          # 深度学习框架
-torchvision>=0.15.0   # 计算机视觉库
-scikit-learn>=1.3.0   # 机器学习工具
-matplotlib>=3.7.0     # 绘图库
-tqdm>=4.65.0          # 进度条
-```
-
-### 子模块说明
-
-本项目使用Git子模块管理第三方库：
-
-- **Deep_White_Balance**: 深度学习自动白平衡算法
-  - 来源: https://github.com/mahmoudnafifi/Deep_White_Balance
-  - 用途: 提供AI自动校色功能
-  - 位置: `divere/models/Deep_White_Balance/`
-
-如果克隆时没有包含子模块，请运行：
+- macOS Apple Silicon（arm64）：直接使用 `pip install onnxruntime`，官方已原生支持 arm64，不需要 `onnxruntime-silicon`。
+- 可用以下命令简单验证环境：
 ```bash
-git submodule init
-git submodule update
+python -c "import platform, onnxruntime as ort; print(platform.machine(), ort.__version__)"
 ```
 
 ## 🚀 使用指南
 
-等我上传一个视频吧！（Cursor写的太离谱了）
+后续将补充使用视频与文档。
 
 ## 🔧 技术架构
 
@@ -137,20 +116,20 @@ git submodule update
 ### 核心模块
 
 #### 1. 图像管理模块 (ImageManager)
-- **功能**：图像加载、代理生成、缓存管理
-- **特性**：支持多种格式、代理生成、内存管理
+- 功能：图像加载、代理生成、缓存管理
+- 特性：支持多种格式、代理生成、内存管理
 
 #### 2. 色彩空间管理模块 (ColorSpaceManager)
-- **功能**：色彩空间转换、ICC配置文件处理
-- **特性**：基于colour-science、ACEScg工作流
+- 功能：色彩空间转换、ICC配置文件处理
+- 特性：基于colour-science、ACEScg工作流
 
 #### 3. 调色引擎模块 (TheEnlarger)
-- **功能**：密度反相、校正矩阵、RGB增益、密度曲线
-- **特性**：线性处理、LUT生成
+- 功能：密度反相、校正矩阵、RGB增益、密度曲线
+- 特性：线性处理、LUT生成
 
 #### 4. LUT处理器 (LUTProcessor)
-- **功能**：3D/1D LUT生成、缓存管理
-- **特性**：缓存机制、文件格式支持
+- 功能：3D/1D LUT生成、缓存管理
+- 特性：缓存机制、文件格式支持
 
 ### 色彩处理Pipeline详解
 
@@ -200,42 +179,40 @@ DiVERE/
 │   ├── utils/                # 工具函数
 │   │   ├── config_manager.py # 配置管理
 │   │   └── lut_generator/    # LUT生成器
-│   └── models/               # AI自动校色
-│       ├── deep_wb_wrapper.py # Deep White Balance包装器
-│       ├── utils/            # 工具函数
-│       └── Deep_White_Balance/ # Git子模块
+│   └── models/               # AI自动校色（ONNX）
+│       ├── deep_wb_wrapper.py
+│       ├── deep_wb_wrapper_backup.py
+│       ├── utils/
+│       └── net_awb.onnx
 ├── config/                   # 配置文件
 │   ├── colorspace/          # 色彩空间配置
 │   ├── curves/              # 预设曲线
 │   └── matrices/            # 校正矩阵
-├── .gitmodules              # Git子模块配置
 ├── requirements.txt         # Python依赖
-├── pyproject.toml          # 项目配置
-└── README.md               # 项目文档
+├── pyproject.toml           # 项目配置
+└── README.md                # 项目文档
 ```
 
 ## 🤝 致谢
 
 ### 深度学习自动校色
 
-本项目通过Git子模块集成了以下优秀的开源项目：
+本项目的学习型自动校色基于以下优秀的开源研究成果：
 
 #### Deep White Balance
-- **论文**: "Deep White-Balance Editing" (CVPR 2020)
-- **作者**: Mahmoud Afifi, Konstantinos G. Derpanis, Björn Ommer, Michael S. Brown
-- **GitHub**: https://github.com/mahmoudnafifi/Deep_White_Balance
-- **许可证**: MIT License
-- **集成方式**: Git子模块
-
-Deep White Balance提供了基于深度学习的自动白平衡算法，我们将其作为子模块集成到DiVERE中，实现了自动校色功能。
+- 论文: "Deep White-Balance Editing" (CVPR 2020)
+- 作者: Mahmoud Afifi, Konstantinos G. Derpanis, Björn Ommer, Michael S. Brown
+- GitHub: https://github.com/mahmoudnafifi/Deep_White_Balance
+- 许可证: MIT License
+- 说明: 模型来源于上述研究，已转换为 ONNX 并随项目分发使用（`divere/models/net_awb.onnx`）。
 
 ### 开源库
 
-- **PySide6**: GUI框架
-- **NumPy**: 数值计算
-- **OpenCV**: 图像处理
-- **colour-science**: 色彩科学计算
-- **PyTorch**: 深度学习框架
+- PySide6: GUI框架
+- NumPy: 数值计算
+- OpenCV: 图像处理
+- colour-science: 色彩科学计算
+- ONNX Runtime: 模型推理
 
 ## 📄 许可证
 

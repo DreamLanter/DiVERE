@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from collections import OrderedDict
 import time
+import traceback
 
 from .data_types import ImageData, ColorGradingParams, LUT3D
 
@@ -18,7 +19,9 @@ from .data_types import ImageData, ColorGradingParams, LUT3D
 try:
     from ..models.deep_wb_wrapper import create_deep_wb_wrapper
     DEEP_WB_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print("Failed to import deep_wb_wrapper:")
+    traceback.print_exc()
     DEEP_WB_AVAILABLE = False
 
 

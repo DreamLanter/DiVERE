@@ -47,6 +47,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          echo "Installing onnxruntime-silicon for macOS ARM64..."
+          pip uninstall -y onnxruntime
+          pip install onnxruntime-silicon
+        fi
 
     - name: Install Nuitka
       run: |

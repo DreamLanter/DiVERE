@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from collections import OrderedDict
 import time
+import sys
 
 from .data_types import ImageData, ColorGradingParams, LUT3D
 
@@ -70,7 +71,18 @@ class TheEnlarger:
                     
         except ImportError:
             # 如果增强配置管理器不可用，使用原来的方法
-            matrix_dir = Path("config/matrices")
+            if getattr(sys, 'frozen', False):
+                # 编译后环境
+                if sys.platform == 'darwin':
+                    # macOS .app 包
+                    matrix_dir = Path(sys.executable).parent / "config" / "matrices"
+                else:
+                    # 其他平台
+                    matrix_dir = Path(sys.executable).parent / "config" / "matrices"
+            else:
+                # 开发环境
+                matrix_dir = Path("config/matrices")
+                
             if not matrix_dir.exists():
                 return
             for matrix_file in matrix_dir.glob("*.json"):

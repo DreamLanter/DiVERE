@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 import platform
 import time
+import sys
 
 
 class EnhancedConfigManager:
@@ -37,7 +38,18 @@ class EnhancedConfigManager:
             dir_path.mkdir(parents=True, exist_ok=True)
         
         # 应用内置配置目录（相对于应用根目录）
-        self.app_config_dir = Path("config")
+        # 在 Nuitka 编译后，配置文件应该在可执行文件同级的 config 目录
+        if getattr(sys, 'frozen', False):
+            # 编译后环境
+            if sys.platform == 'darwin':
+                # macOS .app 包
+                self.app_config_dir = Path(sys.executable).parent / "config"
+            else:
+                # 其他平台
+                self.app_config_dir = Path(sys.executable).parent / "config"
+        else:
+            # 开发环境
+            self.app_config_dir = Path("config")
         
         # 应用设置文件
         self.app_settings_file = self.user_config_dir / "config" / "app_settings.json"

@@ -9,6 +9,7 @@ from pathlib import Path
 import colour
 import json
 import os
+import sys
 
 from .data_types import ImageData
 
@@ -74,7 +75,18 @@ class ColorSpaceManager:
                     
         except ImportError:
             # 如果增强配置管理器不可用，使用原来的方法
-            colorspace_dir = Path("config/colorspace")
+            if getattr(sys, 'frozen', False):
+                # 编译后环境
+                if sys.platform == 'darwin':
+                    # macOS .app 包
+                    colorspace_dir = Path(sys.executable).parent / "config" / "colorspace"
+                else:
+                    # 其他平台
+                    colorspace_dir = Path(sys.executable).parent / "config" / "colorspace"
+            else:
+                # 开发环境
+                colorspace_dir = Path("config/colorspace")
+                
             if not colorspace_dir.exists():
                 print(f"警告：色彩空间配置目录 {colorspace_dir} 不存在")
                 return

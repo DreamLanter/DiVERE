@@ -6,9 +6,27 @@ import sys
 import os
 from pathlib import Path
 
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+def get_app_root():
+    """获取应用程序根目录，兼容开发环境和Nuitka编译后环境"""
+    if getattr(sys, 'frozen', False):
+        # Nuitka 编译后的环境
+        if sys.platform == 'darwin':
+            # macOS .app 包
+            app_bundle = Path(sys.executable).parent.parent.parent
+            return app_bundle / "Contents" / "MacOS"
+        else:
+            # 其他平台
+            return Path(sys.executable).parent
+    else:
+        # 开发环境
+        return Path(__file__).parent.parent
+
+# 设置应用程序根目录
+app_root = get_app_root()
+sys.path.insert(0, str(app_root))
+
+# 设置工作目录为应用程序根目录，确保相对路径正确
+os.chdir(app_root)
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt

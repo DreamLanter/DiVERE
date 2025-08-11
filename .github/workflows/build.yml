@@ -54,14 +54,34 @@ jobs:
 
     - name: Prepare build directories
       run: |
+        # 创建输出目录
         mkdir -p dist/config dist/models
+        
+        # 预先复制配置文件，这样Nuitka就能找到它们
+        echo "📁 Copying configuration files..."
         cp -r config/* dist/config/
+        
+        # 复制ONNX模型文件
+        echo "🤖 Copying ONNX model..."
         cp divere/colorConstancyModels/net_awb.onnx dist/models/
+        
+        # 验证文件已复制
+        echo "🔍 Verifying files:"
         ls -la dist/config/ | head -5
         ls -la dist/models/
+        
+        if [ -f "dist/models/net_awb.onnx" ]; then
+          echo "✅ ONNX model ready: $(du -h dist/models/net_awb.onnx | cut -f1)"
+        else
+          echo "❌ ONNX model missing!"
+          exit 1
+        fi
 
     - name: Build with Nuitka (Manual)
       run: |
+        # 现在运行Nuitka编译，此时文件已经在正确位置
+        echo "🔨 Starting Nuitka compilation..."
+        
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
@@ -72,21 +92,57 @@ jobs:
           --macos-create-app-bundle \
           --macos-app-icon=none \
           divere/__main__.py
+        
         echo "✅ Nuitka build completed"
-        echo "📁 Build output structure (first 200 files):"
-        find dist -type f -print | sed -n '1,200p' || true
+        
+        # 显示构建后的文件结构（仅文件）
+        echo "📁 Build output structure (files):"
+        find dist -type f | sort | head -100
+        
+        # 显示构建后的目录结构（仅目录）
+        echo "📁 Build output structure (dirs):"
+        find dist -type d -maxdepth 2 | sort
 
     - name: Sync resources into bundle
       run: |
+        set -e
+        echo "🔄 Syncing resources into .app bundle..."
+        
+        # 探测 .app 包
         app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        echo "Detected app bundle: ${app_bundle:-<not found>}"
+        
         if [ -z "$app_bundle" ]; then
-          echo "❌ No .app bundle found." && exit 1
+          echo "❌ No .app bundle found. Available dirs:"
+          find dist -maxdepth 2 -type d | sort
+          exit 1
         fi
+        
+        # 同步 config 与 models 到 .app 的 MacOS 目录内
         macos_bin_dir="$app_bundle/Contents/MacOS"
+        echo "Target MacOS bin dir: $macos_bin_dir"
+        
         mkdir -p "$macos_bin_dir/config" "$macos_bin_dir/models"
         cp -r dist/config/* "$macos_bin_dir/config/"
         cp -r dist/models/* "$macos_bin_dir/models/" || true
-        echo "📁 After sync, preview:"; find "$macos_bin_dir" -maxdepth 2 -type f | sed -n '1,100p'
+        
+        echo "📁 After sync, .app content preview:"
+        find "$macos_bin_dir" -maxdepth 2 -type f | sort | head -100
+        
+        # 验证关键文件存在
+        if [ -f "$macos_bin_dir/config/app_settings.json" ]; then
+          echo "✅ app_settings.json found in .app"
+        else
+          echo "❌ app_settings.json missing from .app"
+          exit 1
+        fi
+        
+        if [ -f "$macos_bin_dir/models/net_awb.onnx" ]; then
+          echo "✅ net_awb.onnx found in .app"
+        else
+          echo "❌ net_awb.onnx missing from .app"
+          exit 1
+        fi
 
     - name: Package (macOS)
       run: |

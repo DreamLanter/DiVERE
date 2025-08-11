@@ -75,35 +75,34 @@ jobs:
       run: |
         python -m nuitka \
           --standalone \
-          --enable-plugin=pyside6 \
-          --output-dir=dist \
-          --include-data-dir=dist/config=config \
-          --include-data-dir=dist/models=models \
           --macos-create-app-bundle \
+          --macos-app-name="DiVERE" \
           --macos-app-icon=none \
+          --enable-plugin=pyside6 \
+          --enable-plugin=numpy \
+          --include-package-data=onnxruntime \
+          --include-data-dir=divere/config=config \
+          --include-data-dir=divere/models=models \
+          --output-dir=dist \
           divere/__main__.py
         echo "✅ Nuitka build completed"
-
-    - name: Sync resources and verify bundle contents
+    
+    - name: Verify bundle contents (Optional but recommended)
       run: |
         app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
           echo "::error::No .app bundle found." && exit 1
         fi
         
-        macos_bin_dir="$app_bundle/Contents/MacOS"
-        mkdir -p "$macos_bin_dir/config" "$macos_bin_dir/models"
-        cp -r dist/config/* "$macos_bin_dir/config/"
-        cp -r dist/models/* "$macos_bin_dir/models/"
+        echo "--- Listing key dylib files in bundle ---"
+        find "$app_bundle" -name "*onnxruntime*.dylib" | sed -n '1,50p' || true
         
-        echo "Listing all .dylib files in bundle:"
-        find "$app_bundle" -name "*.dylib"
-        
-        echo "Verifying key files in bundle:"
-        if [ ! -f "$macos_bin_dir/models/net_awb.onnx" ]; then
-          echo "::error::ONNX model missing from final .app bundle."
+        echo "--- Verifying data files in bundle ---"
+        if ! find "$app_bundle" -name "net_awb.onnx" | grep -q .; then
+          echo "::error::ONNX model missing from .app bundle."
           exit 1
         fi
+        echo "✅ Verification passed."
 
     - name: Package macOS App
       run: |

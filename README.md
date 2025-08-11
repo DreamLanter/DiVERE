@@ -112,7 +112,7 @@ tqdm>=4.65.0          # 进度条
 - **Deep_White_Balance**: 深度学习自动白平衡算法
   - 来源: https://github.com/mahmoudnafifi/Deep_White_Balance
   - 用途: 提供AI自动校色功能
-  - 位置: `divere/colorConstancyModels/Deep_White_Balance/`
+  - 位置: `divere/models/Deep_White_Balance/`
 
 如果克隆时没有包含子模块，请运行：
 ```bash
@@ -200,7 +200,7 @@ DiVERE/
 │   ├── utils/                # 工具函数
 │   │   ├── config_manager.py # 配置管理
 │   │   └── lut_generator/    # LUT生成器
-│   └── colorConstancyModels/ # AI自动校色
+│   └── models/               # AI自动校色
 │       ├── deep_wb_wrapper.py # Deep White Balance包装器
 │       ├── utils/            # 工具函数
 │       └── Deep_White_Balance/ # Git子模块

@@ -28,7 +28,7 @@ packaging-backup/
 pip install -r requirements.txt
 
 # 确保 ONNX 模型文件存在
-ls divere/colorConstancyModels/net_awb.onnx
+ls divere/models/net_awb.onnx
 ```
 
 ### 2. 构建应用
@@ -79,7 +79,7 @@ packaging-backup\scripts\build_windows.bat
 --include-data-dir=config=config
 
 # 包含模型文件
---include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx
+--include-data-file=divere/models/net_awb.onnx=models/net_awb.onnx
 
 # 启用 PySide6 插件
 --enable-plugin=pyside6

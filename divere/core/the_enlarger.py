@@ -16,7 +16,7 @@ from .data_types import ImageData, ColorGradingParams, LUT3D
 
 # 尝试导入深度学习白平衡相关模块
 try:
-    from ..colorConstancyModels.deep_wb_wrapper import create_deep_wb_wrapper
+    from ..models.deep_wb_wrapper import create_deep_wb_wrapper
     DEEP_WB_AVAILABLE = True
 except ImportError:
     DEEP_WB_AVAILABLE = False

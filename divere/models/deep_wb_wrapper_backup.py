@@ -24,7 +24,7 @@ except ImportError as e:
 
 # 使用绝对导入
 try:
-    from divere.colorConstancyModels.utils.gain_calculator import calculate_rgb_gains_from_images, estimate_illuminant_from_gains
+    from divere.models.utils.gain_calculator import calculate_rgb_gains_from_images, estimate_illuminant_from_gains
 except ImportError:
     # 如果绝对导入失败，尝试相对导入
     try:

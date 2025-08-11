@@ -23,11 +23,11 @@ mkdir -p "$DIST_DIR/models"
 
 # 复制模型文件
 echo "复制模型文件..."
-if [ -f "$PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx" ]; then
-    cp "$PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx" "$DIST_DIR/models/"
+if [ -f "$PROJECT_ROOT/divere/models/net_awb.onnx" ]; then
+    cp "$PROJECT_ROOT/divere/models/net_awb.onnx" "$DIST_DIR/models/"
     echo "模型文件复制成功"
 else
-    echo "警告: 模型文件不存在: $PROJECT_ROOT/divere/colorConstancyModels/net_awb.onnx"
+    echo "警告: 模型文件不存在: $PROJECT_ROOT/divere/models/net_awb.onnx"
     echo "请确保 ONNX 模型文件已正确放置"
     exit 1
 fi
@@ -50,7 +50,7 @@ python -m nuitka \
     --standalone \
     --include-data-dir=config=config \
 
-    --include-data-file=divere/colorConstancyModels/net_awb.onnx=models/net_awb.onnx \
+    --include-data-file=divere/models/net_awb.onnx=models/net_awb.onnx \
     --output-dir="$DIST_DIR" \
     --output-filename=DiVERE \
     --assume-yes-for-downloads \

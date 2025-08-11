@@ -591,12 +591,13 @@ class ParameterPanel(QWidget):
             self.parameter_changed.emit()
             return
         
-        # 如果增益变化很小（接近收敛），也提前结束
+        # 如果增益变化很小（接近收敛），也提前结束（打印提示）
         if np.allclose(current_rgb_gains, new_rgb_gains, atol=1e-6):
-            # 更新参数和UI
             self.current_params.rgb_gains = tuple(new_rgb_gains)
             self.update_ui_from_params()
             self.parameter_changed.emit()
+            print("自动校色提前收敛，停止迭代。")
+            print(f"最终累计增益: R={self._auto_color_total_gains[0]:.3f}, G={self._auto_color_total_gains[1]:.3f}, B={self._auto_color_total_gains[2]:.3f}")
             return
         
         # 继续迭代
@@ -604,7 +605,7 @@ class ParameterPanel(QWidget):
         self.update_ui_from_params()
         self.parameter_changed.emit()  # 触发预览更新
         
-        # 等待200ms让预览更新完成，然后进行下一次迭代
+        # 等待一小段时间让预览更新完成，然后进行下一次迭代
         QTimer.singleShot(50, self._perform_auto_color_iteration)
 
     def get_current_params(self) -> ColorGradingParams:

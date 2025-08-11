@@ -6,7 +6,6 @@
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -21,20 +20,7 @@ class ConfigManager:
         Args:
             config_file: 配置文件路径
         """
-        # 在 Nuitka 编译后，配置文件应该在可执行文件同级的 config 目录
-        if getattr(sys, 'frozen', False):
-            # 编译后环境
-            if sys.platform == 'darwin':
-                # macOS .app 包
-                base_dir = Path(sys.executable).parent
-            else:
-                # 其他平台
-                base_dir = Path(sys.executable).parent
-            self.config_file = base_dir / config_file
-        else:
-            # 开发环境
-            self.config_file = Path(config_file)
-            
+        self.config_file = Path(config_file)
         self.config = self._load_config()
     
     def _load_config(self) -> dict:

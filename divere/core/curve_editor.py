@@ -7,7 +7,6 @@ import json
 import numpy as np
 from typing import List, Tuple, Optional
 from pathlib import Path
-import sys
 
 from .data_types import Curve
 
@@ -49,22 +48,14 @@ class CurveEditor:
                     
         except ImportError:
             # 如果增强配置管理器不可用，使用原来的方法
-            if getattr(sys, 'frozen', False):
-                # 编译后环境
-                if sys.platform == 'darwin':
-                    # macOS .app 包
-                    curves_dir = Path(sys.executable).parent / "config" / "curves"
-                else:
-                    # 其他平台
-                    curves_dir = Path(sys.executable).parent / "config" / "curves"
-            else:
-                # 开发环境
-                curves_dir = Path("config/curves")
-                
-            if not curves_dir.exists():
+            curve_dir = Path("config/curves")
+            
+            # 如果目录不存在，直接返回
+            if not curve_dir.exists():
                 return
-                
-            for curve_path in curves_dir.glob("*.json"):
+            
+            # 加载已存在的曲线文件
+            for curve_path in curve_dir.glob("*.json"):
                 try:
                     with open(curve_path, 'r', encoding='utf-8') as f:
                         curve_data = json.load(f)

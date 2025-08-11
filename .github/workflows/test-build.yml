@@ -78,6 +78,9 @@ jobs:
 
     - name: Prepare build directories
       run: |
+        echo "Current directory: $(pwd)"
+        echo "Listing files at root:"
+        ls -laF
         # 创建输出目录
         mkdir -p dist-test/config dist-test/models
         

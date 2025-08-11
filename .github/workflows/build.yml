@@ -54,6 +54,9 @@ jobs:
 
     - name: Prepare build directories
       run: |
+        echo "Current directory: $(pwd)"
+        echo "Listing files at root:"
+        ls -laF
         mkdir -p dist dist/models
         # 递归复制整个 config 目录，避免通配符在空时失败
         cp -r config dist/
@@ -70,8 +73,9 @@ jobs:
           --include-data-dir=dist/config=config \
           --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
           --assume-yes-for-downloads \
-          --macos-create-app-bundle \
-          --macos-app-icon=none \
+          ${{ matrix.platform == 'windows' && '--windows-disable-console' || '' }} \
+          ${{ contains(matrix.os, 'macos') && '--macos-create-app-bundle' || '' }} \
+          ${{ contains(matrix.os, 'macos') && '--macos-app-icon=none' || '' }} \
           divere/__main__.py
         echo "✅ Nuitka build completed"
         echo "📁 Build output structure (first 200 files):"

@@ -54,8 +54,9 @@ jobs:
 
     - name: Prepare build directories
       run: |
-        mkdir -p dist/config dist/models
-        cp -r config/* dist/config/
+        mkdir -p dist dist/models
+        # 递归复制整个 config 目录，避免通配符在空时失败
+        cp -r config dist/
         cp divere/models/net_awb.onnx dist/models/
         ls -la dist/config/ | head -5
         ls -la dist/models/

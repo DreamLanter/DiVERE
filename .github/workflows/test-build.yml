@@ -2,8 +2,6 @@ name: Test Build (Quick)
 
 on:
   workflow_dispatch:  # 仅手动触发
-  push:
-    branches: [main]  # 主分支推送时也触发
 
 jobs:
   test-build:

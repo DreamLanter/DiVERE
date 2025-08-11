@@ -106,32 +106,33 @@ jobs:
           --assume-yes-for-downloads \
           ${{ matrix.platform == 'windows' && '--windows-disable-console' || '' }} \
           ${{ contains(matrix.os, 'macos') && '--macos-create-app-bundle' || '' }} \
+          ${{ contains(matrix.os, 'macos') && '--macos-app-icon=none' || '' }} \
           divere/__main__.py
         
         echo "✅ Nuitka build completed for ${{ matrix.os }}"
         
-        # 显示构建后的文件结构
-        echo "📁 Build output structure:"
-        find dist -type f | sort | head -200
+        # 显示构建后的文件结构（前200条）
+        echo "📁 Build output structure (first 200 files):"
+        find dist -type f -print | sed -n '1,200p' || true
         
         # 查找 .dist 目录与可执行文件
         app_dir=$(find dist -maxdepth 1 -type d -name "*.dist" | head -1)
         echo "Detected app_dir: ${app_dir:-<not found>}"
         if [ -z "$app_dir" ]; then
-          echo "❌ No .dist directory found." && exit 1
+          echo "⚠️  No .dist directory found (expected on macOS .app builds)." || true
         fi
         
         # 寻找可执行文件（跨平台）
         if [ "${{ matrix.platform }}" = "windows" ]; then
-          executable=$(find "$app_dir" -maxdepth 1 -type f -name "*.exe" | head -1)
+          executable=$(find dist -maxdepth 2 -type f -name "*.exe" | head -1)
         else
           if [ "${RUNNER_OS}" = "macOS" ]; then
-            executable=$(find "$app_dir" -maxdepth 1 -type f -perm +111 | head -1)
+            executable=$(find dist -maxdepth 2 -type f -perm +111 | head -1)
           else
-            executable=$(find "$app_dir" -maxdepth 1 -type f -perm /111 | head -1)
+            executable=$(find dist -maxdepth 2 -type f -perm /111 | head -1)
           fi
         fi
-        echo "Detected executable: ${executable:-<not found>}"
+        echo "Detected executable: ${executable:-<not found>}" || true
         if [ -z "$executable" ]; then
           echo "❌ No executable found inside $app_dir" && exit 1
         fi

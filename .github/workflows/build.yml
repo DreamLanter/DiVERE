@@ -56,7 +56,7 @@ jobs:
       run: |
         mkdir -p dist/config dist/models
         cp -r config/* dist/config/
-        cp divere/colorConstancyModels/net_awb.onnx dist/models/
+        cp divere/models/net_awb.onnx dist/models/
         ls -la dist/config/ | head -5
         ls -la dist/models/
 

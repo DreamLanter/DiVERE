@@ -70,7 +70,7 @@ jobs:
     - name: Test import
       run: |
         python -c "import divere; print('Import successful')"
-        python -c "from divere.colorConstancyModels.deep_wb_wrapper import DeepWBWrapper; print('DeepWB import successful')"
+        python -c "from divere.models.deep_wb_wrapper import DeepWBWrapper; print('DeepWB import successful')"
 
     - name: Install Nuitka
       run: |
@@ -87,7 +87,7 @@ jobs:
         
         # 复制ONNX模型文件
         echo "🤖 Copying ONNX model..."
-        cp divere/colorConstancyModels/net_awb.onnx dist-test/models/
+        cp divere/models/net_awb.onnx dist-test/models/
         
         # 验证文件已复制
         echo "🔍 Verifying files:"

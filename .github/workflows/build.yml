@@ -1,13 +1,10 @@
 name: Build DiVERE Application
 
 on:
-  push:  # 任何 push 都触发（便于快速调试）
+  push:
     branches: ['**']
-  workflow_dispatch:  # 手动触发
-  # 仍保留发布标签触发（可选）
-  # push:
-  #   tags: ['v*']
-
+  workflow_dispatch:
+  
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -30,18 +27,11 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
+        architecture: ${{ matrix.arch }}
 
     - name: Install system dependencies (macOS)
       run: |
         brew install openssl readline sqlite3 xz zlib
-
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
 
     - name: Install Python dependencies
       run: |
@@ -52,62 +42,78 @@ jobs:
           pip uninstall -y onnxruntime
           pip install onnxruntime-silicon
         fi
+        echo "--- Installed packages ---"
+        pip list
+        echo "--------------------------"
 
     - name: Install Nuitka
-      run: |
-        pip install nuitka
+      run: pip install nuitka
 
-    - name: Prepare build directories
+    - name: Prepare build directories and verify assets
       run: |
-        echo "Current directory: $(pwd)"
-        echo "Listing files at root:"
+        echo "Listing repo root:"
         ls -laF
-        mkdir -p dist dist/models
-        # 递归复制整个 divere/config 目录
+        echo "Listing divere/models:"
+        ls -laF divere/models
+        
+        mkdir -p dist
         cp -r divere/config dist/
-        cp divere/models/net_awb.onnx dist/models/
-        ls -la dist/config/ | head -5
-        ls -la dist/models/
+        cp -r divere/models dist/
+        
+        echo "Verifying copied assets:"
+        if [ ! -f "dist/config/app_settings.json" ]; then
+          echo "::error::app_settings.json not found in dist/config"
+          exit 1
+        fi
+        if [ ! -f "dist/models/net_awb.onnx" ]; then
+          echo "::error::net_awb.onnx not found in dist/models"
+          exit 1
+        fi
+        echo "Local sha256 of onnx model:"
+        shasum -a 256 divere/models/net_awb.onnx
 
-    - name: Build with Nuitka (Manual)
+    - name: Build with Nuitka
       run: |
         python -m nuitka \
           --standalone \
           --enable-plugin=pyside6 \
           --output-dir=dist \
           --include-data-dir=dist/config=config \
-          --include-data-file=dist/models/net_awb.onnx=models/net_awb.onnx \
-          --assume-yes-for-downloads \
-          ${{ matrix.platform == 'windows' && '--windows-disable-console' || '' }} \
-          ${{ contains(matrix.os, 'macos') && '--macos-create-app-bundle' || '' }} \
-          ${{ contains(matrix.os, 'macos') && '--macos-app-icon=none' || '' }} \
+          --include-data-dir=dist/models=models \
+          --macos-create-app-bundle \
+          --macos-app-icon=none \
           divere/__main__.py
         echo "✅ Nuitka build completed"
-        echo "📁 Build output structure (first 200 files):"
-        find dist -type f -print | sed -n '1,200p' || true
 
-    - name: Sync resources into bundle
+    - name: Sync resources and verify bundle contents
       run: |
         app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
-          echo "❌ No .app bundle found." && exit 1
+          echo "::error::No .app bundle found." && exit 1
         fi
+        
         macos_bin_dir="$app_bundle/Contents/MacOS"
         mkdir -p "$macos_bin_dir/config" "$macos_bin_dir/models"
         cp -r dist/config/* "$macos_bin_dir/config/"
-        cp -r dist/models/* "$macos_bin_dir/models/" || true
-        echo "📁 After sync, preview:"; find "$macos_bin_dir" -maxdepth 2 -type f | sed -n '1,100p'
+        cp -r dist/models/* "$macos_bin_dir/models/"
+        
+        echo "Listing all .dylib files in bundle:"
+        find "$app_bundle" -name "*.dylib"
+        
+        echo "Verifying key files in bundle:"
+        if [ ! -f "$macos_bin_dir/models/net_awb.onnx" ]; then
+          echo "::error::ONNX model missing from final .app bundle."
+          exit 1
+        fi
 
-    - name: Package (macOS)
+    - name: Package macOS App
       run: |
         app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
         cd dist
         tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_bundle")"
 
-    - name: Upload build artifacts
+    - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
-        path: |
-          dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-          dist/*.app/**
+        path: dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz

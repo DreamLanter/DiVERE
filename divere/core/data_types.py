@@ -12,8 +12,8 @@ class PreviewConfig:
     """预览和代理图像配置 - 统一管理所有预览相关参数"""
     
     # 预览图像尺寸设置
-    preview_max_size: int = 8000  # 预览管线最大尺寸
-    proxy_max_size: int = 8000    # 代理图像最大尺寸 
+    preview_max_size: int = 2000  # 预览管线最大尺寸
+    proxy_max_size: int = 2000    # 代理图像最大尺寸 
     
     # GPU加速阈值
     gpu_threshold: int = 1024 * 1024  # 1M像素以上使用GPU加速
@@ -137,8 +137,9 @@ class ColorGradingParams:
     low_precision_lut: bool = True  # 使用低精度LUT
     lut_size: int = 16  # LUT大小，默认16x16x16
     
-    # 注意：代理图像大小现在由PreviewConfig统一管理
-    # proxy_size参数已弃用，请使用PreviewConfig.proxy_max_size
+    # 向后兼容：旧UI仍读取此字段
+    # 新逻辑请使用 PreviewConfig.proxy_max_size
+    proxy_size: str = "2000x2000"
     
     def to_dict(self) -> Dict[str, Any]:
         """序列化为字典"""
@@ -152,6 +153,8 @@ class ColorGradingParams:
             "correction_matrix": self.correction_matrix.tolist() if self.correction_matrix is not None else None,
             "rgb_gains": list(self.rgb_gains),
             "density_curve_points": self.density_curve_points,
+            # 兼容旧配置
+            "proxy_size": self.proxy_size,
 
 
             "enable_density_inversion": self.enable_density_inversion,
@@ -188,6 +191,9 @@ class ColorGradingParams:
         params.rgb_gains = tuple(rgb_gains)
         
         params.density_curve_points = data.get("density_curve_points", [])
+
+        # 兼容旧配置
+        params.proxy_size = data.get("proxy_size", "2000x2000")
 
         params.enable_density_curve = data.get("enable_density_curve", False)
         
@@ -238,7 +244,7 @@ class ColorGradingParams:
         new_params.small_proxy = self.small_proxy
         new_params.low_precision_lut = self.low_precision_lut
         new_params.lut_size = self.lut_size
-        # proxy_size已移至PreviewConfig统一管理
+        new_params.proxy_size = self.proxy_size
         
         return new_params
 

@@ -270,8 +270,11 @@ class MainWindow(QMainWindow):
                 # 加载图像
                 self.current_image = self.image_manager.load_image(file_path)
                 
-                                # 生成代理
-                self.current_proxy = self.image_manager.generate_proxy(self.current_image)
+                # 生成代理（使用统一配置中的代理尺寸）
+                self.current_proxy = self.image_manager.generate_proxy(
+                    self.current_image,
+                    self.the_enlarger.preview_config.get_proxy_size_tuple()
+                )
                 
                 # 设置输入色彩空间
                 self.current_proxy = self.color_space_manager.set_image_color_space(
@@ -285,14 +288,9 @@ class MainWindow(QMainWindow):
                 )
                 print(f"转换到工作色彩空间: {self.current_proxy.color_space}")
                 
-                # 生成更小的代理图像用于实时预览
-                proxy_size_val = self.current_params.proxy_size
-                try:
-                    size = int(proxy_size_val.split('x')[0])
-                except:
-                    size = 1920 # 默认值
-                
-                self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, (size, size))
+                # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
+                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
+                self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
                 print(f"生成实时预览代理: {self.current_proxy.width}x{self.current_proxy.height}")
                 
                 # 触发预览
@@ -345,8 +343,11 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            # 重新生成代理
-            self.current_proxy = self.image_manager.generate_proxy(self.current_image)
+            # 重新生成代理（使用统一配置中的代理尺寸）
+            self.current_proxy = self.image_manager.generate_proxy(
+                self.current_image,
+                self.the_enlarger.preview_config.get_proxy_size_tuple()
+            )
             
             # 应用ICC配置文件
             if self.input_icc_profile:
@@ -362,15 +363,7 @@ class MainWindow(QMainWindow):
             
             # 重新生成小代理（如果需要）
             if self.current_params.small_proxy:
-                try:
-                    size_str = self.current_params.proxy_size
-                    if 'x' in size_str:
-                        size = int(size_str.split('x')[0])
-                    else:
-                        size = int(size_str)
-                    proxy_size = (size, size)
-                except:
-                    proxy_size = (256, 256)
+                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
             else:
                 proxy_size = (512, 512)
             
@@ -391,8 +384,11 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # 重新生成代理
-            self.current_proxy = self.image_manager.generate_proxy(self.current_image)
+            # 重新生成代理（使用统一配置中的代理尺寸）
+            self.current_proxy = self.image_manager.generate_proxy(
+                self.current_image,
+                self.the_enlarger.preview_config.get_proxy_size_tuple()
+            )
             
             # 设置新的色彩空间
             self.current_proxy = self.color_space_manager.set_image_color_space(
@@ -404,18 +400,9 @@ class MainWindow(QMainWindow):
                 self.current_proxy
             )
             
-            # 生成更小的代理图像用于实时预览
+            # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
             if self.current_params.small_proxy:
-                # 从proxy_size字符串解析大小
-                try:
-                    size_str = self.current_params.proxy_size
-                    if 'x' in size_str:
-                        size = int(size_str.split('x')[0])
-                    else:
-                        size = int(size_str)
-                    proxy_size = (size, size)
-                except:
-                    proxy_size = (256, 256)  # 默认值
+                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
             else:
                 proxy_size = (512, 512)
             

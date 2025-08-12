@@ -1,8 +1,6 @@
 name: Build DiVERE Application (Nuitka Backup)
 
 on:
-  push:
-    branches: ['**']
   workflow_dispatch:
   
 jobs:

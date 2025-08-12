@@ -1,0 +1,119 @@
+name: Build DiVERE Application (Nuitka Backup)
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+  
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            extension: ''
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        architecture: ${{ matrix.arch }}
+
+    - name: Install system dependencies (macOS)
+      run: |
+        brew install openssl readline sqlite3 xz zlib
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          echo "Installing onnxruntime for macOS ARM64..."
+          pip install onnxruntime
+        fi
+        echo "--- Installed packages ---"
+        pip list
+        echo "--------------------------"
+
+    - name: Install Nuitka
+      run: pip install nuitka
+
+    - name: Prepare build directories and verify assets
+      run: |
+        echo "Listing repo root:"
+        ls -laF
+        echo "Listing divere/models:"
+        ls -laF divere/models
+        
+        mkdir -p dist
+        cp -r divere/config dist/
+        cp -r divere/models dist/
+        
+        echo "Verifying copied assets:"
+        if [ ! -f "dist/config/app_settings.json" ]; then
+          echo "::error::app_settings.json not found in dist/config"
+          exit 1
+        fi
+        if [ ! -f "dist/models/net_awb.onnx" ]; then
+          echo "::error::net_awb.onnx not found in dist/models"
+          exit 1
+        fi
+        echo "Local sha256 of onnx model:"
+        shasum -a 256 divere/models/net_awb.onnx
+
+    - name: Build with Nuitka
+      run: |
+        python -m nuitka \
+          --standalone \
+          --macos-create-app-bundle \
+          --macos-app-name="DiVERE" \
+          --macos-app-icon=none \
+          --enable-plugin=pyside6 \
+          --enable-plugin=numpy \
+          --include-package-data=onnxruntime \
+          --include-data-dir=divere/config=config \
+          --include-data-dir=divere/models=models \
+          --output-dir=dist \
+          divere/__main__.py
+        echo "✅ Nuitka build completed"
+    
+    - name: Verify bundle contents (Optional but recommended)
+      run: |
+        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        if [ -z "$app_bundle" ]; then
+          echo "::error::No .app bundle found." && exit 1
+        fi
+        
+        echo "--- Listing key dylib files in bundle ---"
+        find "$app_bundle" -name "*onnxruntime*.dylib" | sed -n '1,50p' || true
+        
+        echo "--- Verifying data files in bundle ---"
+        if ! find "$app_bundle" -name "net_awb.onnx" | grep -q .; then
+          echo "::error::ONNX model missing from .app bundle."
+          exit 1
+        fi
+        echo "✅ Verification passed."
+
+    - name: Package macOS App
+      run: |
+        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        cd dist
+        tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_bundle")"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
+        path: dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+
+

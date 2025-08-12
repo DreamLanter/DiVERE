@@ -1,4 +1,4 @@
-name: Build DiVERE Application
+name: Build DiVERE Application (PyInstaller)
 
 on:
   push:
@@ -24,89 +24,105 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up Python 3.11
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        architecture: ${{ matrix.arch }}
 
     - name: Install system dependencies (macOS)
       run: |
-        brew install openssl readline sqlite3 xz zlib
+        brew install openssl readline sqlite3 xz zlib libomp
 
     - name: Install Python dependencies
       run: |
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip wheel setuptools
         pip install -r requirements.txt
+        # 明确确保 onnxruntime 安装（arm64 原生包）
         if [ "${{ matrix.arch }}" = "arm64" ]; then
-          echo "Installing onnxruntime for macOS ARM64..."
-          pip install onnxruntime
+          pip install --upgrade onnxruntime
         fi
         echo "--- Installed packages ---"
-        pip list
+        pip list | sed -n '1,200p'
         echo "--------------------------"
 
-    - name: Install Nuitka
-      run: pip install nuitka
-
-    - name: Prepare build directories and verify assets
+    - name: Check required imports
       run: |
-        echo "Listing repo root:"
-        ls -laF
-        echo "Listing divere/models:"
-        ls -laF divere/models
-        
-        mkdir -p dist
-        cp -r divere/config dist/
-        cp -r divere/models dist/
-        
-        echo "Verifying copied assets:"
-        if [ ! -f "dist/config/app_settings.json" ]; then
-          echo "::error::app_settings.json not found in dist/config"
-          exit 1
-        fi
-        if [ ! -f "dist/models/net_awb.onnx" ]; then
-          echo "::error::net_awb.onnx not found in dist/models"
-          exit 1
-        fi
-        echo "Local sha256 of onnx model:"
-        shasum -a 256 divere/models/net_awb.onnx
+        python - <<'PY'
+        import importlib, sys
+        required = [
+          'PySide6', 'numpy', 'cv2', 'PIL', 'scipy', 'imageio', 'colour', 'onnxruntime', 'sklearn'
+        ]
+        missing = []
+        for m in required:
+            try:
+                importlib.import_module(m)
+            except Exception as e:
+                missing.append((m, repr(e)))
+        if missing:
+            print('Missing modules:')
+            for name, err in missing:
+                print(f'- {name}: {err}')
+            sys.exit(1)
+        print('All required imports are available.')
+        PY
 
-    - name: Build with Nuitka
+    - name: Install PyInstaller
       run: |
-        python -m nuitka \
-          --standalone \
-          --macos-create-app-bundle \
-          --macos-app-name="DiVERE" \
-          --macos-app-icon=none \
-          --enable-plugin=pyside6 \
-          --enable-plugin=numpy \
-          --include-package-data=onnxruntime \
-          --include-data-dir=divere/config=config \
-          --include-data-dir=divere/models=models \
-          --output-dir=dist \
+        pip install pyinstaller pyinstaller-hooks-contrib
+        python -c "import PyInstaller; print('PyInstaller', PyInstaller.__version__)"
+
+    - name: Build with PyInstaller
+      run: |
+        rm -rf build dist *.spec || true
+        python -m PyInstaller \
+          -y --clean --noconfirm \
+          --windowed \
+          --name "DiVERE" \
+          --add-data "divere/config:config" \
+          --add-data "divere/models:models" \
+          --collect-all onnxruntime \
+          --collect-submodules sklearn \
+          --hidden-import "sklearn.linear_model" \
+          --hidden-import "scipy.interpolate" \
+          --hidden-import "scipy.optimize" \
+          --hidden-import "scipy.ndimage" \
           divere/__main__.py
-        echo "✅ Nuitka build completed"
-    
-    - name: Verify bundle contents (Optional but recommended)
+        echo "✅ PyInstaller build completed"
+
+    - name: Verify bundle contents
       run: |
-        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        app_bundle=$(find dist -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
           echo "::error::No .app bundle found." && exit 1
         fi
-        
-        echo "--- Listing key dylib files in bundle ---"
-        find "$app_bundle" -name "*onnxruntime*.dylib" | sed -n '1,50p' || true
-        
+        echo "App bundle: $app_bundle"
+
+        echo "--- Listing key dylib files in bundle (onnxruntime) ---"
+        find "$app_bundle" -name "*onnxruntime*.dylib" | sed -n '1,80p' || true
+
         echo "--- Verifying data files in bundle ---"
-        if ! find "$app_bundle" -name "net_awb.onnx" | grep -q .; then
-          echo "::error::ONNX model missing from .app bundle."
-          exit 1
+        required_files=(
+          "Contents/MacOS/config/app_settings.json"
+          "Contents/MacOS/config/colorspace/ACEScg.json"
+          "Contents/MacOS/config/colorspace/Film_KodakRGB_Linear.icc"
+          "Contents/MacOS/config/curves/Kodak_Endura_Paper.json"
+          "Contents/MacOS/config/matrices/Identity.json"
+          "Contents/MacOS/models/net_awb.onnx"
+        )
+        missing=0
+        for f in "${required_files[@]}"; do
+          if [ ! -f "$app_bundle/$f" ]; then
+            echo "::error::Missing: $f"
+            missing=1
+          fi
+        done
+        if [ $missing -ne 0 ]; then
+          echo "Required data files missing in app bundle" && exit 1
         fi
-        echo "✅ Verification passed."
+        echo "✅ Data verification passed."
 
     - name: Package macOS App
       run: |
-        app_bundle=$(find dist -maxdepth 1 -type d -name "*.app" | head -1)
+        app_bundle=$(find dist -type d -name "*.app" | head -1)
         cd dist
         tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_bundle")"
 

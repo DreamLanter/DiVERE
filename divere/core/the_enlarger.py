@@ -114,7 +114,9 @@ class TheEnlarger:
     # =======================
 
     def apply_full_pipeline(self, image: ImageData, params: ColorGradingParams, 
-                           include_curve: bool = True) -> ImageData:
+                           include_curve: bool = True,
+                           for_export: bool = False,
+                           chunked: bool | None = None) -> ImageData:
         """
         应用完整处理管线（保持向后兼容的接口）
         
@@ -130,8 +132,14 @@ class TheEnlarger:
             return None
             
         # 使用新的全精度管线处理器
+        # 导出时强制全精度：禁用LUT优化 + 启用分块
+        use_optimization = not for_export
+        chunked_arg = True if for_export else chunked
         return self.pipeline_processor.apply_full_precision_pipeline(
-            image, params, include_curve=include_curve, use_optimization=True
+            image, params,
+            include_curve=include_curve,
+            use_optimization=use_optimization,
+            chunked=chunked_arg
         )
 
     def apply_preview_pipeline(self, image: ImageData, params: ColorGradingParams,

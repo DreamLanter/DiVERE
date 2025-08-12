@@ -495,10 +495,12 @@ class MainWindow(QMainWindow):
                 print(f"  转换后工作色彩空间: {working_image.color_space}")
                 
                 # 应用调色参数到工作空间的图像（根据设置决定是否包含曲线）
+                # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
                 result_image = self.the_enlarger.apply_full_pipeline(
-                    working_image, 
+                    working_image,
                     self.current_params,
-                    include_curve=settings["include_curve"]
+                    include_curve=settings["include_curve"],
+                    for_export=True
                 )
                 
                 # 转换到输出色彩空间

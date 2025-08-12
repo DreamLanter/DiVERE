@@ -5,6 +5,7 @@
 
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import cv2
 
@@ -28,6 +29,12 @@ class FilmPipelineProcessor:
         # 性能监控
         self._profiling_enabled = False
         self._last_profile: Dict[str, float] = {}
+
+        # 全精度管线分块参数（自动阈值与默认tile设置）
+        # 当图像像素数超过该阈值时，自动启用分块处理以降低峰值内存并提高吞吐
+        self.full_pipeline_chunk_threshold: int = 4096 * 4096  # 约16MP
+        self.full_pipeline_tile_size: Tuple[int, int] = (2048, 2048)
+        self.full_pipeline_max_workers: int = self.math_ops.num_threads
     
     def set_profiling_enabled(self, enabled: bool) -> None:
         """启用/关闭性能分析"""
@@ -272,7 +279,10 @@ class FilmPipelineProcessor:
                                      input_colorspace_transform: Optional[np.ndarray] = None,
                                      output_colorspace_transform: Optional[np.ndarray] = None,
                                      include_curve: bool = True,
-                                     use_optimization: bool = True) -> ImageData:
+                                     use_optimization: bool = True,
+                                     chunked: Optional[bool] = None,
+                                     tile_size: Optional[Tuple[int, int]] = None,
+                                     max_workers: Optional[int] = None) -> ImageData:
         """
         全精度版本管线：完整数学过程套在原图上
         
@@ -293,38 +303,117 @@ class FilmPipelineProcessor:
         profile = {}
         t_start = time.time()
         
-        # 1. 输入色彩管理
-        t0 = time.time()
-        working_array = image.array.copy()
-        if input_colorspace_transform is not None:
-            working_array = self._apply_colorspace_transform(working_array, input_colorspace_transform)
-        profile['input_colorspace_ms'] = (time.time() - t0) * 1000.0
-        
-        # 2. 应用完整数学管线
-        t1 = time.time()
-        math_profile = {}
-        
-        # 注入矩阵获取函数到数学操作中（临时解决方案）
-        original_get_matrix = self.math_ops._get_correction_matrix
-        self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
-        
-        try:
-            working_array = self.math_ops.apply_full_math_pipeline(
-                working_array, params, include_curve, 
-                params.enable_density_inversion, use_optimization, math_profile
-            )
-        finally:
-            # 恢复原函数
-            self.math_ops._get_correction_matrix = original_get_matrix
+        # 是否启用分块（若未指定，则按阈值自动决定）
+        if chunked is None:
+            h, w = image.height, image.width
+            chunked = (h * w) > self.full_pipeline_chunk_threshold
+
+        tile_h, tile_w = tile_size or self.full_pipeline_tile_size
+        workers = max_workers or self.full_pipeline_max_workers
+
+        if not chunked:
+            # 1. 输入色彩管理
+            t0 = time.time()
+            working_array = image.array.copy()
+            if input_colorspace_transform is not None:
+                working_array = self._apply_colorspace_transform(working_array, input_colorspace_transform)
+            profile['input_colorspace_ms'] = (time.time() - t0) * 1000.0
             
-        profile['math_pipeline_ms'] = (time.time() - t1) * 1000.0
-        profile.update({f"math/{k}": v for k, v in math_profile.items()})
-        
-        # 3. 输出色彩转换
-        t2 = time.time()
-        if output_colorspace_transform is not None:
-            working_array = self._apply_colorspace_transform(working_array, output_colorspace_transform)
-        profile['output_colorspace_ms'] = (time.time() - t2) * 1000.0
+            # 2. 应用完整数学管线
+            t1 = time.time()
+            math_profile = {}
+            
+            # 注入矩阵获取函数到数学操作中（临时解决方案）
+            original_get_matrix = self.math_ops._get_correction_matrix
+            self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+            
+            try:
+                working_array = self.math_ops.apply_full_math_pipeline(
+                    working_array, params, include_curve, 
+                    params.enable_density_inversion, use_optimization, math_profile
+                )
+            finally:
+                # 恢复原函数
+                self.math_ops._get_correction_matrix = original_get_matrix
+                
+            profile['math_pipeline_ms'] = (time.time() - t1) * 1000.0
+            profile.update({f"math/{k}": v for k, v in math_profile.items()})
+            
+            # 3. 输出色彩转换
+            t2 = time.time()
+            if output_colorspace_transform is not None:
+                working_array = self._apply_colorspace_transform(working_array, output_colorspace_transform)
+            profile['output_colorspace_ms'] = (time.time() - t2) * 1000.0
+        else:
+            # 分块并行路径
+            h, w = image.height, image.width
+            working_array = np.empty_like(image.array, dtype=image.array.dtype)
+
+            # 预先拷贝（以便在块内做原地/独立处理）
+            src_array = image.array
+
+            # 生成所有块坐标
+            tiles: Tuple[Tuple[int,int,int,int], ...] = tuple(
+                (y, min(y + tile_h, h), x, min(x + tile_w, w))
+                for y in range(0, h, tile_h)
+                for x in range(0, w, tile_w)
+            )
+
+            # 为累积Profile做粗略计时
+            t_input_total = 0.0
+            t_math_total = 0.0
+            t_output_total = 0.0
+
+            def process_tile(tile_coords: Tuple[int, int, int, int]) -> Tuple[Tuple[int,int,int,int], np.ndarray, Dict[str, float]]:
+                sh, eh, sw, ew = tile_coords
+                block = src_array[sh:eh, sw:ew, :].copy()
+
+                prof_local: Dict[str, float] = {}
+
+                # 输入色彩
+                t0_local = time.time()
+                if input_colorspace_transform is not None:
+                    block = self._apply_colorspace_transform(block, input_colorspace_transform)
+                prof_local['input_ms'] = (time.time() - t0_local) * 1000.0
+
+                # 完整数学管线（块级）
+                t1_local = time.time()
+                math_profile_local: Dict[str, float] = {}
+
+                original_get_matrix = self.math_ops._get_correction_matrix
+                self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+                try:
+                    block = self.math_ops.apply_full_math_pipeline(
+                        block, params, include_curve,
+                        params.enable_density_inversion, use_optimization, math_profile_local
+                    )
+                finally:
+                    self.math_ops._get_correction_matrix = original_get_matrix
+
+                prof_local['math_ms'] = (time.time() - t1_local) * 1000.0
+
+                # 输出色彩
+                t2_local = time.time()
+                if output_colorspace_transform is not None:
+                    block = self._apply_colorspace_transform(block, output_colorspace_transform)
+                prof_local['output_ms'] = (time.time() - t2_local) * 1000.0
+
+                return (sh, eh, sw, ew), block, prof_local
+
+            # 并行执行块
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [ex.submit(process_tile, tile) for tile in tiles]
+                for fut in as_completed(futures):
+                    (sh, eh, sw, ew), block_out, prof_local = fut.result()
+                    working_array[sh:eh, sw:ew, :] = block_out
+                    t_input_total += prof_local.get('input_ms', 0.0)
+                    t_math_total += prof_local.get('math_ms', 0.0)
+                    t_output_total += prof_local.get('output_ms', 0.0)
+
+            # 汇总Profile（仅粗略参考）
+            profile['input_colorspace_ms'] = t_input_total
+            profile['math_pipeline_ms'] = t_math_total
+            profile['output_colorspace_ms'] = t_output_total
         
         # 记录总时间和性能分析
         profile['total_full_precision_ms'] = (time.time() - t_start) * 1000.0

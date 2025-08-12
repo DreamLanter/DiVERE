@@ -18,6 +18,10 @@ jobs:
             platform: macos
             arch: arm64
             extension: ''
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            extension: .exe
 
     steps:
     - name: Checkout code
@@ -29,6 +33,7 @@ jobs:
         python-version: '3.11'
 
     - name: Install system dependencies (macOS)
+      if: matrix.platform == 'macos'
       run: |
         brew install openssl readline sqlite3 xz zlib libomp
 
@@ -39,6 +44,19 @@ jobs:
         # 明确确保 onnxruntime 安装（arm64 原生包）
         if [ "${{ matrix.arch }}" = "arm64" ]; then
           pip install --upgrade onnxruntime
+        fi
+        # 可选GPU依赖
+        if [ "${{ matrix.platform }}" = "macos" ]; then
+          pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders || true
+        fi
+        pip install pyopencl || true
+        # Windows 上可选尝试安装 CuPy（CUDA），在 GitHub 托管 runner 上通常无 NVIDIA 驱动，仅供自托管机使用
+        if [ "${{ matrix.platform }}" = "windows" ]; then
+          echo "Attempting to install CuPy (CUDA) wheels..."
+          pip install cupy-cuda12x || \
+          pip install cupy-cuda11x || \
+          pip install cupy-cuda102 || \
+          echo "CuPy CUDA wheels not installed (no GPU/driver on runner)."
         fi
         echo "--- Installed packages ---"
         pip list | sed -n '1,200p'
@@ -73,13 +91,17 @@ jobs:
     - name: Build with PyInstaller
       run: |
         rm -rf build dist *.spec || true
+        # PyInstaller --add-data 在 Windows 使用分号 ;，在 macOS 使用冒号 :
+        DATA_SEP=':'
+        if [ "${{ matrix.platform }}" = "windows" ]; then DATA_SEP=';'; fi
         python -m PyInstaller \
           -y --clean --noconfirm \
           --windowed \
           --name "DiVERE" \
-          --add-data "divere/config:config" \
-          --add-data "divere/models:models" \
+          --add-data "divere/config${DATA_SEP}config" \
+          --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
+          --collect-all cupy \
           --collect-submodules sklearn \
           --hidden-import "sklearn.linear_model" \
           --hidden-import "scipy.interpolate" \
@@ -89,6 +111,7 @@ jobs:
         echo "✅ PyInstaller build completed"
 
     - name: Relocate resources into Contents/MacOS (for runtime compatibility)
+      if: matrix.platform == 'macos'
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
@@ -108,6 +131,7 @@ jobs:
         echo "Relocated resources to Contents/MacOS"
 
     - name: Ad-hoc sign app bundle (deep)
+      if: matrix.platform == 'macos'
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
@@ -118,7 +142,8 @@ jobs:
         echo "Verify codesign (may show 'rejected' due to no notarization)"
         codesign -dv "$app_bundle" 2>&1 | sed -n '1,200p'
 
-    - name: Verify bundle contents
+    - name: Verify bundle contents (macOS)
+      if: matrix.platform == 'macos'
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         if [ -z "$app_bundle" ]; then
@@ -151,10 +176,21 @@ jobs:
         echo "✅ Data verification passed."
 
     - name: Package macOS App (zip)
+      if: matrix.platform == 'macos'
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         cd dist
         ditto -c -k --sequesterRsrc --keepParent "$(basename "$app_bundle")" "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+
+    - name: Package Windows App (zip)
+      if: matrix.platform == 'windows'
+      run: |
+        set -e
+        if [ ! -d "dist/DiVERE" ]; then
+          echo "::error::DiVERE folder not found under dist" && ls -la dist && exit 1
+        fi
+        cd dist
+        zip -r "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip" "DiVERE"
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

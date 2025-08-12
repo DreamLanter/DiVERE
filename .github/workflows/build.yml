@@ -88,6 +88,25 @@ jobs:
           divere/__main__.py
         echo "✅ PyInstaller build completed"
 
+    - name: Relocate resources into Contents/MacOS (for runtime compatibility)
+      run: |
+        app_bundle=$(find dist -type d -name "*.app" | head -1)
+        if [ -z "$app_bundle" ]; then
+          echo "::error::No .app bundle found after build." && exit 1
+        fi
+        resources_dir="$app_bundle/Contents/Resources"
+        macos_dir="$app_bundle/Contents/MacOS"
+        mkdir -p "$macos_dir"
+        if [ -d "$resources_dir/config" ]; then
+          rm -rf "$macos_dir/config"
+          cp -a "$resources_dir/config" "$macos_dir/config"
+        fi
+        if [ -d "$resources_dir/models" ]; then
+          rm -rf "$macos_dir/models"
+          cp -a "$resources_dir/models" "$macos_dir/models"
+        fi
+        echo "Relocated resources to Contents/MacOS"
+
     - name: Verify bundle contents
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)

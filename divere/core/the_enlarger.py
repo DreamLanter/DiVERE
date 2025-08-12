@@ -13,7 +13,7 @@ from pathlib import Path
 import time
 import traceback
 
-from .data_types import ImageData, ColorGradingParams, LUT3D
+from .data_types import ImageData, ColorGradingParams, LUT3D, PreviewConfig
 from .math_ops import FilmMathOps
 from .pipeline_processor import FilmPipelineProcessor
 
@@ -30,14 +30,22 @@ except ImportError as e:
 class TheEnlarger:
     """胶片放大机引擎，负责所有图像处理操作 - 重构版本"""
 
-    def __init__(self):
+    def __init__(self, preview_config: Optional[PreviewConfig] = None):
         # 校正矩阵管理
         self._correction_matrices = {}
         self._load_default_matrices()
         
+        # 预览配置（统一管理）
+        self.preview_config = preview_config or PreviewConfig()
+        
         # 核心处理组件
-        self.math_ops = FilmMathOps()
-        self.pipeline_processor = FilmPipelineProcessor(self.math_ops)
+        self.math_ops = FilmMathOps(preview_config=self.preview_config)
+        self.pipeline_processor = FilmPipelineProcessor(
+            self.math_ops, self.preview_config
+        )
+        
+        # GPU加速器（共享math_ops的实例）
+        self.gpu_accelerator = self.math_ops.gpu_accelerator
         
         # 设置矩阵加载器
         self.pipeline_processor.set_matrix_loader(self._load_correction_matrix)

@@ -8,19 +8,22 @@ from typing import Optional, Dict, Any, Tuple
 import time
 import cv2
 
-from .data_types import ImageData, ColorGradingParams
+from .data_types import ImageData, ColorGradingParams, PreviewConfig
 from .math_ops import FilmMathOps
 
 
 class FilmPipelineProcessor:
     """胶片处理管线处理器"""
     
-    def __init__(self, math_ops: Optional[FilmMathOps] = None):
+    def __init__(self, math_ops: Optional[FilmMathOps] = None, 
+                 preview_config: Optional[PreviewConfig] = None):
         self.math_ops = math_ops or FilmMathOps()
         
-        # 预览参数（优化版）
-        self.preview_max_size = 2048  # 预览最大尺寸，降低以提高速度
-        self.preview_quality = 'linear'  # 降采样质量：'linear', 'cubic', 'nearest'
+        # 预览配置（统一管理）
+        self.preview_config = preview_config or PreviewConfig()
+        
+        # GPU加速器（共享math_ops的实例）
+        self.gpu_accelerator = self.math_ops.gpu_accelerator
         
         # 性能监控
         self._profiling_enabled = False
@@ -29,6 +32,15 @@ class FilmPipelineProcessor:
     def set_profiling_enabled(self, enabled: bool) -> None:
         """启用/关闭性能分析"""
         self._profiling_enabled = enabled
+    
+    def _get_cv2_interpolation(self) -> int:
+        """根据预览质量设置获取OpenCV插值方法"""
+        quality_map = {
+            'nearest': cv2.INTER_NEAREST,
+            'linear': cv2.INTER_LINEAR,
+            'cubic': cv2.INTER_CUBIC
+        }
+        return quality_map.get(self.preview_config.preview_quality, cv2.INTER_LINEAR)
     
     def get_last_profile(self) -> Dict[str, float]:
         """获取最后一次处理的性能分析"""
@@ -102,11 +114,11 @@ class FilmPipelineProcessor:
         h, w = image_array.shape[:2]
         max_dim = max(h, w)
         
-        if max_dim <= self.preview_max_size:
+        if max_dim <= self.preview_config.preview_max_size:
             return image_array, 1.0
             
         # 计算缩放因子
-        scale_factor = self.preview_max_size / max_dim
+        scale_factor = self.preview_config.preview_max_size / max_dim
         new_h = int(h * scale_factor)
         new_w = int(w * scale_factor)
         

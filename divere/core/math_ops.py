@@ -10,18 +10,30 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from collections import OrderedDict
 
-from .data_types import ImageData, ColorGradingParams
+from .data_types import ImageData, ColorGradingParams, PreviewConfig
+from .gpu_accelerator import get_gpu_accelerator
+
+# 注意：之前实验的SIMD/Numba/NumExpr优化已移除
+# 实测发现这些技术在当前场景下反而降低性能
+# 保持简洁的NumPy + 多线程并行方案，现在加上GPU加速
 
 
 class FilmMathOps:
     """胶片数学操作核心引擎 - 多线程并行优化版"""
     
-    def __init__(self, max_cache_size: int = 64):
+    def __init__(self, max_cache_size: int = 64, 
+                 preview_config: Optional[PreviewConfig] = None):
         # LUT缓存
         self._lut1d_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
         self._curve_lut_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
         self._max_cache_size: int = max_cache_size
         self._LOG65536: np.float32 = np.float32(np.log10(65536.0))
+        
+        # 预览配置（统一管理）
+        self.preview_config = preview_config or PreviewConfig()
+        
+        # GPU加速器
+        self.gpu_accelerator = get_gpu_accelerator()
         
         # 多线程并行参数
         self.num_threads = self._get_optimal_threads()  # 自动检测最优线程数
@@ -32,11 +44,12 @@ class FilmMathOps:
         self.curve_quality = 'fast'  # 'fast' 或 'high_quality'
         
         # 曲线优化设置
-        self.enable_curve_simd = True  # 启用SIMD向量化优化
         self.curve_chunk_size = 64 * 1024  # 分块处理大小（64K像素）
         
         # 数据类型优化
         self.use_float32_everywhere = True  # 强制使用float32减少内存带宽
+        
+        # 注意：移除了SIMD相关配置（实验证明效果不佳）
         
         # 线程池复用（避免频繁创建销毁）
         self._thread_pool: Optional[ThreadPoolExecutor] = None
@@ -66,6 +79,8 @@ class FilmMathOps:
         return (use_parallel and 
                 array_size > self.parallel_threshold and 
                 self.num_threads > 1)
+    
+    # 注意：移除了SIMD策略相关方法（实验证明效果不佳）
         
     def clear_caches(self) -> None:
         """清空内部缓存"""
@@ -90,9 +105,9 @@ class FilmMathOps:
     
     def density_inversion(self, image_array: np.ndarray, gamma: float, dmax: float, 
                          pivot: float = 0.9, use_optimization: bool = True,
-                         use_parallel: bool = True) -> np.ndarray:
+                         use_parallel: bool = True, use_gpu: bool = True) -> np.ndarray:
         """
-        密度反相操作（支持多线程并行）
+        密度反相操作（支持GPU加速、多线程并行）
         
         Args:
             image_array: 输入图像数组 [H, W, 3]，值域 [0, 1]
@@ -101,6 +116,7 @@ class FilmMathOps:
             pivot: 转轴值，默认0.9（三档曝光）
             use_optimization: 是否使用优化版本（LUT查表）
             use_parallel: 是否使用并行处理
+            use_gpu: 是否尝试使用GPU加速
             
         Returns:
             反相后的图像数组
@@ -108,9 +124,21 @@ class FilmMathOps:
         if image_array is None or image_array.size == 0:
             return image_array
         
-        # 判断是否使用并行处理
+        # 优先尝试GPU加速（对大图像）
+        if (use_gpu and 
+            self.gpu_accelerator and 
+            self.preview_config.should_use_gpu(image_array.size)):
+            try:
+                return self.gpu_accelerator.density_inversion_accelerated(
+                    image_array, gamma, dmax, pivot
+                )
+            except Exception as e:
+                # GPU失败，回退到CPU
+                print(f"⚠️  GPU加速失败，回退到CPU: {e}")
+        
+        # CPU处理路径
         should_parallel = self._should_use_parallel(image_array.size, use_parallel)
-            
+        
         if use_optimization:
             if should_parallel:
                 return self._density_inversion_lut_parallel(image_array, gamma, dmax, pivot)
@@ -134,7 +162,7 @@ class FilmMathOps:
         # 应用gamma和dmax调整
         adjusted_density = pivot + (original_density - pivot) * gamma - dmax
         
-        # 转回线性空间
+        # 转回线性空间（与LUT版本保持一致）
         result = np.power(10.0, adjusted_density)
         
         return result.astype(image_array.dtype)
@@ -216,11 +244,11 @@ class FilmMathOps:
             # 提取块
             block = image_array[start_h:end_h, start_w:end_w, :]
             
-            # 直接计算密度反相
+            # 直接计算密度反相（修正公式与LUT版本一致）
             safe_block = np.maximum(block, 1e-10)
             original_density = -np.log10(safe_block)
             adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-            block_result = np.power(10.0, -adjusted_density)
+            block_result = np.power(10.0, adjusted_density)  # 修正：与LUT版本一致
             
             return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))
         
@@ -1125,3 +1153,4 @@ class FilmMathOps:
         if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
             return np.array(params.correction_matrix)
         return None
+

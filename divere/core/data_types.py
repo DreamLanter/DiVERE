@@ -7,6 +7,37 @@ from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 
 
+@dataclass 
+class PreviewConfig:
+    """预览和代理图像配置 - 统一管理所有预览相关参数"""
+    
+    # 预览图像尺寸设置
+    preview_max_size: int = 8000  # 预览管线最大尺寸
+    proxy_max_size: int = 8000    # 代理图像最大尺寸 
+    
+    # GPU加速阈值
+    gpu_threshold: int = 1024 * 1024  # 1M像素以上使用GPU加速
+    
+    # 预览质量设置
+    preview_quality: str = 'linear'  # 'linear', 'cubic', 'nearest'
+    
+    # LUT预览设置
+    preview_lut_size: int = 32       # 预览LUT尺寸（32x32x32）
+    full_lut_size: int = 64          # 全精度LUT尺寸（64x64x64）
+    
+    # 缓存设置
+    max_preview_cache: int = 10      # 最大预览缓存数量
+    max_lut_cache: int = 20          # 最大LUT缓存数量
+    
+    def get_proxy_size_tuple(self) -> Tuple[int, int]:
+        """获取代理图像尺寸元组"""
+        return (self.proxy_max_size, self.proxy_max_size)
+    
+    def should_use_gpu(self, image_size: int) -> bool:
+        """判断是否应该使用GPU加速"""
+        return image_size >= self.gpu_threshold
+
+
 @dataclass
 class ImageData:
     """图像数据封装"""
@@ -105,7 +136,9 @@ class ColorGradingParams:
     small_proxy: bool = True
     low_precision_lut: bool = True  # 使用低精度LUT
     lut_size: int = 16  # LUT大小，默认16x16x16
-    proxy_size: str = "2000x2000"  # 代理图像大小
+    
+    # 注意：代理图像大小现在由PreviewConfig统一管理
+    # proxy_size参数已弃用，请使用PreviewConfig.proxy_max_size
     
     def to_dict(self) -> Dict[str, Any]:
         """序列化为字典"""
@@ -205,7 +238,7 @@ class ColorGradingParams:
         new_params.small_proxy = self.small_proxy
         new_params.low_precision_lut = self.low_precision_lut
         new_params.lut_size = self.lut_size
-        new_params.proxy_size = self.proxy_size
+        # proxy_size已移至PreviewConfig统一管理
         
         return new_params
 

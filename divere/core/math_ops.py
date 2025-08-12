@@ -14,7 +14,7 @@ from .data_types import ImageData, ColorGradingParams
 
 
 class FilmMathOps:
-    """胶片数学操作核心引擎"""
+    """胶片数学操作核心引擎 - 多线程并行优化版"""
     
     def __init__(self, max_cache_size: int = 64):
         # LUT缓存
@@ -23,9 +23,10 @@ class FilmMathOps:
         self._max_cache_size: int = max_cache_size
         self._LOG65536: np.float32 = np.float32(np.log10(65536.0))
         
-        # 分块处理参数
-        self.block_size = 512  # 分块大小，可根据内存调整
-        self.num_threads = 4   # 并行线程数
+        # 多线程并行参数
+        self.num_threads = self._get_optimal_threads()  # 自动检测最优线程数
+        self.block_size = self._get_optimal_block_size()  # 自动调整分块大小
+        self.parallel_threshold = 512 * 512  # 超过此像素数才启用并行
         
         # 曲线质量设置
         self.curve_quality = 'fast'  # 'fast' 或 'high_quality'
@@ -37,12 +38,44 @@ class FilmMathOps:
         # 数据类型优化
         self.use_float32_everywhere = True  # 强制使用float32减少内存带宽
         
+        # 线程池复用（避免频繁创建销毁）
+        self._thread_pool: Optional[ThreadPoolExecutor] = None
+        
 
+    def _get_optimal_threads(self) -> int:
+        """自动检测最优线程数"""
+        import os
+        cpu_count = os.cpu_count() or 4
+        # 使用CPU核心数，但不超过8（避免过度竞争）
+        return min(cpu_count, 8)
+    
+    def _get_optimal_block_size(self) -> int:
+        """自动调整分块大小"""
+        # 根据线程数调整块大小，确保有足够的并行任务
+        base_size = 256
+        return max(base_size, 1024 // self.num_threads)
+    
+    def _get_thread_pool(self) -> ThreadPoolExecutor:
+        """获取线程池（懒加载+复用）"""
+        if self._thread_pool is None:
+            self._thread_pool = ThreadPoolExecutor(max_workers=self.num_threads)
+        return self._thread_pool
+    
+    def _should_use_parallel(self, array_size: int, use_parallel: bool = True) -> bool:
+        """判断是否应该使用并行处理"""
+        return (use_parallel and 
+                array_size > self.parallel_threshold and 
+                self.num_threads > 1)
         
     def clear_caches(self) -> None:
         """清空内部缓存"""
         self._lut1d_cache.clear()
         self._curve_lut_cache.clear()
+    
+    def __del__(self):
+        """析构函数，确保线程池被正确关闭"""
+        if self._thread_pool is not None:
+            self._thread_pool.shutdown(wait=False)
     
     def _cache_put(self, cache: "OrderedDict[Any, np.ndarray]", key: Any, value: np.ndarray) -> None:
         """LRU缓存操作"""
@@ -56,9 +89,10 @@ class FilmMathOps:
     # =======================
     
     def density_inversion(self, image_array: np.ndarray, gamma: float, dmax: float, 
-                         pivot: float = 0.9, use_optimization: bool = True) -> np.ndarray:
+                         pivot: float = 0.9, use_optimization: bool = True,
+                         use_parallel: bool = True) -> np.ndarray:
         """
-        密度反相操作
+        密度反相操作（支持多线程并行）
         
         Args:
             image_array: 输入图像数组 [H, W, 3]，值域 [0, 1]
@@ -66,17 +100,27 @@ class FilmMathOps:
             dmax: dmax值
             pivot: 转轴值，默认0.9（三档曝光）
             use_optimization: 是否使用优化版本（LUT查表）
+            use_parallel: 是否使用并行处理
             
         Returns:
             反相后的图像数组
         """
         if image_array is None or image_array.size == 0:
             return image_array
+        
+        # 判断是否使用并行处理
+        should_parallel = self._should_use_parallel(image_array.size, use_parallel)
             
         if use_optimization:
-            return self._density_inversion_lut_optimized(image_array, gamma, dmax, pivot)
+            if should_parallel:
+                return self._density_inversion_lut_parallel(image_array, gamma, dmax, pivot)
+            else:
+                return self._density_inversion_lut_optimized(image_array, gamma, dmax, pivot)
         else:
-            return self._density_inversion_direct(image_array, gamma, dmax, pivot)
+            if should_parallel:
+                return self._density_inversion_direct_parallel(image_array, gamma, dmax, pivot)
+            else:
+                return self._density_inversion_direct(image_array, gamma, dmax, pivot)
     
     def _density_inversion_direct(self, image_array: np.ndarray, gamma: float, 
                                  dmax: float, pivot: float) -> np.ndarray:
@@ -109,6 +153,88 @@ class FilmMathOps:
         result_array = np.take(lut, indices)
         
         return result_array.astype(image_array.dtype)
+    
+    def _density_inversion_lut_parallel(self, image_array: np.ndarray, gamma: float, 
+                                       dmax: float, pivot: float) -> np.ndarray:
+        """并行版本：分块处理+LUT查表"""
+        lut_size = 32768
+        lut = self._get_density_inversion_lut(gamma, dmax, pivot, lut_size)
+        
+        h, w, c = image_array.shape
+        result = np.zeros_like(image_array)
+        
+        # 计算分块数量
+        blocks_h = (h + self.block_size - 1) // self.block_size
+        blocks_w = (w + self.block_size - 1) // self.block_size
+        
+        def process_block(args):
+            i, j = args
+            start_h = i * self.block_size
+            end_h = min((i + 1) * self.block_size, h)
+            start_w = j * self.block_size
+            end_w = min((j + 1) * self.block_size, w)
+            
+            # 提取块
+            block = image_array[start_h:end_h, start_w:end_w, :]
+            
+            # LUT查表处理
+            img_clipped = np.clip(block, 0.0, 1.0)
+            indices = np.round(img_clipped * (lut_size - 1)).astype(np.uint16)
+            block_result = np.take(lut, indices)
+            
+            return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))
+        
+        # 并行处理所有块
+        block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
+        
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
+        
+        # 重组结果
+        for start_h, end_h, start_w, end_w, block_result in results:
+            result[start_h:end_h, start_w:end_w, :] = block_result
+        
+        return result
+    
+    def _density_inversion_direct_parallel(self, image_array: np.ndarray, gamma: float, 
+                                          dmax: float, pivot: float) -> np.ndarray:
+        """并行版本：分块处理+直接计算"""
+        h, w, c = image_array.shape
+        result = np.zeros_like(image_array)
+        
+        # 计算分块数量
+        blocks_h = (h + self.block_size - 1) // self.block_size
+        blocks_w = (w + self.block_size - 1) // self.block_size
+        
+        def process_block(args):
+            i, j = args
+            start_h = i * self.block_size
+            end_h = min((i + 1) * self.block_size, h)
+            start_w = j * self.block_size
+            end_w = min((j + 1) * self.block_size, w)
+            
+            # 提取块
+            block = image_array[start_h:end_h, start_w:end_w, :]
+            
+            # 直接计算密度反相
+            safe_block = np.maximum(block, 1e-10)
+            original_density = -np.log10(safe_block)
+            adjusted_density = pivot + (original_density - pivot) * gamma - dmax
+            block_result = np.power(10.0, -adjusted_density)
+            
+            return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))
+        
+        # 并行处理所有块
+        block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
+        
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
+        
+        # 重组结果
+        for start_h, end_h, start_w, end_w, block_result in results:
+            result[start_h:end_h, start_w:end_w, :] = block_result
+        
+        return result
     
     def _get_density_inversion_lut(self, gamma: float, dmax: float, pivot: float, 
                                   size: int = 32768) -> np.ndarray:
@@ -224,8 +350,8 @@ class FilmMathOps:
         # 并行处理所有块
         block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
         
-        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            results = list(executor.map(process_block, block_coords))
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
         
         # 重组结果
         for start_h, end_h, start_w, end_w, block_result in results:
@@ -287,8 +413,14 @@ class FilmMathOps:
             return density_array
         
         # 终极优化：合并曲线为单次查表
-        return self._apply_curves_merged_lut(density_array, curve_points, 
-                                           channel_curves, lut_size)
+        should_parallel = self._should_use_parallel(density_array.size, use_parallel)
+        
+        if should_parallel:
+            return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
+                                                        channel_curves, lut_size)
+        else:
+            return self._apply_curves_merged_lut(density_array, curve_points, 
+                                               channel_curves, lut_size)
     
     def _apply_curves_merged_lut(self, density_array: np.ndarray,
                                curve_points: Optional[List[Tuple[float, float]]],
@@ -337,6 +469,75 @@ class FilmMathOps:
                 channel_indices = indices[:, :, channel_idx]
                 curve_output = np.take(merged_lut, channel_indices)
                 result[:, :, channel_idx] = (1.0 - curve_output) * log65536
+        
+        return result
+    
+    def _apply_curves_merged_lut_parallel(self, density_array: np.ndarray,
+                                        curve_points: Optional[List[Tuple[float, float]]],
+                                        channel_curves: Optional[Dict[str, List[Tuple[float, float]]]],
+                                        lut_size: int) -> np.ndarray:
+        """并行版本的曲线合并LUT实现"""
+        h, w, c = density_array.shape
+        result = np.zeros_like(density_array)
+        
+        # 预计算常量和LUT
+        inv_range = np.float32(1.0 / self._LOG65536)
+        log65536 = np.float32(self._LOG65536)
+        lut_scale = np.float32(lut_size - 1)
+        
+        # 预计算所有通道的LUT
+        channel_luts = []
+        channel_map = ['r', 'g', 'b']
+        
+        for channel_name in channel_map:
+            merged_lut = self._get_merged_channel_lut(
+                curve_points, 
+                channel_curves.get(channel_name) if channel_curves else None,
+                lut_size
+            )
+            channel_luts.append(merged_lut)
+        
+        # 检查是否有任何曲线需要处理
+        if not any(lut is not None for lut in channel_luts):
+            return density_array
+        
+        # 计算分块数量
+        blocks_h = (h + self.block_size - 1) // self.block_size
+        blocks_w = (w + self.block_size - 1) // self.block_size
+        
+        def process_block(args):
+            i, j = args
+            start_h = i * self.block_size
+            end_h = min((i + 1) * self.block_size, h)
+            start_w = j * self.block_size
+            end_w = min((j + 1) * self.block_size, w)
+            
+            # 提取块
+            block = density_array[start_h:end_h, start_w:end_w, :]
+            block_result = block.copy()
+            
+            # 归一化处理
+            normalized = 1.0 - np.clip(block_result * inv_range, 0.0, 1.0, dtype=np.float32)
+            indices = (normalized * lut_scale).astype(np.uint16, copy=False)
+            
+            # 处理每个通道
+            for channel_idx, merged_lut in enumerate(channel_luts):
+                if merged_lut is not None:
+                    channel_indices = indices[:, :, channel_idx]
+                    curve_output = np.take(merged_lut, channel_indices)
+                    block_result[:, :, channel_idx] = (1.0 - curve_output) * log65536
+            
+            return (start_h, end_h, start_w, end_w, block_result)
+        
+        # 并行处理所有块
+        block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
+        
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
+        
+        # 重组结果
+        for start_h, end_h, start_w, end_w, block_result in results:
+            result[start_h:end_h, start_w:end_w, :] = block_result
         
         return result
     
@@ -698,12 +899,21 @@ class FilmMathOps:
     # 6. 转线性
     # =======================
     
-    def density_to_linear(self, density_array: np.ndarray) -> np.ndarray:
+    def density_to_linear(self, density_array: np.ndarray, use_parallel: bool = True) -> np.ndarray:
         """
-        将密度空间转换为线性空间（优化版）
+        将密度空间转换为线性空间（支持并行）
         
         使用NumPy优化的exp函数，比LUT查表更快
         """
+        should_parallel = self._should_use_parallel(density_array.size, use_parallel)
+        
+        if should_parallel:
+            return self._density_to_linear_parallel(density_array)
+        else:
+            return self._density_to_linear_direct(density_array)
+    
+    def _density_to_linear_direct(self, density_array: np.ndarray) -> np.ndarray:
+        """直接版本的密度转线性"""
         # 密度转线性：linear = 10^(-density) = exp(-density * ln(10))
         # 使用exp替代power，因为exp通常更快
         ln10 = np.float32(np.log(10.0))
@@ -714,21 +924,104 @@ class FilmMathOps:
         
         return result.astype(density_array.dtype)
     
-    def linear_to_density(self, linear_array: np.ndarray) -> np.ndarray:
+    def _density_to_linear_parallel(self, density_array: np.ndarray) -> np.ndarray:
+        """并行版本的密度转线性"""
+        h, w, c = density_array.shape
+        result = np.zeros_like(density_array)
+        
+        # 预计算常量
+        ln10 = np.float32(np.log(10.0))
+        
+        # 计算分块数量
+        blocks_h = (h + self.block_size - 1) // self.block_size
+        blocks_w = (w + self.block_size - 1) // self.block_size
+        
+        def process_block(args):
+            i, j = args
+            start_h = i * self.block_size
+            end_h = min((i + 1) * self.block_size, h)
+            start_w = j * self.block_size
+            end_w = min((j + 1) * self.block_size, w)
+            
+            # 提取块并处理
+            block = density_array[start_h:end_h, start_w:end_w, :]
+            block_result = np.exp(-block * ln10, dtype=np.float32)
+            block_result = np.clip(block_result, 0.0, 1.0)
+            
+            return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))
+        
+        # 并行处理所有块
+        block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
+        
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
+        
+        # 重组结果
+        for start_h, end_h, start_w, end_w, block_result in results:
+            result[start_h:end_h, start_w:end_w, :] = block_result
+        
+        return result
+    
+    def linear_to_density(self, linear_array: np.ndarray, use_parallel: bool = True) -> np.ndarray:
         """
-        将线性空间转换为密度空间
+        将线性空间转换为密度空间（支持并行）
         
         Args:
             linear_array: 线性空间图像
+            use_parallel: 是否使用并行处理
             
         Returns:
             密度空间图像
         """
+        should_parallel = self._should_use_parallel(linear_array.size, use_parallel)
+        
+        if should_parallel:
+            return self._linear_to_density_parallel(linear_array)
+        else:
+            return self._linear_to_density_direct(linear_array)
+    
+    def _linear_to_density_direct(self, linear_array: np.ndarray) -> np.ndarray:
+        """直接版本的线性转密度"""
         # 避免log(0)
         safe_array = np.maximum(linear_array, 1e-10)
         
         # 线性转密度：density = -log10(linear)
         result = -np.log10(safe_array)
+        
+        return result
+    
+    def _linear_to_density_parallel(self, linear_array: np.ndarray) -> np.ndarray:
+        """并行版本的线性转密度"""
+        h, w, c = linear_array.shape
+        result = np.zeros_like(linear_array)
+        
+        # 计算分块数量
+        blocks_h = (h + self.block_size - 1) // self.block_size
+        blocks_w = (w + self.block_size - 1) // self.block_size
+        
+        def process_block(args):
+            i, j = args
+            start_h = i * self.block_size
+            end_h = min((i + 1) * self.block_size, h)
+            start_w = j * self.block_size
+            end_w = min((j + 1) * self.block_size, w)
+            
+            # 提取块并处理
+            block = linear_array[start_h:end_h, start_w:end_w, :]
+            safe_block = np.maximum(block, 1e-10)
+            block_result = -np.log10(safe_block)
+            
+            return (start_h, end_h, start_w, end_w, block_result)
+        
+        # 并行处理所有块
+        block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
+        
+        executor = self._get_thread_pool()
+        results = list(executor.map(process_block, block_coords))
+        
+        # 重组结果
+        for start_h, end_h, start_w, end_w, block_result in results:
+            result[start_h:end_h, start_w:end_w, :] = block_result
         
         return result
     

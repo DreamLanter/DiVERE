@@ -107,6 +107,17 @@ jobs:
         fi
         echo "Relocated resources to Contents/MacOS"
 
+    - name: Ad-hoc sign app bundle (deep)
+      run: |
+        app_bundle=$(find dist -type d -name "*.app" | head -1)
+        if [ -z "$app_bundle" ]; then
+          echo "::error::No .app bundle found for codesign." && exit 1
+        fi
+        echo "Codesigning (ad-hoc) $app_bundle"
+        codesign --force --deep -s - "$app_bundle" || true
+        echo "Verify codesign (may show 'rejected' due to no notarization)"
+        codesign -dv "$app_bundle" 2>&1 | sed -n '1,200p'
+
     - name: Verify bundle contents
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
@@ -139,14 +150,14 @@ jobs:
         fi
         echo "✅ Data verification passed."
 
-    - name: Package macOS App
+    - name: Package macOS App (zip)
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         cd dist
-        tar -czf "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "$(basename "$app_bundle")"
+        ditto -c -k --sequesterRsrc --keepParent "$(basename "$app_bundle")" "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
-        path: dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+        path: dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip

@@ -184,13 +184,18 @@ jobs:
 
     - name: Package Windows App (zip)
       if: matrix.platform == 'windows'
+      shell: pwsh
       run: |
-        set -e
-        if [ ! -d "dist/DiVERE" ]; then
-          echo "::error::DiVERE folder not found under dist" && ls -la dist && exit 1
-        fi
-        cd dist
-        zip -r "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip" "DiVERE"
+        $dist = "dist"
+        $folder = Join-Path $dist "DiVERE"
+        if (!(Test-Path $folder)) {
+          Write-Error "DiVERE folder not found under dist"
+          Get-ChildItem -Force $dist | Format-List
+          exit 1
+        }
+        $zipPath = Join-Path $dist "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        Compress-Archive -Path (Join-Path $folder '*') -DestinationPath $zipPath -Force
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

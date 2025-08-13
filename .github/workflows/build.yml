@@ -110,6 +110,39 @@ jobs:
           divere/__main__.py
         echo "✅ PyInstaller build completed"
 
+    - name: Ensure resources adjacent to exe (Windows)
+      if: matrix.platform == 'windows'
+      shell: pwsh
+      run: |
+        $distRoot = "dist"
+        $appDir = Join-Path $distRoot "DiVERE"
+        if (!(Test-Path $appDir)) {
+          Write-Error "DiVERE folder not found under dist"
+          Get-ChildItem -Force $distRoot | Format-List
+          exit 1
+        }
+        # Ensure config and models exist next to DiVERE.exe
+        $cfg = Join-Path $appDir "config"
+        $mdl = Join-Path $appDir "models"
+        if (!(Test-Path $cfg)) { New-Item -ItemType Directory -Path $cfg | Out-Null }
+        if (!(Test-Path $mdl)) { New-Item -ItemType Directory -Path $mdl | Out-Null }
+        # Copy from repo if PyInstaller didn't place them
+        Copy-Item -Recurse -Force "divere/config/*" $cfg 2>$null
+        Copy-Item -Recurse -Force "divere/models/*" $mdl 2>$null
+
+    - name: Verify bundle contents (Windows)
+      if: matrix.platform == 'windows'
+      shell: pwsh
+      run: |
+        $appDir = "dist/DiVERE"
+        $exe = Join-Path $appDir "DiVERE.exe"
+        if (!(Test-Path $exe)) { Write-Error "Executable not found: $exe"; exit 1 }
+        $cfg = Join-Path $appDir "config/app_settings.json"
+        $mdl = Join-Path $appDir "models/net_awb.onnx"
+        if (!(Test-Path $cfg)) { Write-Error "Missing config next to exe: $cfg"; exit 1 }
+        if (!(Test-Path $mdl)) { Write-Error "Missing model next to exe: $mdl"; exit 1 }
+        Write-Host "✅ Windows bundle verified: resources are next to exe"
+
     - name: Relocate resources into Contents/MacOS (for runtime compatibility)
       if: matrix.platform == 'macos'
       run: |

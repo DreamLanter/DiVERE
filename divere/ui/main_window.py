@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QMenuBar, QToolBar, QStatusBar, QFileDialog, QMessageBox,
     QSplitter, QLabel, QDockWidget, QDialog
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QObject, Signal, QRunnable, Slot, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
 import numpy as np
 
@@ -29,8 +29,41 @@ from .save_dialog import SaveImageDialog
 from .parameter_panel import ParameterPanel
 
 
+class _PreviewWorkerSignals(QObject):
+    result = Signal(int, ImageData, tuple)
+    error = Signal(int, str)
+    finished = Signal(int)
+
+
+class _PreviewWorker(QRunnable):
+    def __init__(self, seq: int, image: ImageData, params: ColorGradingParams, the_enlarger, color_space_manager):
+        super().__init__()
+        self.seq = seq
+        self.image = image
+        self.params = params
+        self.the_enlarger = the_enlarger
+        self.color_space_manager = color_space_manager
+        self.signals = _PreviewWorkerSignals()
+
+    @Slot()
+    def run(self):
+        try:
+            import time
+            t0 = time.time()
+            result_image = self.the_enlarger.apply_full_pipeline(self.image, self.params)
+            t1 = time.time()
+            result_image = self.color_space_manager.convert_to_display_space(result_image, "DisplayP3")
+            t2 = time.time()
+            self.signals.result.emit(self.seq, result_image, (t0, t1, t2))
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            self.signals.error.emit(self.seq, f"{e}\n{tb}")
+        finally:
+            self.signals.finished.emit(self.seq)
 class MainWindow(QMainWindow):
     """主窗口"""
+    preview_updated = Signal()
     
     def __init__(self):
         super().__init__()
@@ -60,7 +93,7 @@ class MainWindow(QMainWindow):
         # 初始化默认色彩空间
         self._initialize_color_space_info()
         
-        # 实时预览更新（智能延迟机制）
+        # 实时预览更新（智能延迟机制 + 后台线程）
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self._update_preview)
         self.preview_timer.setSingleShot(True)
@@ -69,6 +102,17 @@ class MainWindow(QMainWindow):
         # 拖动状态跟踪
         self.is_dragging = False
         
+        # 预览后台线程池与任务调度
+        self.thread_pool: QThreadPool = QThreadPool.globalInstance()
+        # 限制为1，防止堆积；配合“忙碌/待处理”标志实现去抖
+        try:
+            self.thread_pool.setMaxThreadCount(1)
+        except Exception:
+            pass
+        self._preview_busy: bool = False
+        self._preview_pending: bool = False
+        self._preview_seq_counter: int = 0
+
         # 最后，初始化参数面板的默认值
         self.parameter_panel.initialize_defaults()
         
@@ -296,8 +340,8 @@ class MainWindow(QMainWindow):
                 # 触发预览
                 self._update_preview()
                 
-                # 自动适应窗口大小
-                self.preview_widget.fit_to_window()
+                # 首次加载后，将图像居中，但不改变缩放比例
+                self.preview_widget.center_image()
                 
                 self.statusBar().showMessage(f"已加载图像: {Path(file_path).name}")
                 
@@ -617,34 +661,68 @@ class MainWindow(QMainWindow):
 
     
     def _update_preview(self):
-        """更新预览"""
+        """在后台线程中更新预览，保持UI线程响应。"""
         if not self.current_proxy:
             return
-        
+        if self._preview_busy:
+            # 正在计算，标记一次待处理，稍后接力执行最新一次
+            self._preview_pending = True
+            return
+
+        # 复制输入，避免在后台修改共享对象
+        from copy import deepcopy
         try:
-            import time
-            t0 = time.time()
-            # 使用统一的完整处理模式
-            result_image = self.the_enlarger.apply_full_pipeline(
-                self.current_proxy, self.current_params
+            proxy_copy = ImageData(
+                array=self.current_proxy.array.copy() if self.current_proxy.array is not None else None,
+                width=self.current_proxy.width,
+                height=self.current_proxy.height,
+                channels=self.current_proxy.channels,
+                dtype=self.current_proxy.dtype,
+                color_space=self.current_proxy.color_space,
+                icc_profile=self.current_proxy.icc_profile,
+                metadata=deepcopy(self.current_proxy.metadata),
+                file_path=self.current_proxy.file_path,
+                is_proxy=self.current_proxy.is_proxy,
+                proxy_scale=self.current_proxy.proxy_scale,
             )
-            t1 = time.time()
-            # 转换到显示色彩空间
-            result_image = self.color_space_manager.convert_to_display_space(
-                result_image, "DisplayP3"
-            )
-            t2 = time.time()
-            
-            # 更新预览
-            self.preview_widget.set_image(result_image)
-            
-            # 性能监控（细分阶段）
-            print(
-                f"预览耗时: 管线={(t1 - t0)*1000:.1f}ms, 显示色彩转换={(t2 - t1)*1000:.1f}ms, 总={(t2 - t0)*1000:.1f}ms"
-            )
-            
+            params_copy = deepcopy(self.current_params)
         except Exception as e:
-            print(f"更新预览失败: {e}")
+            print(f"预览准备失败: {e}")
+            return
+
+        self._preview_busy = True
+        self._preview_seq_counter += 1
+        seq = int(self._preview_seq_counter)
+
+        worker = _PreviewWorker(
+            seq=seq,
+            image=proxy_copy,
+            params=params_copy,
+            the_enlarger=self.the_enlarger,
+            color_space_manager=self.color_space_manager,
+        )
+        worker.signals.result.connect(self._on_preview_result)
+        worker.signals.error.connect(self._on_preview_error)
+        worker.signals.finished.connect(self._on_preview_finished)
+        self.thread_pool.start(worker)
+
+    def _on_preview_result(self, seq: int, result_image: ImageData, timings: tuple[float, float, float]):
+        # 应用最新结果
+        t0, t1, t2 = timings
+        self.preview_widget.set_image(result_image)
+        print(f"预览耗时: 管线={(t1 - t0)*1000:.1f}ms, 显示色彩转换={(t2 - t1)*1000:.1f}ms, 总={(t2 - t0)*1000:.1f}ms")
+        # 发出预览已更新信号
+        self.preview_updated.emit()
+
+    def _on_preview_error(self, seq: int, message: str):
+        print(f"更新预览失败(seq={seq}): {message}")
+
+    def _on_preview_finished(self, seq: int):
+        self._preview_busy = False
+        if self._preview_pending:
+            self._preview_pending = False
+            # 立刻触发最新一次请求
+            self.preview_timer.start(0)
 
     def _open_config_manager(self):
         """打开配置管理器"""
@@ -682,6 +760,8 @@ class MainWindow(QMainWindow):
             direction: 旋转方向，1=左旋，-1=右旋
         """
         if self.current_image and self.current_proxy:
+            # 在旋转前捕获预览锚点
+            self.preview_widget.prepare_rotate(direction)
             # 旋转原始图像
             rotated_array = np.rot90(self.current_image.array, direction)
             self.current_image.array = np.ascontiguousarray(rotated_array)
@@ -692,8 +772,8 @@ class MainWindow(QMainWindow):
             self.current_proxy.array = np.ascontiguousarray(rotated_proxy)
             self.current_proxy.height, self.current_proxy.width = self.current_proxy.width, self.current_proxy.height
             
-            # 重新处理预览
+            # 重新处理预览（结果回到UI时会自动应用旋转锚点）
             self._update_preview()
             
             # 自动适应窗口大小
-            self.preview_widget.fit_to_window() 
+            # 不再强制适应窗口，避免缩放变化导致“旋转会缩放”的现象

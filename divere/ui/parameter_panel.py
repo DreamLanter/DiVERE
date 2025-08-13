@@ -19,6 +19,8 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from divere.core.data_types import ColorGradingParams
 from divere.ui.curve_editor_widget import CurveEditorWidget
 from divere.utils.enhanced_config_manager import enhanced_config_manager
+from divere.ui.ucs_triangle_widget import UcsTriangleWidget
+from divere.core.color_space import xy_to_uv
 
 
 class ParameterPanel(QWidget):
@@ -102,6 +104,61 @@ class ParameterPanel(QWidget):
         note_text.setStyleSheet("QLabel { color: #666; font-size: 11px; padding: 8px; background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; }")
         note_layout.addWidget(note_text)
         layout.addWidget(note_group)
+
+        # 扫描仪光谱锐化（UCS u'v'三角形定义输入色彩空间）
+        self.enable_scanner_spectral_checkbox = QCheckBox("扫描仪光谱锐化")
+        layout.addWidget(self.enable_scanner_spectral_checkbox)
+
+        self.ucs_widget = UcsTriangleWidget()
+        self.ucs_widget.setVisible(False)
+        layout.addWidget(self.ucs_widget)
+
+        # 信号：拖拽更新 → 注册自定义色彩空间并触发预览
+        def _on_ucs_changed(coords: dict):
+            if not self.enable_scanner_spectral_checkbox.isChecked():
+                return
+            # 将 u'v' 转 xy
+            try:
+                r_uv = coords.get('R', (0.5, 0.5))
+                g_uv = coords.get('G', (0.16, 0.55))
+                b_uv = coords.get('B', (0.2, 0.1))
+                from divere.core.color_space import uv_to_xy
+                r_xy = uv_to_xy(r_uv[0], r_uv[1])
+                g_xy = uv_to_xy(g_uv[0], g_uv[1])
+                b_xy = uv_to_xy(b_uv[0], b_uv[1])
+                primaries = np.array([r_xy, g_xy, b_xy], dtype=float)
+                # 注册并切换到临时色彩空间
+                name = "ScannerSpectralSharpening"
+                # 使用当前选中空间的白点作为模板（有利于匹配预期）
+                template_space = self.input_colorspace_combo.currentText()
+                wp = None
+                info = self.main_window.color_space_manager.get_color_space_info(template_space)
+                if info and 'white_point' in info:
+                    wp = np.array(info['white_point'], dtype=float)
+                self.main_window.color_space_manager.register_custom_colorspace(name, primaries, white_point_xy=wp, gamma=1.0)
+                self.main_window.input_color_space = name
+                # 触发预览
+                if self.main_window.current_image:
+                    self.main_window._reload_with_color_space()
+            except Exception as e:
+                print(f"UCS更新失败: {e}")
+
+        self.ucs_widget.coordinatesChanged.connect(_on_ucs_changed)
+        # 右键重置某个点到当前选定空间的对应位置
+        def _on_reset_point(key: str):
+            try:
+                space = self.input_colorspace_combo.currentText()
+                info = self.main_window.color_space_manager.get_color_space_info(space)
+                if info and 'primaries' in info:
+                    prim = np.array(info['primaries'], dtype=float)
+                    from divere.core.color_space import xy_to_uv
+                    idx = {'R': 0, 'G': 1, 'B': 2}.get(key, 0)
+                    u, v = xy_to_uv(prim[idx, 0], prim[idx, 1])
+                    self.ucs_widget.set_uv_coordinates({key: (u, v)})
+            except Exception as e:
+                print(f"重置点失败: {e}")
+
+        self.ucs_widget.resetPointRequested.connect(_on_reset_point)
         
         layout.addStretch()
         return widget
@@ -304,6 +361,8 @@ class ParameterPanel(QWidget):
 
     def _connect_signals(self):
         self.input_colorspace_combo.currentTextChanged.connect(self._on_input_colorspace_changed)
+        if hasattr(self, 'enable_scanner_spectral_checkbox'):
+            self.enable_scanner_spectral_checkbox.toggled.connect(self._on_scanner_spectral_toggled)
         self.density_gamma_slider.valueChanged.connect(self._on_density_gamma_changed)
         self.density_gamma_spinbox.valueChanged.connect(self._on_density_gamma_changed)
         self.density_dmax_slider.valueChanged.connect(self._on_density_dmax_changed)
@@ -320,6 +379,9 @@ class ParameterPanel(QWidget):
         # 绑定AI自动校色按钮
         self.auto_color_single_button.clicked.connect(self._on_auto_color_single_clicked)
         self.auto_color_multi_button.clicked.connect(self._on_auto_color_correct_clicked)
+        # 监听预览完成信号，用于多次自动校色的节拍
+        if hasattr(self.main_window, 'preview_updated'):
+            self.main_window.preview_updated.connect(self._on_preview_updated_tick)
         self.curve_editor.curve_changed.connect(self._on_curve_changed)
 
         self.enable_density_inversion_checkbox.toggled.connect(self._on_debug_step_changed)
@@ -393,10 +455,56 @@ class ParameterPanel(QWidget):
         self.current_params.curve_points_g = all_curves.get('G', [(0.0, 0.0), (1.0, 1.0)])
         self.current_params.curve_points_b = all_curves.get('B', [(0.0, 0.0), (1.0, 1.0)])
 
+    def _on_scanner_spectral_toggled(self, checked: bool):
+        # 显示/隐藏 UCS 控件；启用时立即以当前空间的基色初始化
+        self.ucs_widget.setVisible(bool(checked))
+        if checked:
+            space = self.input_colorspace_combo.currentText()
+            try:
+                info = self.main_window.color_space_manager.get_color_space_info(space)
+                if info and 'primaries' in info:
+                    prim = np.array(info['primaries'], dtype=float)
+                    from divere.core.color_space import xy_to_uv
+                    Ru, Rv = xy_to_uv(prim[0,0], prim[0,1])
+                    Gu, Gv = xy_to_uv(prim[1,0], prim[1,1])
+                    Bu, Bv = xy_to_uv(prim[2,0], prim[2,1])
+                    self.ucs_widget.set_uv_coordinates({'R': (Ru, Rv), 'G': (Gu, Gv), 'B': (Bu, Bv)})
+            except Exception as e:
+                print(f"初始化UCS失败: {e}")
+
     def _on_input_colorspace_changed(self, space):
         if self._is_updating_ui: return
-        self.main_window.input_color_space = space
-        if self.main_window.current_image: self.main_window._reload_with_color_space()
+        # 同步 UCS 三点到所选空间（无论是否开启扫描仪光谱锐化）
+        try:
+            info = self.main_window.color_space_manager.get_color_space_info(space)
+            if info and 'primaries' in info:
+                prim = np.array(info['primaries'], dtype=float)
+                Ru, Rv = xy_to_uv(prim[0,0], prim[0,1])
+                Gu, Gv = xy_to_uv(prim[1,0], prim[1,1])
+                Bu, Bv = xy_to_uv(prim[2,0], prim[2,1])
+                self.ucs_widget.set_uv_coordinates({'R': (Ru, Rv), 'G': (Gu, Gv), 'B': (Bu, Bv)})
+        except Exception as e:
+            print(f"同步UCS失败: {e}")
+
+        # 根据开关决定如何应用到预览
+        spectral_on = getattr(self, 'enable_scanner_spectral_checkbox', None) and self.enable_scanner_spectral_checkbox.isChecked()
+        if spectral_on:
+            # 当开启时，用下拉当前空间作为模板立即应用到自定义空间并刷新
+            try:
+                if info and 'primaries' in info:
+                    primaries = np.array(info['primaries'], dtype=float)
+                    name = "ScannerSpectralSharpening"
+                    self.main_window.color_space_manager.register_custom_colorspace(name, primaries, gamma=1.0)
+                    self.main_window.input_color_space = name
+                    if self.main_window.current_image:
+                        self.main_window._reload_with_color_space()
+            except Exception as e:
+                print(f"应用UCS模板失败: {e}")
+        else:
+            # 未开启：直接切换输入色彩空间并刷新
+            self.main_window.input_color_space = space
+            if self.main_window.current_image:
+                self.main_window._reload_with_color_space()
 
     def _on_density_gamma_changed(self):
         if self._is_updating_ui: return
@@ -600,13 +708,17 @@ class ParameterPanel(QWidget):
             print(f"最终累计增益: R={self._auto_color_total_gains[0]:.3f}, G={self._auto_color_total_gains[1]:.3f}, B={self._auto_color_total_gains[2]:.3f}")
             return
         
-        # 继续迭代
+        # 继续迭代：应用本次增益并请求预览刷新，等待预览完成信号后再进入下一次
         self.current_params.rgb_gains = tuple(new_rgb_gains)
         self.update_ui_from_params()
-        self.parameter_changed.emit()  # 触发预览更新
-        
-        # 等待一小段时间让预览更新完成，然后进行下一次迭代
-        QTimer.singleShot(50, self._perform_auto_color_iteration)
+        self.parameter_changed.emit()  # 触发预览更新（异步）
+        # 这里不再使用定时器推进迭代，改由 _on_preview_updated_tick 回调触发
+
+    def _on_preview_updated_tick(self):
+        """预览完成后，若正在进行多次自动校色，则继续下一次迭代。"""
+        if self._auto_color_iteration < self._auto_color_max_iterations and self._auto_color_max_iterations > 1:
+            # 在预览真正更新后再推进下一次
+            QTimer.singleShot(0, self._perform_auto_color_iteration)
 
     def get_current_params(self) -> ColorGradingParams:
         return self.current_params

@@ -13,6 +13,48 @@ import os
 from .data_types import ImageData
 
 
+def uv_to_xy(u_prime: Any, v_prime: Any) -> Tuple[Any, Any]:
+    """
+    将 CIE 1976 UCS 坐标 (u', v') 转换为 CIE 1931 xy 色度坐标。
+
+    公式:
+        x = 9 u' / (6 u' - 16 v' + 12)
+        y = 4 v' / (6 u' - 16 v' + 12)
+
+    支持标量与 NumPy 数组，返回的类型与输入一致（标量返回float，数组返回ndarray）。
+    """
+    u = np.asarray(u_prime)
+    v = np.asarray(v_prime)
+    denom = 6.0 * u - 16.0 * v + 12.0
+    x = np.divide(9.0 * u, denom, out=np.full_like(u, np.nan, dtype=float), where=denom != 0)
+    y = np.divide(4.0 * v, denom, out=np.full_like(v, np.nan, dtype=float), where=denom != 0)
+
+    if np.isscalar(u_prime) and np.isscalar(v_prime):
+        return float(x), float(y)
+    return x, y
+
+
+def xy_to_uv(x: Any, y: Any) -> Tuple[Any, Any]:
+    """
+    将 CIE 1931 xy 色度坐标转换为 CIE 1976 UCS 坐标 (u', v')。
+
+    公式:
+        u' = 4 x / (-2 x + 12 y + 3)
+        v' = 9 y / (-2 x + 12 y + 3)
+
+    支持标量与 NumPy 数组，返回的类型与输入一致（标量返回float，数组返回ndarray）。
+    """
+    xx = np.asarray(x)
+    yy = np.asarray(y)
+    denom = -2.0 * xx + 12.0 * yy + 3.0
+    u = np.divide(4.0 * xx, denom, out=np.full_like(xx, np.nan, dtype=float), where=denom != 0)
+    v = np.divide(9.0 * yy, denom, out=np.full_like(yy, np.nan, dtype=float), where=denom != 0)
+
+    if np.isscalar(x) and np.isscalar(y):
+        return float(u), float(v)
+    return u, v
+
+
 class ColorSpaceManager:
     """色彩空间管理器"""
     
@@ -109,6 +151,37 @@ class ColorSpaceManager:
         # 现在使用在线计算，不再预计算所有矩阵
         # 只在需要时动态计算转换矩阵和增益向量
         pass
+
+    # --- 自定义色彩空间注册 ---
+    def register_custom_colorspace(self, name: str, primaries_xy: np.ndarray, white_point_xy: Optional[np.ndarray] = None, gamma: float = 1.0) -> None:
+        """
+        动态注册或更新一个自定义色彩空间，用于临时预览或交互。
+
+        Args:
+            name: 色彩空间名称（将作为键存储）。
+            primaries_xy: 形状为 (3, 2) 的数组，按 R、G、B 顺序为 xy 坐标。
+            white_point_xy: 长度为 2 的数组，xy 白点。缺省使用 D65。
+            gamma: 色彩空间的 gamma，扫描线性数据通常为 1.0。
+        """
+        if white_point_xy is None:
+            white_point_xy = np.array([0.3127, 0.3290], dtype=float)  # D65
+        data = {
+            "name": name,
+            "primaries": np.array(primaries_xy, dtype=float),
+            "white_point": np.array(white_point_xy, dtype=float),
+            "gamma": float(gamma),
+        }
+        self._color_spaces[name] = data
+        # 该空间相关的转换结果需要失效
+        self._invalidate_convert_cache_for(name)
+
+    def _invalidate_convert_cache_for(self, space_name: str) -> None:
+        try:
+            keys_to_delete = [k for k in self._convert_cache.keys() if space_name in k]
+            for k in keys_to_delete:
+                del self._convert_cache[k]
+        except Exception:
+            self._convert_cache.clear()
     
     def calculate_color_space_conversion(self, src_space_name: str, dst_space_name: str) -> tuple[np.ndarray, np.ndarray]:
         """

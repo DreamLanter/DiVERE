@@ -340,8 +340,8 @@ class MainWindow(QMainWindow):
                 # 触发预览
                 self._update_preview()
                 
-                # 首次加载后，将图像居中，但不改变缩放比例
-                self.preview_widget.center_image()
+                # 首次加载后，适应窗口一次
+                self.preview_widget.fit_to_window()
                 
                 self.statusBar().showMessage(f"已加载图像: {Path(file_path).name}")
                 

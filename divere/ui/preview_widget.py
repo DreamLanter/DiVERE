@@ -6,9 +6,9 @@
 import numpy as np
 from typing import Optional
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton, QCheckBox
 from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QPointF
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor, QPolygonF
 
 from divere.core.data_types import ImageData
 
@@ -24,6 +24,8 @@ class PreviewCanvas(QLabel):
         # 简单缩放缓存以提升性能
         self._scaled_pixmap: Optional[QPixmap] = None
         self._scaled_zoom: float = 1.0
+        # 叠加绘制回调
+        self.overlay_drawer = None
 
     def set_source_pixmap(self, pixmap: QPixmap) -> None:
         self._source_pixmap = pixmap
@@ -78,6 +80,11 @@ class PreviewCanvas(QLabel):
         # 为避免滚轮缩放时因缓存缩放尺寸取整导致的锚点漂移，这里统一走绘制时缩放路径
         painter.scale(self._zoom, self._zoom)
         painter.drawPixmap(0, 0, self._source_pixmap)
+        if self.overlay_drawer is not None:
+            try:
+                self.overlay_drawer(painter)
+            except Exception as e:
+                print(f"overlay绘制失败: {e}")
         painter.end()
 
 
@@ -123,6 +130,13 @@ class PreviewWidget(QWidget):
         self._rotate_direction: int = 0  # 1=左旋, -1=右旋
         self._rotate_anchor_p = None  # (px, py) 旋转前图像坐标
         self._rotate_old_wh = None  # (W_old, H_old)
+
+        # 色卡选择器状态
+        self.cc_enabled: bool = False
+        self.cc_corners = None  # [(x,y) * 4]
+        self.cc_drag_idx: int | None = None
+        self.cc_handle_radius_disp: float = 8.0
+        self.cc_ref_qcolors = None  # 24项，参考色（QColor）
 
     # ============ 内部工具 ============
     def _get_viewport_size(self):
@@ -191,12 +205,16 @@ class PreviewWidget(QWidget):
         self.center_btn.setMaximumWidth(80)
         self.fit_window_btn.clicked.connect(self.fit_to_window)
         self.center_btn.clicked.connect(self.center_image)
+        # 色卡选择器
+        self.cc_checkbox = QCheckBox("色卡选择器")
+        self.cc_checkbox.toggled.connect(self._on_cc_toggled)
         
         # 添加按钮到布局
         button_layout.addWidget(self.rotate_left_btn)
         button_layout.addWidget(self.rotate_right_btn)
         button_layout.addWidget(self.fit_window_btn)
         button_layout.addWidget(self.center_btn)
+        button_layout.addWidget(self.cc_checkbox)
         button_layout.addStretch()
         layout.addLayout(button_layout)
         
@@ -211,6 +229,94 @@ class PreviewWidget(QWidget):
         
         self.scroll_area.setWidget(self.image_label)
         layout.addWidget(self.scroll_area)
+
+    # ===== 色卡选择器：UI与绘制 =====
+    def _on_cc_toggled(self, checked: bool):
+        self.cc_enabled = bool(checked)
+        if self.cc_enabled and self.current_image and self.current_image.array is not None:
+            if not self.cc_corners:
+                self._init_default_colorchecker()
+            self._ensure_cc_reference_colors()
+            self.image_label.overlay_drawer = self._draw_colorchecker_overlay
+        else:
+            self.image_label.overlay_drawer = None
+        self._update_display()
+
+    def _init_default_colorchecker(self):
+        h, w = self.current_image.array.shape[:2]
+        max_w = w * 0.6
+        max_h = h * 0.6
+        target_w = min(max_w, max_h * 1.5)
+        target_h = target_w / 1.5
+        cx = w / 2.0; cy = h / 2.0
+        x0 = cx - target_w / 2.0; y0 = cy - target_h / 2.0
+        x1 = cx + target_w / 2.0; y1 = cy + target_h / 2.0
+        self.cc_corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+    def _draw_colorchecker_overlay(self, painter: QPainter):
+        if not (self.cc_enabled and self.cc_corners):
+            return
+        pts = [QPointF(*p) for p in self.cc_corners]
+        painter.setPen(QPen(QColor(255, 255, 0, 220), 2))
+        painter.setBrush(Qt.NoBrush)
+        for i in range(4):
+            painter.drawLine(pts[i], pts[(i+1)%4])
+        painter.setBrush(QColor(255,255,0,200))
+        for p in pts:
+            painter.drawEllipse(p, 5, 5)
+
+        # 绘制网格与采样框
+        import numpy as np
+        import cv2
+        src = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.float32)
+        dst = np.array(self.cc_corners, dtype=np.float32)
+        H = cv2.getPerspectiveTransform(src, dst)
+
+        def map_rect(x0,y0,x1,y1):
+            R = np.array([[x0,y0],[x1,y0],[x1,y1],[x0,y1]], dtype=np.float32)
+            R_h = np.hstack([R, np.ones((4,1), dtype=np.float32)])
+            P = (H @ R_h.T).T
+            P = P[:,:2] / P[:,2:3]
+            return [QPointF(float(px), float(py)) for px,py in P]
+
+        margin = 0.18  # 采样区域内缩比例
+        ref_margin = 0.33  # 参考色小块的内缩比例（相对整个网格单元）
+        for r in range(4):
+            for c in range(6):
+                gx0 = c/6.0; gx1=(c+1)/6.0
+                gy0 = r/4.0; gy1=(r+1)/4.0
+                poly = map_rect(gx0,gy0,gx1,gy1)
+                painter.setPen(QPen(QColor(255,255,255,120),1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolygon(QPolygonF(poly))
+                sx0 = gx0 + margin*(gx1-gx0)
+                sx1 = gx1 - margin*(gx1-gx0)
+                sy0 = gy0 + margin*(gy1-gy0)
+                sy1 = gy1 - margin*(gy1-gy0)
+                s_poly = map_rect(sx0,sy0,sx1,sy1)
+                painter.setPen(QPen(QColor(0,255,0,200),1))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolygon(QPolygonF(s_poly))
+                # 参考色小块（填充，无描边）
+                rx0 = gx0 + ref_margin*(gx1-gx0)
+                rx1 = gx1 - ref_margin*(gx1-gx0)
+                ry0 = gy0 + ref_margin*(gy1-gy0)
+                ry1 = gy1 - ref_margin*(gy1-gy0)
+                r_poly = map_rect(rx0, ry0, rx1, ry1)
+                if self.cc_ref_qcolors is not None:
+                    idx = r*6 + c
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(self.cc_ref_qcolors[idx])
+                    painter.drawPolygon(QPolygonF(r_poly))
+
+    def _ensure_cc_reference_colors(self):
+        """生成24个参考颜色（QColor，按A1..D6），以 Display P3 显示。"""
+        try:
+            from divere.core.color_science import colorchecker_display_p3_qcolors
+            self.cc_ref_qcolors = colorchecker_display_p3_qcolors()
+        except Exception as e:
+            print(f"生成参考颜色失败: {e}")
+            self.cc_ref_qcolors = None
     
     def _setup_mouse_controls(self):
         """设置鼠标控制"""
@@ -334,6 +440,15 @@ class PreviewWidget(QWidget):
     def _mouse_press_event(self, event):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            # 色卡角点命中测试（优先）
+            if self.cc_enabled and self.cc_corners:
+                m = event.position()
+                for idx, (ix, iy) in enumerate(self.cc_corners):
+                    dx = (ix * float(self.zoom_factor) + float(self.pan_x)) - float(m.x())
+                    dy = (iy * float(self.zoom_factor) + float(self.pan_y)) - float(m.y())
+                    if (dx*dx + dy*dy) ** 0.5 <= self.cc_handle_radius_disp:
+                        self.cc_drag_idx = idx
+                        event.accept(); return
             self.dragging = True
             self.last_mouse_pos = event.pos()
             self.drag_start_pos = event.pos()
@@ -348,6 +463,12 @@ class PreviewWidget(QWidget):
     
     def _mouse_move_event(self, event):
         """鼠标移动事件"""
+        if self.cc_enabled and self.cc_drag_idx is not None:
+            m = event.position()
+            ix = (float(m.x()) - float(self.pan_x)) / float(self.zoom_factor)
+            iy = (float(m.y()) - float(self.pan_y)) / float(self.zoom_factor)
+            self.cc_corners[self.cc_drag_idx] = (ix, iy)
+            self._update_display(); event.accept(); return
         if self.dragging and self.last_mouse_pos:
             delta = event.pos() - self.last_mouse_pos
             
@@ -369,6 +490,7 @@ class PreviewWidget(QWidget):
     def _mouse_release_event(self, event):
         """鼠标释放事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            self.cc_drag_idx = None
             self.dragging = False
             self.last_mouse_pos = None
             self.drag_start_pos = None
@@ -423,6 +545,54 @@ class PreviewWidget(QWidget):
         self._clamp_pan()
 
         self._update_display()
+
+    # ===== 色卡选择器：读取24色块平均色（XYZ） =====
+    def read_colorchecker_xyz(self):
+        """读取当前色卡选择器24块的平均颜色（XYZ），返回 ndarray (24, 3)。行序为4行x6列。"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return None
+        import numpy as np
+        import cv2
+        from colour import RGB_COLOURSPACES, RGB_to_XYZ
+        arr = self.current_image.array
+        if arr.dtype == np.uint8:
+            arr = arr.astype(np.float32) / 255.0
+        else:
+            arr = np.clip(arr, 0.0, 1.0).astype(np.float32)
+        H_img, W_img = arr.shape[:2]
+        src = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.float32)
+        dst = np.array(self.cc_corners, dtype=np.float32)
+        H = cv2.getPerspectiveTransform(src, dst)
+        margin = 0.18
+        xyz_list = []
+        for r in range(4):
+            for c in range(6):
+                gx0 = c/6.0; gx1=(c+1)/6.0
+                gy0 = r/4.0; gy1=(r+1)/4.0
+                sx0 = gx0 + margin*(gx1-gx0)
+                sx1 = gx1 - margin*(gx1-gx0)
+                sy0 = gy0 + margin*(gy1-gy0)
+                sy1 = gy1 - margin*(gy1-gy0)
+                rect = np.array([[sx0,sy0],[sx1,sy0],[sx1,sy1],[sx0,sy1]], dtype=np.float32)
+                rect_h = np.hstack([rect, np.ones((4,1), dtype=np.float32)])
+                poly = (H @ rect_h.T).T
+                poly = poly[:,:2] / poly[:,2:3]
+                poly_int = np.round(poly).astype(np.int32)
+                mask = np.zeros((H_img, W_img), dtype=np.uint8)
+                cv2.fillPoly(mask, [poly_int], 255)
+                m = mask.astype(bool)
+                if not np.any(m):
+                    rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                else:
+                    rgb = arr[m].reshape(-1, arr.shape[2]).mean(axis=0)
+                # 假设预览为 DisplayP3
+                try:
+                    cs = RGB_COLOURSPACES.get('Display P3')
+                    XYZ = RGB_to_XYZ(rgb, cs.whitepoint, cs.whitepoint, cs.matrix_RGB_to_XYZ)
+                except Exception:
+                    XYZ = rgb
+                xyz_list.append(XYZ.astype(np.float32))
+        return np.stack(xyz_list, axis=0)
 
     # ===== 旋转锚点支持 =====
     def prepare_rotate(self, direction: int):

@@ -1,0 +1,16 @@
+{
+    "description": "ColorChecker色块权重配置",
+    "version": "1.0",
+    "weights": {
+        "grayscale_weight": 10.0,
+        "skin_weight": 2.0,
+        "primaries_weight": 1.0,
+        "color_weight": 1.0
+    },
+    "patch_categories": {
+        "grayscale": ["D1", "D2", "D3", "D4", "D5", "D6"],
+        "skin": ["A1", "A2"],
+        "primaries": ["C1", "C2", "C3", "C4", "C5", "C6"],
+        "color": ["A3", "A4", "A5", "A6", "B1", "B2", "B3", "B4", "B5", "B6"]
+    }
+}

@@ -2,7 +2,8 @@ name: Build DiVERE Application (PyInstaller)
 
 on:
   push:
-    tags: ['v*']
+    branches: ['main']
+    #tags: ['v*']
   workflow_dispatch:
   
 permissions:
@@ -166,6 +167,7 @@ jobs:
           --add-data "divere/assets${DATA_SEP}assets" \
           --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
+          --collect-binaries sklearn \
           --collect-all cupy \
           --collect-submodules sklearn \
           --hidden-import "sklearn.linear_model" \

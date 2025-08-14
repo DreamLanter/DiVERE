@@ -21,7 +21,7 @@ class UcsTriangleWidget(QtWidgets.QWidget):
         # 用户已校正：(0,0) 位于像素 (105, 100)（自左下角），每 0.1 = 297 px → 每 1.0 = 2970 px
         self._origin_from_left = 105.0
         self._origin_from_bottom = 100.0
-        self._pixels_per_unit = 2970.0
+        self._pixels_per_unit = 3075.0
 
         # 交互配置
         self._point_radius = 8.0

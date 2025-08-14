@@ -19,15 +19,23 @@ from pathlib import Path
 from typing import Dict, Tuple, List, Optional, Any
 import sys
 
-# 添加项目根目录到路径
+# 项目根目录（源码情形下可用），冻结环境下可能无效，但不强依赖
 project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
-# 直接导入，因为我们在项目根目录下运行
-sys.path.insert(0, str(project_root / "divere"))
-from utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator
-from utils.ccm_optimizer.extractor import extract_colorchecker_patches
+# 兼容导入（冻结/源码/包内）
+try:
+    from divere.utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
+    from divere.utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
+except Exception:
+    try:
+        from .pipeline import DiVEREPipelineSimulator  # type: ignore
+        from .extractor import extract_colorchecker_patches  # type: ignore
+    except Exception:
+        try:
+            from utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
+            from utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
+        except Exception as e:
+            raise ImportError(f"无法导入CCM优化器依赖: {e}")
 
 class CCMOptimizer:
     """CCM参数优化器"""
@@ -85,9 +93,15 @@ class CCMOptimizer:
     # ===== 权重：加载与查询 =====
     def _load_weights_config(self, weights_config_path: Optional[str]) -> Dict[str, Any]:
         """加载色块权重配置；失败时返回默认等权。"""
-        # 默认路径：<project_root>/divere/config/colorchecker/weights.json
-        default_path = project_root / "divere" / "config" / "colorchecker" / "weights.json"
-        path = Path(weights_config_path) if weights_config_path else default_path
+        # 默认路径：使用统一的资源解析入口
+        if weights_config_path:
+            path = Path(weights_config_path)
+        else:
+            try:
+                from divere.utils.app_paths import resolve_data_path
+                path = resolve_data_path("config", "colorchecker", "weights.json")
+            except Exception:
+                path = project_root / "divere" / "config" / "colorchecker" / "weights.json"
         try:
             if path.exists():
                 with open(path, 'r', encoding='utf-8') as f:

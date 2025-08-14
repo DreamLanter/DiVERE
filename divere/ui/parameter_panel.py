@@ -189,11 +189,10 @@ class ParameterPanel(QWidget):
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
         layout.addWidget(self.save_input_colorspace_button)
 
-        # 信号：拖拽更新 → 注册自定义色彩空间并触发预览
-        def _on_ucs_changed(coords: dict):
+        # 仅在拖动结束后重载：减少UI线程重活，避免Windows下高频触发崩溃
+        def _apply_ucs_coords(coords: dict):
             if not self.enable_scanner_spectral_checkbox.isChecked():
                 return
-            # 将 u'v' 转 xy
             try:
                 r_uv = coords.get('R', (0.5, 0.5))
                 g_uv = coords.get('G', (0.16, 0.55))
@@ -203,9 +202,7 @@ class ParameterPanel(QWidget):
                 g_xy = uv_to_xy(g_uv[0], g_uv[1])
                 b_xy = uv_to_xy(b_uv[0], b_uv[1])
                 primaries = np.array([r_xy, g_xy, b_xy], dtype=float)
-                # 注册并切换到临时色彩空间
                 name = "ScannerSpectralSharpening"
-                # 使用当前选中空间的白点作为模板（有利于匹配预期）
                 template_space = self.input_colorspace_combo.currentText()
                 wp = None
                 info = self.main_window.color_space_manager.get_color_space_info(template_space)
@@ -213,13 +210,13 @@ class ParameterPanel(QWidget):
                     wp = np.array(info['white_point'], dtype=float)
                 self.main_window.color_space_manager.register_custom_colorspace(name, primaries, white_point_xy=wp, gamma=1.0)
                 self.main_window.input_color_space = name
-                # 触发预览
                 if self.main_window.current_image:
                     self.main_window._reload_with_color_space()
             except Exception as e:
-                print(f"UCS更新失败: {e}")
+                print(f"UCS坐标应用失败: {e}")
 
-        self.ucs_widget.coordinatesChanged.connect(_on_ucs_changed)
+        # 改为在拖动结束时触发
+        self.ucs_widget.dragFinished.connect(_apply_ucs_coords)
         # 右键重置某个点到当前选定空间的对应位置
         def _on_reset_point(key: str):
             try:

@@ -8,6 +8,8 @@ from divere.core.color_space import uv_to_xy
 class UcsTriangleWidget(QtWidgets.QWidget):
     coordinatesChanged = QtCore.Signal(dict)
     resetPointRequested = QtCore.Signal(str)
+    # 新增：拖动结束后发射最终坐标（仅在释放鼠标且曾经处于拖动状态时触发）
+    dragFinished = QtCore.Signal(dict)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -219,7 +221,12 @@ class UcsTriangleWidget(QtWidgets.QWidget):
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if self._dragging_key is not None:
+            # 结束拖动：发射一次最终坐标
             self._dragging_key = None
             self.setCursor(QtCore.Qt.ArrowCursor)
+            try:
+                self.dragFinished.emit(self.get_uv_coordinates())
+            except Exception:
+                pass
 
 

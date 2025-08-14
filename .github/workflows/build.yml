@@ -75,11 +75,12 @@ jobs:
         if [ "${{ matrix.arch }}" = "x64" ] && [ "${{ matrix.platform }}" = "macos" ]; then
           pip install --upgrade onnxruntime
         fi
-        # 可选GPU依赖
+        # GPU 相关依赖
         if [ "${{ matrix.platform }}" = "macos" ]; then
           pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders || true
         fi
-        pip install pyopencl || true
+        # 强制安装 pyopencl（跨平台）
+        pip install pyopencl
         # Windows 上可选尝试安装 CuPy（CUDA），在 GitHub 托管 runner 上通常无 NVIDIA 驱动，仅供自托管机使用
         if [ "${{ matrix.platform }}" = "windows" ]; then
           echo "Attempting to install CuPy (CUDA) wheels..."
@@ -97,7 +98,7 @@ jobs:
         python - <<'PY'
         import importlib, sys
         required = [
-          'PySide6', 'numpy', 'cv2', 'PIL', 'scipy', 'imageio', 'colour', 'onnxruntime', 'sklearn'
+          'PySide6', 'numpy', 'cv2', 'PIL', 'scipy', 'imageio', 'colour', 'onnxruntime', 'pyopencl'
         ]
         missing = []
         for m in required:
@@ -167,10 +168,8 @@ jobs:
           --add-data "divere/assets${DATA_SEP}assets" \
           --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
-          --collect-binaries sklearn \
+          --collect-all pyopencl \
           --collect-all cupy \
-          --collect-submodules sklearn \
-          --hidden-import "sklearn.linear_model" \
           --hidden-import "scipy.interpolate" \
           --hidden-import "scipy.optimize" \
           --hidden-import "scipy.ndimage" \

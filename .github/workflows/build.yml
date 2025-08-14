@@ -4,6 +4,9 @@ on:
   push:
     branches: ['**']
   workflow_dispatch:
+  # 可考虑基于 tag 触发发布：
+  # push:
+  #   tags: ['v*']
   
 jobs:
   build:
@@ -18,6 +21,10 @@ jobs:
             platform: macos
             arch: arm64
             extension: ''
+          - os: macos-13
+            platform: macos
+            arch: x64
+            extension: ''
           - os: windows-latest
             platform: windows
             arch: x64
@@ -26,6 +33,25 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    - name: Extract version from package (__init__.py)
+      run: |
+        VERSION_RAW=$(python - <<'PY'
+        import re, pathlib
+        p = pathlib.Path('divere/__init__.py').read_text(encoding='utf-8')
+        m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", p)
+        print(m.group(1) if m else "")
+        PY
+        )
+        if [ -z "$VERSION_RAW" ]; then echo "::error::Version not found in divere/__init__.py"; exit 1; fi
+        echo "VERSION=$VERSION_RAW" >> $GITHUB_ENV
+        echo "VERSION_TAG=v$VERSION_RAW" >> $GITHUB_ENV
+
+    - name: Verify tag matches version (only on tag builds)
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        if [ "${GITHUB_REF_NAME}" != "v${{ env.VERSION }}" ]; then
+          echo "::error::Git tag (${GITHUB_REF_NAME}) must equal v${{ env.VERSION }} from divere/__init__.py"; exit 1;
+        fi
 
     - name: Set up Python 3.11
       uses: actions/setup-python@v5
@@ -43,6 +69,9 @@ jobs:
         pip install -r requirements.txt
         # 明确确保 onnxruntime 安装（arm64 原生包）
         if [ "${{ matrix.arch }}" = "arm64" ]; then
+          pip install --upgrade onnxruntime
+        fi
+        if [ "${{ matrix.arch }}" = "x64" ] && [ "${{ matrix.platform }}" = "macos" ]; then
           pip install --upgrade onnxruntime
         fi
         # 可选GPU依赖
@@ -88,16 +117,51 @@ jobs:
         pip install pyinstaller pyinstaller-hooks-contrib
         python -c "import PyInstaller; print('PyInstaller', PyInstaller.__version__)"
 
+    - name: Prepare app icon (macOS)
+      if: matrix.platform == 'macos'
+      run: |
+        set -e
+        ICON_PNG="divere/assets/icon.png"
+        if [ ! -f "$ICON_PNG" ]; then echo "::warning::icon.png not found at $ICON_PNG"; exit 0; fi
+        mkdir -p icons/icon.iconset
+        sips -z 16 16   "$ICON_PNG" --out icons/icon.iconset/icon_16x16.png
+        sips -z 32 32   "$ICON_PNG" --out icons/icon.iconset/icon_16x16@2x.png
+        sips -z 32 32   "$ICON_PNG" --out icons/icon.iconset/icon_32x32.png
+        sips -z 64 64   "$ICON_PNG" --out icons/icon.iconset/icon_32x32@2x.png
+        sips -z 128 128 "$ICON_PNG" --out icons/icon.iconset/icon_128x128.png
+        sips -z 256 256 "$ICON_PNG" --out icons/icon.iconset/icon_128x128@2x.png
+        sips -z 256 256 "$ICON_PNG" --out icons/icon.iconset/icon_256x256.png
+        sips -z 512 512 "$ICON_PNG" --out icons/icon.iconset/icon_256x256@2x.png
+        sips -z 512 512 "$ICON_PNG" --out icons/icon.iconset/icon_512x512.png
+        sips -z 1024 1024 "$ICON_PNG" --out icons/icon.iconset/icon_512x512@2x.png
+        iconutil -c icns -o icons/app.icns icons/icon.iconset
+        ls -la icons || true
+
+    - name: Prepare app icon (Windows)
+      if: matrix.platform == 'windows'
+      shell: pwsh
+      run: |
+        $png = "divere/assets/icon.png"
+        if (!(Test-Path $png)) { Write-Host "::warning::icon.png not found at $png"; exit 0 }
+        New-Item -ItemType Directory -Force -Path icons | Out-Null
+        $code = 'from PIL import Image; from pathlib import Path; p=Path("divere/assets/icon.png"); out=Path("icons/app.ico"); im=Image.open(p); im.save(out, sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)]); print("ICO written to", out)'
+        python -c $code
+        dir icons
+
     - name: Build with PyInstaller
       run: |
         rm -rf build dist *.spec || true
         # PyInstaller --add-data 在 Windows 使用分号 ;，在 macOS 使用冒号 :
         DATA_SEP=':'
         if [ "${{ matrix.platform }}" = "windows" ]; then DATA_SEP=';'; fi
+        ICON_ARG=""
+        if [ "${{ matrix.platform }}" = "macos" ] && [ -f icons/app.icns ]; then ICON_ARG="--icon icons/app.icns"; fi
+        if [ "${{ matrix.platform }}" = "windows" ] && [ -f icons/app.ico ]; then ICON_ARG="--icon icons/app.ico"; fi
         python -m PyInstaller \
           -y --clean --noconfirm \
           --windowed \
           --name "DiVERE" \
+          ${ICON_ARG} \
           --add-data "divere/config${DATA_SEP}config" \
           --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
@@ -213,25 +277,60 @@ jobs:
       run: |
         app_bundle=$(find dist -type d -name "*.app" | head -1)
         cd dist
-        ditto -c -k --sequesterRsrc --keepParent "$(basename "$app_bundle")" "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+        ditto -c -k --sequesterRsrc --keepParent "$(basename "$app_bundle")" "DiVERE-${{ env.VERSION_TAG }}-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
-    - name: Package Windows App (zip)
-      if: matrix.platform == 'windows'
-      shell: pwsh
-      run: |
-        $dist = "dist"
-        $folder = Join-Path $dist "DiVERE"
-        if (!(Test-Path $folder)) {
-          Write-Error "DiVERE folder not found under dist"
-          Get-ChildItem -Force $dist | Format-List
-          exit 1
-        }
-        $zipPath = Join-Path $dist "DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip"
-        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-        Compress-Archive -Path (Join-Path $folder '*') -DestinationPath $zipPath -Force
-
-    - name: Upload build artifact
+    - name: Upload build artifact (macOS)
+      if: matrix.platform == 'macos'
       uses: actions/upload-artifact@v4
       with:
-        name: DiVERE-${{ matrix.platform }}-${{ matrix.arch }}
-        path: dist/DiVERE-${{ matrix.platform }}-${{ matrix.arch }}.zip
+        name: DiVERE-${{ env.VERSION_TAG }}-${{ matrix.platform }}-${{ matrix.arch }}
+        path: dist/DiVERE-${{ env.VERSION_TAG }}-${{ matrix.platform }}-${{ matrix.arch }}.zip
+
+    - name: Upload build artifact (Windows)
+      if: matrix.platform == 'windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: DiVERE-${{ env.VERSION_TAG }}-${{ matrix.platform }}-${{ matrix.arch }}
+        path: dist/DiVERE
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Set VERSION_TAG from git tag
+        run: echo "VERSION_TAG=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: DiVERE-${{ env.VERSION_TAG }}-*
+
+      - name: Prepare release assets (zip Windows folder)
+        run: |
+          set -e
+          ls -la artifacts || true
+          # Windows artifact is a folder; zip it for release
+          for dir in artifacts/DiVERE-${{ env.VERSION_TAG }}-windows-*; do
+            if [ -d "$dir" ]; then
+              zipname="$dir.zip"
+              (cd "$dir" && zip -r ../"$(basename "$zipname")" .)
+            fi
+          done
+          # Move all zips to top-level release-assets
+          mkdir -p release-assets
+          find artifacts -name "*.zip" -maxdepth 2 -print -exec mv {} release-assets/ \;
+          echo "Release assets:" && ls -la release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: DiVERE ${{ env.VERSION_TAG }}
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

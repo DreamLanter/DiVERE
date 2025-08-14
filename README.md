@@ -1,6 +1,6 @@
 # DiVERE - 胶片校色工具
 
-[![Python](https://img.shields.io/badge/Python-3.9~3.11-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.9~3.11-blue.svg)](https://www.python.org/downloads/) ![Version](https://img.shields.io/badge/Version-v0.1.10-orange)
 [![PySide6](https://img.shields.io/badge/PySide6-6.5+-green.svg)](https://pypi.org/project/PySide6/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 

@@ -185,67 +185,7 @@ class TheEnlarger:
     # 自动白平衡
     # =======================
 
-    def calculate_auto_gain_legacy(self, image: ImageData, njet: int = 1, p_norm: float = 6.0, sigma: float = 1.0) -> Tuple[float, float, float, float, float, float]:
-        """
-        使用通用的颜色恒常性算法 (基于 general_cc.m) 计算自动白平衡的RGB增益。
-        - njet=0: Shades of Gray
-        - njet=1: 1st-order Gray Edge
-        
-        返回: (r_gain, g_gain, b_gain, r_illuminant, g_illuminant, b_illuminant)
-        """
-        if image.array is None or image.array.size == 0:
-            return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-        
-
-        # 确保图像数据在 [0, 255] 范围内
-        img_uint8 = image.array.copy()
-        if img_uint8.max() <= 1.0:
-            img_uint8 = (img_uint8 * 255).astype(np.uint8)
-
-        # 1. 创建饱和点遮罩
-        saturation_mask = np.max(img_uint8, axis=2) >= 255
-        dilated_mask = binary_dilation(saturation_mask, iterations=1)
-        mask = ~dilated_mask
-
-        img_float = img_uint8.astype(np.float32)
-
-        # 2. 计算导数或进行平滑
-        if njet > 0:
-            # Gray-Edge: 计算梯度幅度
-            dx = gaussian_filter(img_float, sigma, order=(0, 1, 0))
-            dy = gaussian_filter(img_float, sigma, order=(1, 0, 0))
-            processed_data = np.sqrt(dx**2 + dy**2)
-        else:
-            # Shades of Gray: 应用高斯模糊
-            processed_data = gaussian_filter(img_float, sigma, order=0)
-
-        processed_data = np.abs(processed_data)
-        
-        # 3. Minkowski范数计算 (应用遮罩)
-        illuminant_estimate = np.zeros(3)
-        for i in range(3):
-            channel_data = processed_data[:, :, i]
-            masked_channel = channel_data[mask]
-            if masked_channel.size == 0: 
-                return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0) # 如果所有像素都被遮罩
-            illuminant_estimate[i] = np.power(np.sum(np.power(masked_channel, p_norm)), 1.0 / p_norm)
-
-        # 4. 归一化光源并计算校正因子 (以G通道为参考)
-        if np.any(illuminant_estimate < 1e-10): 
-            return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-        
-        print(f"  正在自动校色，图片光源估计值为：R={illuminant_estimate[0]:.2f}, G={illuminant_estimate[1]:.2f}, B={illuminant_estimate[2]:.2f}")
-        
-        # 使用G通道作为参考来计算校正因子
-        correction_factors = illuminant_estimate[1] / illuminant_estimate
-
-        # 5. 将校正因子转换为对数空间的增益值
-        gains = np.log10(correction_factors)
-
-        # 裁剪增益值，避免极端校正
-        gains = np.clip(gains, -1.0, 1.0)
-
-        return (gains[0], gains[1], gains[2], illuminant_estimate[0], illuminant_estimate[1], illuminant_estimate[2])
+    # legacy 方法 calculate_auto_gain_legacy 已移除（请使用 calculate_auto_gain_learning_based）
 
     def calculate_auto_gain_learning_based(self, image: ImageData) -> Tuple[float, float, float, float, float, float]:
         """
@@ -375,40 +315,4 @@ class TheEnlarger:
     # 向后兼容的Legacy方法（标记为弃用）
     # =======================
     
-    def _process_in_density_space(self, density_array: np.ndarray, params: ColorGradingParams, 
-                                 include_curve: bool = True, profile: Optional[Dict[str, float]] = None) -> np.ndarray:
-        """Legacy方法：在密度空间处理（为向后兼容保留）"""
-        print("Warning: _process_in_density_space is deprecated. Use pipeline_processor instead.")
-        
-        # 使用新的数学操作来模拟旧行为
-        result = density_array.copy()
-        
-        # 应用校正矩阵
-        if params.enable_correction_matrix and params.correction_matrix_file:
-            matrix = self._get_correction_matrix_from_params(params)
-            if matrix is not None:
-                result = self.math_ops.apply_correction_matrix(result, matrix, params.density_dmax)
-        
-        # 应用RGB增益
-        if params.enable_rgb_gains:
-            result = self.math_ops.apply_rgb_gains(result, params.rgb_gains)
-        
-        # 应用曲线
-        if include_curve and params.enable_density_curve:
-            # RGB通用曲线
-            curve_points = None
-            if params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
-                curve_points = params.curve_points
-            
-            # 单通道曲线
-            channel_curves = {}
-            if params.enable_curve_r and params.curve_points_r:
-                channel_curves['r'] = params.curve_points_r
-            if params.enable_curve_g and params.curve_points_g:
-                channel_curves['g'] = params.curve_points_g
-            if params.enable_curve_b and params.curve_points_b:
-                channel_curves['b'] = params.curve_points_b
-            
-            result = self.math_ops.apply_density_curve(result, curve_points, channel_curves)
-        
-        return result
+    # legacy 方法 _process_in_density_space 已移除（请使用 pipeline_processor.apply_full_precision_pipeline）

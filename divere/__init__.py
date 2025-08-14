@@ -11,12 +11,10 @@ from .core.image_manager import ImageManager
 from .core.color_space import ColorSpaceManager
 from .core.the_enlarger import TheEnlarger
 from .core.lut_processor import LUTProcessor
-from .core.curve_editor import CurveEditor
 
 __all__ = [
     "ImageManager",
     "ColorSpaceManager", 
     "TheEnlarger",
     "LUTProcessor",
-    "CurveEditor",
 ] 

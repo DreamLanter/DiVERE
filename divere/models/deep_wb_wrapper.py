@@ -7,7 +7,26 @@ import os
 import numpy as np
 from typing import Tuple, Optional
 from PIL import Image
-from sklearn.linear_model import LinearRegression
+class _LinearRegression:
+    """轻量线性回归实现，使用最小二乘，不依赖 sklearn。
+    拟合 X @ W ≈ Y，其中 X 为 (N, F)，Y 为 (N, 3)，W 为 (F, 3)。
+    """
+    def __init__(self):
+        self._weights = None  # type: Optional[np.ndarray]
+
+    def fit(self, X: np.ndarray, Y: np.ndarray):
+        X = np.asarray(X, dtype=np.float64)
+        Y = np.asarray(Y, dtype=np.float64)
+        # 最小二乘解
+        W, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+        self._weights = W
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if self._weights is None:
+            raise RuntimeError("_LinearRegression 尚未拟合。请先调用 fit().")
+        X = np.asarray(X, dtype=np.float64)
+        return X @ self._weights
 
 try:
     import onnxruntime as ort
@@ -29,7 +48,7 @@ def get_mapping_func(image1, image2):
     """ Computes the polynomial mapping """
     image1 = np.reshape(image1, [-1, 3])
     image2 = np.reshape(image2, [-1, 3])
-    m = LinearRegression().fit(kernelP(image1), image2)
+    m = _LinearRegression().fit(kernelP(image1), image2)
     return m
 
 

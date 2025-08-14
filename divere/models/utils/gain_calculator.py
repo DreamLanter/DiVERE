@@ -4,7 +4,23 @@ RGB Gain Calculator for Color Constancy Models
 
 import numpy as np
 from typing import Tuple, Optional
-from sklearn.linear_model import LinearRegression
+class _LinearRegression:
+    """Minimal linear regression using numpy lstsq to avoid sklearn dependency."""
+    def __init__(self):
+        self._weights = None  # type: Optional[np.ndarray]
+
+    def fit(self, X: np.ndarray, Y: np.ndarray):
+        X = np.asarray(X, dtype=np.float64)
+        Y = np.asarray(Y, dtype=np.float64)
+        W, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+        self._weights = W
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if self._weights is None:
+            raise RuntimeError("_LinearRegression is not fitted. Call fit() first.")
+        X = np.asarray(X, dtype=np.float64)
+        return X @ self._weights
 
 
 def kernelP(I: np.ndarray) -> np.ndarray:
@@ -18,18 +34,18 @@ def kernelP(I: np.ndarray) -> np.ndarray:
     ))
 
 
-def get_mapping_func(image1: np.ndarray, image2: np.ndarray) -> LinearRegression:
+def get_mapping_func(image1: np.ndarray, image2: np.ndarray) -> _LinearRegression:
     """
     Computes the simplified linear mapping between two images
     Only RGB gain terms, no cross-terms or higher-order terms
     """
     image1_flat = np.reshape(image1, [-1, 3])
     image2_flat = np.reshape(image2, [-1, 3])
-    m = LinearRegression().fit(kernelP(image1_flat), image2_flat)
+    m = _LinearRegression().fit(kernelP(image1_flat), image2_flat)
     return m
 
 
-def apply_mapping_func(image: np.ndarray, m: LinearRegression) -> np.ndarray:
+def apply_mapping_func(image: np.ndarray, m: _LinearRegression) -> np.ndarray:
     """
     Applies the simplified linear mapping to an image
     """

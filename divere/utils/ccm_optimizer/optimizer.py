@@ -80,15 +80,42 @@ class CCMOptimizer:
         }
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
-        """加载参考RGB值"""
-        file_path = Path(__file__).parent / reference_file
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data['data']
-        except Exception as e:
-            print(f"警告：无法加载参考文件 {reference_file}: {e}")
-            return {}
+        """加载参考RGB值
+        优先从统一数据路径 `config/colorchecker/<file>` 解析；
+        冻结环境下优先使用可执行目录旁的 `config`；开发环境回退到包内同目录或 `divere/config/colorchecker`。
+        """
+        candidates: List[Path] = []
+        # 允许外部传绝对路径
+        rf = Path(reference_file)
+        if rf.is_absolute():
+            candidates.append(rf)
+        else:
+            # 1) 统一资源定位：config/colorchecker/<name>
+            try:
+                from divere.utils.app_paths import resolve_data_path  # type: ignore
+                candidates.append(resolve_data_path("config", "colorchecker", reference_file))
+            except Exception:
+                pass
+            # 2) 包内同目录（兼容旧路径）
+            candidates.append(Path(__file__).parent / reference_file)
+            # 3) 包内标准位置：divere/config/colorchecker/<name>
+            candidates.append(project_root / "config" / "colorchecker" / reference_file)
+
+        for p in candidates:
+            try:
+                if p.exists():
+                    with open(p, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        return data.get('data', {})
+            except Exception:
+                # 继续尝试下一个候选
+                pass
+
+        print(
+            f"警告：无法加载参考文件 {reference_file}: 未在以下位置找到可用文件: "
+            f"{[str(x) for x in candidates]}"
+        )
+        return {}
 
     # ===== 权重：加载与查询 =====
     def _load_weights_config(self, weights_config_path: Optional[str]) -> Dict[str, Any]:

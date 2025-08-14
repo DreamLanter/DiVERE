@@ -154,7 +154,7 @@ class ParameterPanel(QWidget):
         # 添加说明文字框
         note_group = QGroupBox("重要说明")
         note_layout = QVBoxLayout(note_group)
-        note_text = QLabel("Note: 当前版本的DiVERE用的色彩管理是石器时代手搓版，暂时没有读取照片ICC的能力，照片进来后会直接进行色彩空间的基色变换，这意味着要求扫描件数据的gamma=1。推荐的实践：用vuescan软件搭配平板扫描做gamma=1的tiff文件，并且不做任何额外的色彩管理。\n Epson、X5推荐用AdobeRGB_Linear\n Nikon扫描推荐用Film_KodakRGB_Linear\n 翻拍由于与Status M相差太大，色彩会很难看（正在尝试用colorchecker辨识密度矩阵的功能）")
+        note_text = QLabel("Note: \n 这一步并非要做传统意义上的色彩管理，而是通过一个线性变换将扫描仪的谱特性（光源谱x传感器谱）转化为Status M。不可避免地，若硬件条件不好（比如使用了显色非常高的光源），可能出现非常大的Luther误差。\n 任何新的扫描仪、翻拍套装都需要用常用胶片拍摄爱色丽色卡，用“扫描仪光谱锐化”工具计算输入色彩空间。\n 作者手头上有Nikon 5000ED，Epson V700扫描仪和哈苏X5的扫描件，推荐实践是：- Nikon 扫描仪使用Nikon5000ED_Linear，- Epson 扫描仪和哈苏扫描仪使用AdobeRGB_Linear。")
         note_text.setWordWrap(True)  # 启用自动换行
         note_text.setObjectName('noteLabel')  # 主题样式通过全局QSS控制
         note_layout.addWidget(note_text)

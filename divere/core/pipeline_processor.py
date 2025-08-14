@@ -138,15 +138,15 @@ class FilmPipelineProcessor:
             
             # 第一步：快速降采样
             temp_proxy = cv2.resize(image_array, (intermediate_w, intermediate_h), 
-                                  interpolation=cv2.INTER_AREA)
+                                  interpolation=cv2.INTER_CUBIC)
             
             # 第二步：精细调整到目标尺寸
             proxy = cv2.resize(temp_proxy, (new_w, new_h), 
-                             interpolation=cv2.INTER_LINEAR)
+                             interpolation=cv2.INTER_CUBIC)
         else:
             # 小幅度缩放：直接使用线性插值
             proxy = cv2.resize(image_array, (new_w, new_h), 
-                             interpolation=cv2.INTER_LINEAR)
+                             interpolation=cv2.INTER_CUBIC)
         
         return proxy, scale_factor
     

@@ -282,11 +282,11 @@ class ImageManager:
         new_w = int(w * scale)
         new_h = int(h * scale)
         
-        # 使用OpenCV进行高质量缩放
+        # 使用OpenCV进行高质量缩放（改为双三次插值，质量与速度均衡）
         proxy_array = cv2.resize(
             image.array, 
             (new_w, new_h), 
-            interpolation=cv2.INTER_LANCZOS4
+            interpolation=cv2.INTER_CUBIC
         )
         
         # 创建代理ImageData

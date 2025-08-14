@@ -317,7 +317,7 @@ class MainWindow(QMainWindow):
             self,
             "打开图像文件",
             last_directory,
-            "图像文件 (*.jpg *.jpeg *.png *.tiff *.tif *.bmp *.webp)"
+            "图像文件 (*.jpg *.jpeg *.png *.tiff *.tif *.bmp *.webp *.fff)"
         )
         
         if file_path:
@@ -334,6 +334,18 @@ class MainWindow(QMainWindow):
                     self.the_enlarger.preview_config.get_proxy_size_tuple()
                 )
                 
+                # 若为 .fff 文件，优先将输入色彩空间切为 AdobeRGB_Linear
+                try:
+                    if str(file_path).lower().endswith('.fff'):
+                        self.input_color_space = 'AdobeRGB_Linear'
+                        # 尝试同步参数面板下拉（若存在）
+                        if hasattr(self, 'parameter_panel') and hasattr(self.parameter_panel, 'input_colorspace_combo'):
+                            idx = self.parameter_panel.input_colorspace_combo.findText('AdobeRGB_Linear')
+                            if idx >= 0:
+                                self.parameter_panel.input_colorspace_combo.setCurrentIndex(idx)
+                except Exception:
+                    pass
+
                 # 设置输入色彩空间
                 self.current_proxy = self.color_space_manager.set_image_color_space(
                     self.current_proxy, self.input_color_space

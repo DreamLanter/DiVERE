@@ -32,7 +32,7 @@ class ImageManager:
         ext = file_path.suffix.lower()
         
         # 优先使用PIL处理TIFF以正确识别通道顺序（如RGBA/ARGB/CMYK等）
-        if ext in [".tif", ".tiff"]:
+        if ext in [".tif", ".tiff", ".fff"]:
             try:
                 pil_image = Image.open(file_path)
                 mode = pil_image.mode  # 例如: 'RGB', 'RGBA', 'CMYK', 'I;16', 'F', 'LA' 等
@@ -381,7 +381,7 @@ class ImageManager:
     def get_supported_formats(self) -> list:
         """获取支持的图像格式"""
         return [
-            '.jpg', '.jpeg', '.png', '.tiff', '.tif', 
+            '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.fff', 
             '.bmp', '.webp', '.exr', '.hdr'
         ]
     

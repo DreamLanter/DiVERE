@@ -17,6 +17,7 @@
   - 预览：每张大图仅生成一次代理（proxy），Crop 仅做等比例裁切。
   - 导出：原图按 Crop 做窗口裁切，再走分块全精度管线，控制峰值内存。
   - JSON 预设落地包含所有“值”（矩阵、曲线点、基色等），保证跨机器可重放。
+  - 缩略图选择：提供 Lightroom 式小图网格用于选择 Scan/Crop，选中后再生成“所选项专属的较大 proxy”用于主预览。
 
 ### 数据设计
 - **文件位置**: 批处理目录内放置 `divere.json`（UTF-8，`ensure_ascii=False`），所有图像使用相对路径。
@@ -108,6 +109,46 @@
 - 命令行入口
   - 扩展 `divere/__main__.py`：支持 `--batch /path/to/divere.json --export` 头less 导出。
 
+### 批量导出（自动读取设置并导出到指定文件夹）
+- 导出配置（位于 `divere.json.export`，名称+数值冗余策略贯穿）：
+  - `output_dir`: 目标输出目录（相对批处理根目录或绝对路径）。
+  - `format`: 输出格式（`TIFF`/`PNG`/`JPEG`/`EXR` 等，初版以 `TIFF`/`PNG` 为主）。
+  - `bit_depth`: 位深（8/16/32f，随格式与通道支持约束）。
+  - `color_space`: 目标显示/工作色彩空间名称（如 `DisplayP3`），内部按本地定义或回退定义注册；可选 `profile_embed`（是否内嵌ICC）。
+  - `compression`: 压缩选项（如 `tiff_lzw`/`tiff_deflate`/`png_default`/`jpeg_q90` 等）。
+  - `naming_template`（可选）：文件命名模板（默认：`{scan_base}/{crop_name}.tif`）。
+  - `structure`（可选）：目录组织方式（`by_scan`|`flat`，默认 `by_scan`）。
+  - `max_workers`（可选）：导出并发度（默认1，大图建议1-2）。
+  - `resume`/`force`（可选）：是否断点续跑、是否强制重算。
+- 命名模板占位符（便于简洁且可扩展）：
+  - `{scan_base}` 源文件名（不含扩展）；`{crop_name}`；`{index}`（同一scan内从1开始）；
+  - `{width}x{height}` 导出尺寸；`{cs_name}`/`{cs_hash}` 输入色彩空间；`{params_hash}` 合并参数哈希；`{ts}` 时间戳。
+  - 例：`"{scan_base}/{index:02d}-{crop_name}-{params_hash}.tif"`。
+- 处理流程（每个 Crop 一条“任务”）：
+  1) 合并 preset（Project→Scan→Crop）并解析 `input_colorspace`（名称+定义+哈希）；
+  2) 基于“区域裁切后再缩放”生成 Selection 级 proxy（仅用于预览），导出时使用原图裁切块；
+  3) 进入 `FilmPipelineProcessor.apply_full_precision_pipeline`（chunked=true，tile 可配置），应用合并后的 `ColorGradingParams`；
+  4) 转换到 `export.color_space`；
+  5) 保存图像：按 `format/bit_depth/compression/profile_embed` 写出；
+  6) 写入 sidecar 元数据（可选，`*.json` 同名文件）与/或在 `.divere/export_manifest.json` 记录清单项；
+  7) 记录日志与耗时、像素数、峰值内存近似值（可选）。
+- 清单与可重现（优雅简洁）：
+  - `.divere/export_manifest.json`：为每个输出记录 `source`、`bbox`、`rotation`、`effective_input_cs`（name+def+hash）、`matrix_hash`、`curve_hash`、`params_hash`、`export_cfg_hash`、`output_path`、`status`、`duration_ms`、`time`。
+  - 跳过策略：若 `resume=true` 且清单存在同 `job_hash`（由 source+bbox+rotation+全部参数哈希+导出配置哈希 组成）且 `status=done` 且目标文件存在，则跳过；`force=true` 则忽略并重算。
+- 并发与内存：
+  - 默认串行（`max_workers=1`）以控制峰值内存；当图像较小可提高并发。
+  - 策略：`by_scan` 优先（同一大图内串行处理各 crop，避免多次加载原图）；多 scan 之间可并发受控执行。
+- UI 集成（可选、最小侵入）：
+  - “工具”菜单新增“批量导出”对话框：
+    - 选择/确认 `output_dir`、`format`、`bit_depth`、`color_space`、`compression`、`naming_template`；
+    - 复选 `resume`/`force`；并发度选择；
+    - 进度条+可取消；错误汇总列表。
+  - 逻辑仍委托 `BatchManager.run_export_all()`，UI 仅为参数收集与显示。
+- 可扩展性：
+  - 导出器薄接口（后续可独立模块化）：`Exporter` 协议：`save(array, path, options, icc_profile)`；
+  - 初版直接由 `BatchManager` 内部根据 `format` 路由至 `PIL/imageio` 实现，后续可抽离到 `divere/utils/exporters.py` 并注册表驱动。
+  - 通过命名模板与哈希策略实现无需修改代码即可扩展命名规范与跳过策略。
+
 ### 预设与色彩空间（名称+数值冗余与一致性策略）
 - `ColorGradingParams`：直接复用 `to_dict()/from_dict()`，曲线点、矩阵值、RGB 增益、开关等完整保存。
 - 输入色彩空间：始终保存 `name + def`，加载时按以下优先级：
@@ -123,6 +164,32 @@
 - 导出：
   - 优先窗口裁切后再进入全精度管线（分块参数复用 `FilmPipelineProcessor`：`full_pipeline_tile_size`、`full_pipeline_max_workers`）。
   - 若无法部分读取，回落为全图加载+裁切（仍由分块控制峰值内存）。
+
+### 缩略图与选择机制（高效、优雅、最小改动）
+- 分级产物与缓存：
+  - Scan 级 proxy（中等尺寸，用于生成 crop 缩略图与快速预览）。
+  - Thumbnail（小图 ≤256px）：
+    - Scan 缩略图：由 Scan 级 proxy 直接等比缩小。
+    - Crop 缩略图：在 Scan 级 proxy 上按 bbox 做 ROI 裁切后再缩小（避免为每个 Crop 单独读取原图）。
+  - Selection 级 proxy（所选项专属的较大 proxy，用于主预览；尺寸= `PreviewConfig.proxy_max_size`）。
+- 生成与触发：
+  - 初次载入项目时：仅按需、懒生成小图（后台线程池），优先显示占位/渐进加载。
+  - 用户点击缩略图后：根据所选 Scan/Crop 生成 Selection 级 proxy：
+    - 优先从原图做“区域裁切后再缩放”生成（TIFF 可尝试惰性裁切），以获得更高质量；
+    - 若不便或开销大，则回退为在 Scan 级 proxy 上做裁切并按需放大（速度优先）。
+  - 以上产物统一以哈希命名并落地缓存：`.divere/thumbs/`（小图）、`.divere/proxies/`（中等/所选项专属 proxy），避免重复计算。
+- 命名与一致性：
+  - 哈希键包含：`文件路径 + bbox(若有) + rotation(若有) + 预览配置版本 + CS/矩阵/曲线哈希`。
+  - 当参数变化影响预览呈现（如曲线/矩阵改变）时，可选择仅失效 Selection 级 proxy；小图仍可复用以保证交互流畅。
+- UI 集成（最小侵入）：
+  - 在 `divere/ui/main_window.py` 新增一个 `QDockWidget`（例如“缩略图”），内部用 `QListView/QListWidget` 自定义 delegate 以网格形式展示 Scan/Crop 缩略图；设置 `objectName` 由主题控制。
+  - 数据源来自 `BatchManager` 提供的缩略图 API，后台异步填充；
+  - 点击某项：
+    1) 调用 `merge_presets` 得到该项的输入色彩空间与参数；
+    2) 生成 Selection 级 proxy；
+    3) 将参数与 input colorspace 应用到 `ParameterPanel` 与 `MainWindow`，触发布局与主预览刷新；
+    4) 首次选择时调用 `fit_to_window()`（遵循约定）。
+
 
 ### 接口草案（示意）
 ```python
@@ -149,7 +216,10 @@ class BatchManager:
     def export_crop(self, scan_path: Path, bbox, preset, export_cfg) -> Path:
         """导出单个 Crop，返回输出文件路径。"""
 
-    def run_export_all(self, project: BatchProject, max_workers: int = 1) -> None: ...
+    def run_export_all(self, project: BatchProject, max_workers: int = 1, resume: bool = True, force: bool = False) -> None: ...
+
+    def compute_job_hash(self, scan_path: Path, bbox, rotation, preset, export_cfg) -> str: ...
+    def build_output_path(self, export_cfg, placeholders: dict) -> Path: ...
 ```
 
 ### 实施步骤（最小改动，含冗余保存）

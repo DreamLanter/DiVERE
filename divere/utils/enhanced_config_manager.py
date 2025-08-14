@@ -36,8 +36,12 @@ class EnhancedConfigManager:
                         self.user_matrices_dir, self.user_models_dir, self.user_logs_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
         
-        # 应用内置配置目录（相对于应用根目录）
-        self.app_config_dir = Path("config")
+        # 应用内置配置目录（统一入口）：优先二进制旁顶层 config，回退到包内 divere/config
+        try:
+            from .app_paths import get_data_dir
+            self.app_config_dir = get_data_dir("config")
+        except Exception:
+            self.app_config_dir = Path("config")
         
         # 应用设置文件
         self.app_settings_file = self.user_config_dir / "config" / "app_settings.json"

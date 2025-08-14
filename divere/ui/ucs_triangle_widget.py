@@ -12,10 +12,10 @@ class UcsTriangleWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
 
-        # 背景图放在 assets 目录
-        import os
-        bg_path = os.path.join(os.path.dirname(__file__), "..", "assets", "CIE_1976_UCS.png")
-        self._background = QtGui.QPixmap(os.path.abspath(bg_path))
+        # 背景图：统一通过 app_paths 解析，优先二进制旁顶层 assets，回退到包内
+        from divere.utils.app_paths import resolve_data_path
+        bg_path = resolve_data_path("assets", "CIE_1976_UCS.png")
+        self._background = QtGui.QPixmap(str(bg_path))
 
         # 坐标换算参数
         # 用户已校正：(0,0) 位于像素 (105, 100)（自左下角），每 0.1 = 297 px → 每 1.0 = 2970 px

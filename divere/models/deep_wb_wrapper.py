@@ -129,24 +129,12 @@ class DeepWBWrapper:
         if not ONNX_AVAILABLE:
             raise ImportError("ONNX Runtime is not available")
         
-        # 设置模型路径
+        # 设置模型路径（统一入口）
         if model_dir is None:
-            # 尝试多个可能的路径
-            possible_paths = [
-                os.path.dirname(__file__),  # 源代码路径
-                os.path.join(os.path.dirname(__file__), '..', '..', 'models'),  # 打包后的路径
-                os.path.join(os.path.dirname(__file__), '..', '..', '..', 'models'),  # 另一种打包路径
-                'models'  # 当前工作目录下的 models
-            ]
-            
-            # 查找存在的路径
-            for path in possible_paths:
-                test_path = os.path.join(path, 'net_awb.onnx')
-                if os.path.exists(test_path):
-                    self.model_dir = path
-                    break
-            else:
-                # 如果都找不到，使用默认路径
+            try:
+                from divere.utils.app_paths import get_data_dir
+                self.model_dir = str(get_data_dir('models'))
+            except Exception:
                 self.model_dir = os.path.dirname(__file__)
         else:
             self.model_dir = model_dir

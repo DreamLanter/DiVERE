@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QMenuBar, QToolBar, QStatusBar, QFileDialog, QMessageBox,
-    QSplitter, QLabel, QDockWidget, QDialog
+    QSplitter, QLabel, QDockWidget, QDialog, QApplication
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal, QRunnable, Slot, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
@@ -27,6 +27,7 @@ from divere.utils.enhanced_config_manager import enhanced_config_manager
 from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
 from .parameter_panel import ParameterPanel
+from .theme import apply_theme, current_theme
 
 
 class _PreviewWorkerSignals(QObject):
@@ -89,6 +90,13 @@ class MainWindow(QMainWindow):
         self._create_menus()
         self._create_toolbar()
         self._create_statusbar()
+        # 主题：启动时应用上次选择
+        try:
+            app = QApplication.instance()
+            saved_theme = enhanced_config_manager.get_ui_setting("theme", "dark")
+            apply_theme(app, saved_theme)
+        except Exception as _:
+            pass
         
         # 初始化默认色彩空间
         self._initialize_color_space_info()
@@ -101,6 +109,8 @@ class MainWindow(QMainWindow):
         
         # 拖动状态跟踪
         self.is_dragging = False
+        # 首次加载后在首帧预览到达时适应窗口
+        self._fit_after_next_preview: bool = False
         
         # 预览后台线程池与任务调度
         self.thread_pool: QThreadPool = QThreadPool.globalInstance()
@@ -210,6 +220,17 @@ class MainWindow(QMainWindow):
         reset_view_action.setShortcut(QKeySequence("0"))
         reset_view_action.triggered.connect(self._reset_view)
         view_menu.addAction(reset_view_action)
+
+        # 主题切换
+        view_menu.addSeparator()
+        dark_action = QAction("暗黑模式", self)
+        dark_action.setCheckable(True)
+        try:
+            dark_action.setChecked(current_theme(QApplication.instance()) == "dark")
+        except Exception:
+            dark_action.setChecked(True)
+        dark_action.toggled.connect(self._toggle_dark_mode)
+        view_menu.addAction(dark_action)
         
         # 工具菜单
         tools_menu = menubar.addMenu("工具")
@@ -243,33 +264,9 @@ class MainWindow(QMainWindow):
     def _create_toolbar(self):
         """创建工具栏"""
         toolbar = QToolBar()
+        toolbar.setObjectName("mainToolBar")
         self.addToolBar(toolbar)
         
-        # 设置工具栏样式，让按钮更和谐
-        toolbar.setStyleSheet("""
-            QToolBar {
-                spacing: 6px;
-                padding: 3px;
-            }
-            QToolButton {
-                min-width: 60px;
-                min-height: 24px;
-                font-size: 12px;
-                font-weight: normal;
-                padding: 4px 8px;
-                border: 1px solid #cccccc;
-                border-radius: 3px;
-                background-color: #f8f8f8;
-            }
-            QToolButton:hover {
-                background-color: #e8e8e8;
-                border-color: #999999;
-            }
-            QToolButton:pressed {
-                background-color: #d8d8d8;
-                border-color: #666666;
-            }
-        """)
         
         # 打开图像
         open_action = QAction("打开", self)
@@ -293,6 +290,23 @@ class MainWindow(QMainWindow):
     def _create_statusbar(self):
         """创建状态栏"""
         self.statusBar().showMessage("就绪")
+
+    def _apply_theme_and_refresh(self, theme: str):
+        try:
+            app = QApplication.instance()
+            apply_theme(app, theme)
+            enhanced_config_manager.set_ui_setting("theme", theme)
+            # 将主题传递给曲线编辑器的自绘颜色
+            try:
+                self.parameter_panel.curve_editor.curve_edit_widget.apply_palette(app.palette(), theme)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"应用主题失败: {e}")
+
+    def _toggle_dark_mode(self, enabled: bool):
+        theme = "dark" if enabled else "light"
+        self._apply_theme_and_refresh(theme)
     
     def _open_image(self):
         """打开图像文件"""
@@ -337,11 +351,9 @@ class MainWindow(QMainWindow):
                 self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
                 print(f"生成实时预览代理: {self.current_proxy.width}x{self.current_proxy.height}")
                 
-                # 触发预览
+                # 触发预览，并在首帧结果到达时适应窗口
+                self._fit_after_next_preview = True
                 self._update_preview()
-                
-                # 首次加载后，适应窗口一次
-                self.preview_widget.fit_to_window()
                 
                 self.statusBar().showMessage(f"已加载图像: {Path(file_path).name}")
                 
@@ -710,6 +722,12 @@ class MainWindow(QMainWindow):
         # 应用最新结果
         t0, t1, t2 = timings
         self.preview_widget.set_image(result_image)
+        # 若标记为首帧需要适应窗口，则在真正有图像时触发一次
+        if getattr(self, "_fit_after_next_preview", False):
+            try:
+                self.preview_widget.fit_to_window()
+            finally:
+                self._fit_after_next_preview = False
         print(f"预览耗时: 管线={(t1 - t0)*1000:.1f}ms, 显示色彩转换={(t2 - t1)*1000:.1f}ms, 总={(t2 - t0)*1000:.1f}ms")
         # 发出预览已更新信号
         self.preview_updated.emit()

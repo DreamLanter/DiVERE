@@ -39,12 +39,14 @@ class CurveEditWidget(QWidget):
         self.selected_point = -1
         self.dragging = False
         
-        # 样式设置 - 更细致、低调的外观
+        # 样式设置 - 使用可更新的调色板变量
         self.grid_color = QColor(220, 220, 220)
-        self.curve_color = QColor(80, 80, 80)  # 深灰色，低调
-        self.point_color = QColor(100, 100, 100)  # 灰色控制点
-        self.selected_point_color = QColor(60, 60, 60)  # 深灰色选中点
-        self.background_color = QColor(250, 250, 250)  # 更浅的背景
+        self.curve_color = QColor(80, 80, 80)
+        self.point_color = QColor(100, 100, 100)
+        self.selected_point_color = QColor(60, 60, 60)
+        self.background_color = QColor(250, 250, 250)
+        self.text_color = QColor(20, 20, 20)
+        self.frame_color = QColor(0, 0, 0)
         
         # 通道曲线颜色
         self.channel_colors = {
@@ -395,7 +397,7 @@ class CurveEditWidget(QWidget):
                                int(x), int(draw_rect.bottom()))
         
         # 绘制边框
-        painter.setPen(QPen(Qt.GlobalColor.black, 2))
+        painter.setPen(QPen(self.frame_color, 2))
         painter.drawRect(draw_rect)
         
         # 绘制曲线
@@ -443,7 +445,7 @@ class CurveEditWidget(QWidget):
             painter.drawEllipse(int(wx - 3), int(wy - 3), 6, 6)  # 更小的控制点
         
         # 绘制坐标标签
-        painter.setPen(QPen(Qt.GlobalColor.black, 1))
+        painter.setPen(QPen(self.text_color, 1))
         font = painter.font()
         font.setPointSize(8)
         painter.setFont(font)
@@ -481,6 +483,7 @@ class CurveEditWidget(QWidget):
         # X轴标题
         x_title = "输入密度"
         x_title_width = painter.fontMetrics().horizontalAdvance(x_title)
+        painter.setPen(QPen(self.text_color, 1))
         painter.drawText(int(draw_rect.center().x() - x_title_width // 2), 
                         int(draw_rect.bottom()) + 35, x_title)
         
@@ -490,8 +493,44 @@ class CurveEditWidget(QWidget):
         painter.rotate(-90)
         y_title = "输出密度"
         y_title_width = painter.fontMetrics().horizontalAdvance(y_title)
+        painter.setPen(QPen(self.text_color, 1))
         painter.drawText(-y_title_width // 2, -5, y_title)
         painter.restore()
+
+    def apply_palette(self, palette, theme: str):
+        """根据主题/调色板更新绘制颜色（不更改业务逻辑）。"""
+        try:
+            if (theme or "dark").lower() == "dark":
+                self.background_color = QColor(45, 45, 45)
+                self.grid_color = QColor(90, 90, 90)
+                self.curve_color = QColor(220, 220, 220)
+                self.point_color = QColor(210, 210, 210)
+                self.selected_point_color = QColor(255, 255, 255)
+                self.text_color = QColor(230, 230, 230)
+                self.frame_color = QColor(120, 120, 120)
+                self.channel_colors = {
+                    'RGB': QColor(220, 220, 220),
+                    'R': QColor(255, 120, 120, 180),
+                    'G': QColor(120, 255, 120, 180),
+                    'B': QColor(120, 120, 255, 180),
+                }
+            else:
+                self.background_color = palette.window().color() if hasattr(palette, 'window') else QColor(250, 250, 250)
+                self.grid_color = QColor(220, 220, 220)
+                self.curve_color = QColor(80, 80, 80)
+                self.point_color = QColor(100, 100, 100)
+                self.selected_point_color = QColor(60, 60, 60)
+                self.text_color = QColor(20, 20, 20)
+                self.frame_color = QColor(0, 0, 0)
+                self.channel_colors = {
+                    'RGB': QColor(80, 80, 80),
+                    'R': QColor(200, 80, 80, 128),
+                    'G': QColor(80, 200, 80, 128),
+                    'B': QColor(80, 80, 200, 128),
+                }
+            self.update()
+        except Exception:
+            pass
 
 
 class CurveEditorWidget(QWidget):

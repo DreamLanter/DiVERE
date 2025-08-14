@@ -205,9 +205,10 @@ class PreviewWidget(QWidget):
         self.center_btn.setMaximumWidth(80)
         self.fit_window_btn.clicked.connect(self.fit_to_window)
         self.center_btn.clicked.connect(self.center_image)
-        # 色卡选择器
+        # 色卡选择器（默认隐藏，由参数面板联动显示/控制）
         self.cc_checkbox = QCheckBox("色卡选择器")
         self.cc_checkbox.toggled.connect(self._on_cc_toggled)
+        self.cc_checkbox.setVisible(False)
         
         # 添加按钮到布局
         button_layout.addWidget(self.rotate_left_btn)
@@ -222,10 +223,10 @@ class PreviewWidget(QWidget):
         self.scroll_area.setWidgetResizable(True)
         
         self.image_label = PreviewCanvas()
+        self.image_label.setObjectName('imageCanvas')
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumSize(400, 300)
         self.image_label.setText("请加载图像")
-        self.image_label.setStyleSheet("QLabel { background-color: #2b2b2b; color: #ffffff; }")
         
         self.scroll_area.setWidget(self.image_label)
         layout.addWidget(self.scroll_area)

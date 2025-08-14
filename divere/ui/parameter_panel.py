@@ -156,7 +156,7 @@ class ParameterPanel(QWidget):
         note_layout = QVBoxLayout(note_group)
         note_text = QLabel("Note: 当前版本的DiVERE用的色彩管理是石器时代手搓版，暂时没有读取照片ICC的能力，照片进来后会直接进行色彩空间的基色变换，这意味着要求扫描件数据的gamma=1。推荐的实践：用vuescan软件搭配平板扫描做gamma=1的tiff文件，并且不做任何额外的色彩管理。\n Epson、X5推荐用AdobeRGB_Linear\n Nikon扫描推荐用Film_KodakRGB_Linear\n 翻拍由于与Status M相差太大，色彩会很难看（正在尝试用colorchecker辨识密度矩阵的功能）")
         note_text.setWordWrap(True)  # 启用自动换行
-        note_text.setStyleSheet("QLabel { color: #666; font-size: 11px; padding: 8px; background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; }")
+        note_text.setObjectName('noteLabel')  # 主题样式通过全局QSS控制
         note_layout.addWidget(note_text)
         layout.addWidget(note_group)
 
@@ -168,11 +168,26 @@ class ParameterPanel(QWidget):
         self.ucs_widget.setVisible(False)
         layout.addWidget(self.ucs_widget)
 
-        # 简单的CCM优化按钮
-        self.ccm_optimize_button = QPushButton("CCM优化")
+        # 色卡选择器（仅在开启扫描仪光谱锐化时显示）
+        self.cc_selector_checkbox = QCheckBox("色卡选择器")
+        self.cc_selector_checkbox.setVisible(False)
+        self.cc_selector_checkbox.toggled.connect(self._on_cc_selector_toggled)
+        layout.addWidget(self.cc_selector_checkbox)
+
+        # 简单的CCM优化按钮（仅在开启扫描仪光谱锐化时显示）
+        self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换（输入色彩空间）")
         self.ccm_optimize_button.setToolTip("从色卡选择器读取24个颜色并优化参数")
         self.ccm_optimize_button.clicked.connect(self._on_simple_ccm_optimize)
+        self.ccm_optimize_button.setVisible(False)
+        self.ccm_optimize_button.setEnabled(False)
         layout.addWidget(self.ccm_optimize_button)
+
+        # 保存输入色彩空间结果（仅在开启扫描仪光谱锐化时显示）
+        self.save_input_colorspace_button = QPushButton("保存输入色彩空间结果")
+        self.save_input_colorspace_button.setToolTip("将当前UCS三角形对应的基色(primaries)与白点保存为输入色彩空间（gamma=1.0）")
+        self.save_input_colorspace_button.setVisible(False)
+        self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
+        layout.addWidget(self.save_input_colorspace_button)
 
         # 信号：拖拽更新 → 注册自定义色彩空间并触发预览
         def _on_ucs_changed(coords: dict):
@@ -520,7 +535,31 @@ class ParameterPanel(QWidget):
     def _on_scanner_spectral_toggled(self, checked: bool):
         # 显示/隐藏 UCS 控件；启用时立即以当前空间的基色初始化
         self.ucs_widget.setVisible(bool(checked))
-        # 旧的CCM优化按钮可见性控制已移除
+        # 同步显示/隐藏 色卡选择器 与 CCM优化按钮
+        if hasattr(self, 'cc_selector_checkbox'):
+            # 当关闭时，顺便关闭色卡选择器状态并同步到预览
+            if not checked:
+                try:
+                    self.cc_selector_checkbox.blockSignals(True)
+                    self.cc_selector_checkbox.setChecked(False)
+                finally:
+                    self.cc_selector_checkbox.blockSignals(False)
+                try:
+                    if hasattr(self.main_window, 'preview_widget') and hasattr(self.main_window.preview_widget, 'cc_checkbox'):
+                        self.main_window.preview_widget.cc_checkbox.setChecked(False)
+                except Exception as e:
+                    print(f"关闭扫描仪光谱锐化时同步色卡选择器失败: {e}")
+            self.cc_selector_checkbox.setVisible(bool(checked))
+        if hasattr(self, 'ccm_optimize_button'):
+            self.ccm_optimize_button.setVisible(bool(checked))
+            try:
+                # 当显示时，根据色卡选择器勾选状态决定是否可用
+                enable_btn = bool(checked and getattr(self, 'cc_selector_checkbox', None) and self.cc_selector_checkbox.isChecked())
+                self.ccm_optimize_button.setEnabled(enable_btn)
+            except Exception:
+                self.ccm_optimize_button.setEnabled(False)
+        if hasattr(self, 'save_input_colorspace_button'):
+            self.save_input_colorspace_button.setVisible(bool(checked))
         if checked:
             space = self.input_colorspace_combo.currentText()
             try:
@@ -534,6 +573,116 @@ class ParameterPanel(QWidget):
                     self.ucs_widget.set_uv_coordinates({'R': (Ru, Rv), 'G': (Gu, Gv), 'B': (Bu, Bv)})
             except Exception as e:
                 print(f"初始化UCS失败: {e}")
+
+    def _on_cc_selector_toggled(self, checked: bool):
+        """参数面板中的色卡选择器开关 → 同步到预览组件的色卡选择器。"""
+        try:
+            if hasattr(self.main_window, 'preview_widget') and hasattr(self.main_window.preview_widget, 'cc_checkbox'):
+                self.main_window.preview_widget.cc_checkbox.setChecked(bool(checked))
+            # 同步更新CCM优化按钮的可用状态（仅在扫描仪光谱锐化开启时）
+            if hasattr(self, 'ccm_optimize_button') and hasattr(self, 'enable_scanner_spectral_checkbox'):
+                enable_btn = bool(checked and self.enable_scanner_spectral_checkbox.isChecked())
+                self.ccm_optimize_button.setEnabled(enable_btn)
+        except Exception as e:
+            print(f"同步色卡选择器状态失败: {e}")
+
+    def _on_save_input_colorspace_clicked(self):
+        """保存当前UCS三角形对应的输入色彩空间定义到JSON文件（gamma=1.0）。"""
+        try:
+            # 1) 获取当前 u'v' 三点并转换为 xy
+            coords_uv = {}
+            try:
+                coords_uv = self.ucs_widget.get_uv_coordinates()
+            except Exception:
+                pass
+            if not coords_uv or not all(k in coords_uv for k in ("R", "G", "B")):
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "警告", "没有可保存的基色坐标。请先在UCS中调整R/G/B三点。")
+                return
+            try:
+                from divere.core.color_space import uv_to_xy
+                r_xy = uv_to_xy(*coords_uv["R"])
+                g_xy = uv_to_xy(*coords_uv["G"])
+                b_xy = uv_to_xy(*coords_uv["B"])
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "错误", f"u'v' → xy 转换失败: {e}")
+                return
+
+            # 2) 获取白点（使用当前输入色彩空间的白点作为模板）
+            white_point = None
+            try:
+                space = self.input_colorspace_combo.currentText()
+                info = self.main_window.color_space_manager.get_color_space_info(space)
+                if info and 'white_point' in info:
+                    wp = info['white_point']
+                    if isinstance(wp, (list, tuple)) and len(wp) >= 2:
+                        white_point = [float(wp[0]), float(wp[1])]
+            except Exception:
+                white_point = None
+            if white_point is None:
+                # 兜底：D65（与常见工作空间一致）
+                white_point = [0.3127, 0.3290]
+
+            # 3) 询问名称与可选描述
+            from PySide6.QtWidgets import QInputDialog, QFileDialog, QMessageBox
+            name, ok = QInputDialog.getText(self, "保存输入色彩空间", "请输入色彩空间名称:")
+            if not ok or not name:
+                return
+            description, ok = QInputDialog.getText(self, "保存输入色彩空间", "请输入描述（可选）:")
+            if not ok:
+                return
+
+            # 4) 组织数据（兼容现有colorspace JSON结构）
+            data = {
+                "name": str(name),
+                "primaries": {
+                    "R": [float(r_xy[0]), float(r_xy[1])],
+                    "G": [float(g_xy[0]), float(g_xy[1])],
+                    "B": [float(b_xy[0]), float(b_xy[1])],
+                },
+                "white_point": [float(white_point[0]), float(white_point[1])],
+                "gamma": 1.0,
+            }
+            if description:
+                data["description"] = str(description)
+
+            # 5) 选择保存路径（记忆上次目录，默认到 config/colorspace）
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 生成文件名（去除特殊字符）
+            safe_filename = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')
+            last_directory = enhanced_config_manager.get_directory("save_colorspace")
+            if not last_directory:
+                last_directory = "config/colorspace"
+            default_path = f"{last_directory}/{safe_filename or 'CustomColorspace'}_{timestamp}.json"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "保存输入色彩空间",
+                default_path,
+                "JSON文件 (*.json)"
+            )
+            if not file_path:
+                return
+
+            # 6) 写入文件并提示
+            try:
+                # 保存当前目录
+                enhanced_config_manager.set_directory("save_colorspace", file_path)
+                import json
+                from pathlib import Path as _Path
+                p = _Path(file_path)
+                if p.suffix.lower() != ".json":
+                    p = p.with_suffix(".json")
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with open(p, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                QMessageBox.information(self, "成功", f"输入色彩空间已保存到：\n{str(p)}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"保存输入色彩空间失败：\n{str(e)}")
+                return
+        except Exception as e:
+            print(f"保存输入色彩空间异常: {e}")
 
     def _on_input_colorspace_changed(self, space):
         if self._is_updating_ui: return

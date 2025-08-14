@@ -291,6 +291,9 @@ jobs:
         path: dist/DiVERE
 
   release:
+    permissions:
+      contents: write
+      packages: write
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')

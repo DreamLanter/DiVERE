@@ -2,11 +2,9 @@ name: Build DiVERE Application (PyInstaller)
 
 on:
   push:
-    branches: ['**']
+    branches: ['main']
+    tags: ['v*']
   workflow_dispatch:
-  # 可考虑基于 tag 触发发布：
-  # push:
-  #   tags: ['v*']
   
 jobs:
   build:

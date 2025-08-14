@@ -95,8 +95,7 @@ numpy>=1.24.0           # 数值计算
 opencv-python>=4.8.0    # 图像处理
 pillow>=10.0.0          # 图像I/O
 scipy>=1.11.0           # 科学计算
-imageio>=2.31.0         # 图像格式支持
-rawpy>=0.18.0           # RAW文件支持
+ imageio>=2.31.0         # 图像格式支持
 colour-science>=0.4.2   # 色彩科学计算
 scikit-learn>=1.3.0     # 算法/工具（KMeans等）
 onnxruntime>=1.15.0     # ONNX 推理（自动校色）
@@ -233,7 +232,6 @@ DiVERE/
 │   │   └── lut_generator/    # LUT生成器
 │   └── models/               # AI自动校色（ONNX）
 │       ├── deep_wb_wrapper.py
-│       ├── deep_wb_wrapper_backup.py
 │       ├── utils/
 │       └── net_awb.onnx
 ├── config/                   # 配置文件

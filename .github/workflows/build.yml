@@ -2,7 +2,6 @@ name: Build DiVERE Application (PyInstaller)
 
 on:
   push:
-    branches: ['main']
     tags: ['v*']
   workflow_dispatch:
   

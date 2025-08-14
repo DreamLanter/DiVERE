@@ -2,6 +2,7 @@ name: Build DiVERE Application (PyInstaller)
 
 on:
   push:
+    branches: ['main']
     tags: ['v*']
   workflow_dispatch:
   
@@ -160,6 +161,7 @@ jobs:
           --name "DiVERE" \
           ${ICON_ARG} \
           --add-data "divere/config${DATA_SEP}config" \
+          --add-data "divere/assets${DATA_SEP}assets" \
           --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
           --collect-all cupy \
@@ -185,11 +187,14 @@ jobs:
         # Ensure config and models exist next to DiVERE.exe
         $cfg = Join-Path $appDir "config"
         $mdl = Join-Path $appDir "models"
+        $ast = Join-Path $appDir "assets"
         if (!(Test-Path $cfg)) { New-Item -ItemType Directory -Path $cfg | Out-Null }
         if (!(Test-Path $mdl)) { New-Item -ItemType Directory -Path $mdl | Out-Null }
+        if (!(Test-Path $ast)) { New-Item -ItemType Directory -Path $ast | Out-Null }
         # Copy from repo if PyInstaller didn't place them
         Copy-Item -Recurse -Force "divere/config/*" $cfg 2>$null
         Copy-Item -Recurse -Force "divere/models/*" $mdl 2>$null
+        Copy-Item -Recurse -Force "divere/assets/*" $ast 2>$null
 
     - name: Verify bundle contents (Windows)
       if: matrix.platform == 'windows'
@@ -221,6 +226,10 @@ jobs:
         if [ -d "$resources_dir/models" ]; then
           rm -rf "$macos_dir/models"
           cp -a "$resources_dir/models" "$macos_dir/models"
+        fi
+        if [ -d "$resources_dir/assets" ]; then
+          rm -rf "$macos_dir/assets"
+          cp -a "$resources_dir/assets" "$macos_dir/assets"
         fi
         echo "Relocated resources to Contents/MacOS"
 
@@ -291,9 +300,6 @@ jobs:
         path: dist/DiVERE
 
   release:
-    permissions:
-      contents: write
-      packages: write
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')

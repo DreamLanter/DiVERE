@@ -191,6 +191,50 @@
     4) 首次选择时调用 `fit_to_window()`（遵循约定）。
 
 
+### 预览模式（双 Tab：接触印像 / 单张）
+- **总体目标**：
+  - **接触印像**：当选择≥2张时，自动将所选按顺序合并为一个“大照片”进行预览。
+  - **单张**：当且仅当选择1张时可操作；在此 Tab 内提供一个极简控件按顺序切换所选集合中的照片。
+
+- **Tab 切换与选择规则**：
+  - **选择≥2**：自动切换到“接触印像”Tab；生成并显示合并后的大代理图（Contact Sheet Proxy）。
+  - **选择=1**：自动切换到“单张”Tab；显示该项的 Selection 级 proxy。
+  - **选择=0**：保留当前 Tab 状态并显示空态占位或提示。
+  - **单张 Tab 内框选≥2**：自动切换到“接触印像”Tab。
+
+- **接触印像渲染策略（预览）**：
+  - 由 `BatchManager` 提供 `build_contact_sheet_proxy(selected_items, layout_cfg)`：
+    - 各项先在各自 Selection 级代理上应用预览管线（每张独立按其合并后的参数计算），再按顺序拼接为一个大图；
+    - 初版拼接策略简化为按顺序横向或纵向拼接，由 `PreviewConfig.contact_sheet` 控制（如 `mode: 'vertical'|'horizontal'`，`tile_max_size`）；后续可扩展为自适应网格。
+  - 尺寸受 `PreviewConfig.contact_max_size` 限制；结果缓存为 `SelectionContactProxy`，Key 包含：所选路径+顺序+预览配置版本+各项参数哈希聚合。
+  - 仅作为预览产物，不改变导出行为（本版不导出接触印像）。
+
+- **单张 Tab 的极简切换控件**：
+  - 提供“上一张/下一张”按钮与当前序号/总数指示；
+  - 切换时：
+    - 高亮缩略图中的对应项；
+    - 将该项合并参数应用到 `ParameterPanel` 与 `MainWindow`，刷新预览；
+    - 保持 `fit_to_window()` 语义不变（首次显示时触发）。
+
+- **事件流与线程**：
+  - 选择变化 → 判定目标 Tab → 触发相应代理生成请求：
+    - “接触印像”：后台线程池拼接 Contact Sheet Proxy，生成期间显示渐进式占位；完成后替换主预览；
+    - “单张”：后台生成或读取 Selection 级 proxy。
+  - 参数变化导致预览失效时：仅失效受影响的 Selection 级代理；Contact Sheet Proxy 可选择整图失效或增量重建（首版整图重建）。
+
+- **代码落点（最小侵入）**：
+  - `divere/ui/main_window.py`：将主预览区域改为 `QTabWidget`（`objectName`: `previewTabs`），包含“接触印像”和“单张”两个 Tab；在创建处连接选择变化与框选信号，控制 Tab 自动切换；
+  - `divere/ui/preview_widget.py`：
+    - 保持现有单图预览；
+    - 新增显示 Contact Sheet Proxy 的模式（仅接收已拼接好的大图并渲染，是否显示分隔边界由 QSS 控制，不在此处硬编码颜色）；
+  - `divere/ui/parameter_panel.py`：无需变更；参数应用仍面向“当前所选单张”或“各自项在拼接前的单独处理”。
+  - `divere/ui/theme.py`：为 `previewTabs` 与切换控件（`objectName`: `singleNav`）提供轻量 QSS。
+  - `divere/utils/batch_manager.py`：新增 Contact Sheet 代理构建与缓存 API（见“接口草案”）。
+
+- **非目标（首版）**：
+  - 不提供接触印像的导出；
+  - 不做复杂版式编辑（固定简单顺序拼接即可）。
+
 ### 接口草案（示意）
 ```python
 # divere/utils/batch_manager.py
@@ -220,13 +264,22 @@ class BatchManager:
 
     def compute_job_hash(self, scan_path: Path, bbox, rotation, preset, export_cfg) -> str: ...
     def build_output_path(self, export_cfg, placeholders: dict) -> Path: ...
+
+    # 新增：接触印像（预览用）
+    def build_contact_sheet_proxy(
+        self,
+        selected_items: list[tuple[Path, CropRegion]],
+        layout_cfg: dict | None = None,
+    ) -> ImageData: ...
 ```
 
 ### 实施步骤（最小改动，含冗余保存）
 1. `divere/core/data_types.py` 增加轻量数据类：`ProcessingPreset`、`CropRegion`、`ScanItemSpec`、`BatchProject`。
 2. 新增 `divere/utils/batch_manager.py`：读写 JSON、路径解析、三层合并（实现名称+数值冗余策略与哈希校验）、proxy 管理、导出与任务执行。
 3. 扩展 `divere/__main__.py`：添加 `--batch` / `--export` 入口，调用 `BatchManager`。
-4. UI（可选）：`batch_dialog.py` + 菜单入口，应用合并后的 preset 到 `ParameterPanel` 与 `MainWindow.input_color_space`。
+4. UI（可选）：
+   - `batch_dialog.py` + 菜单入口，应用合并后的 preset 到 `ParameterPanel` 与 `MainWindow.input_color_space`；
+   - 主窗口预览引入双 Tab：`接触印像`/`单张`；在创建处连接选择变化与框选信号，实现自动切换；单张 Tab 增加极简顺序切换控件（`objectName: singleNav`）。
 5. 回归测试：
    - 单图多 Crop；多图单 Crop；非 TIFF/大 TIFF；`custom_colorspace` 回放；曲线/矩阵数值一致性。
    - 不同设备/不同内置配置下的重放一致性（通过哈希比对与临时空间注册验证）。

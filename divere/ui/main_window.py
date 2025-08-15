@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         self.input_color_space: str = "Film_KodakRGB_Linear"  # 默认输入色彩空间
         
         # 设置窗口
-        self.setWindowTitle("DiVERE - 专业胶片校色工具")
+        self.setWindowTitle("DiVERE - 数字彩色放大机")
         self.setGeometry(100, 100, 1400, 900)
         
         # 创建界面
@@ -676,7 +676,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "关于 DiVERE",
-            "DiVERE - 专业胶片校色工具\n\n"
+            "DiVERE - 数字彩色放大机\n\n"
             "版本: 0.1.0\n"
             "基于ACEScg Linear工作流的数字化胶片后期处理\n\n"
             "© 2025 V7"

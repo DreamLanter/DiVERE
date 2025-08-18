@@ -21,8 +21,12 @@ from divere.core.color_space import ColorSpaceManager
 from divere.core.the_enlarger import TheEnlarger
 from divere.core.lut_processor import LUTProcessor
 
-from divere.core.data_types import ImageData, ColorGradingParams
+from divere.core.data_types import (
+    ImageData, ColorGradingParams, Preset, 
+    ColorSpaceDefinition, MatrixDefinition
+)
 from divere.utils.enhanced_config_manager import enhanced_config_manager
+from divere.utils.preset_manager import PresetManager, apply_preset_to_params
 
 from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
@@ -174,6 +178,18 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_action)
         
         file_menu.addSeparator()
+
+        # 加载预设
+        load_preset_action = QAction("加载预设...", self)
+        load_preset_action.triggered.connect(self._load_preset)
+        file_menu.addAction(load_preset_action)
+
+        # 保存预设
+        save_preset_action = QAction("保存预设...", self)
+        save_preset_action.triggered.connect(self._save_preset)
+        file_menu.addAction(save_preset_action)
+        
+        file_menu.addSeparator()
         
         # 选择输入色彩空间
         colorspace_action = QAction("设置输入色彩空间", self)
@@ -187,6 +203,12 @@ class MainWindow(QMainWindow):
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(self._save_image)
         file_menu.addAction(save_action)
+
+        # 保存图像副本
+        save_as_action = QAction("另存为...", self)
+        save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        save_as_action.triggered.connect(self._save_image_as)
+        file_menu.addAction(save_as_action)
         
         file_menu.addSeparator()
         
@@ -372,6 +394,155 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"无法加载图像: {str(e)}")
     
+    def _load_preset(self):
+        """加载预设文件并应用"""
+        last_directory = enhanced_config_manager.get_directory("preset")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "加载预设", last_directory, "预设文件 (*.json)"
+        )
+        if not file_path:
+            return
+
+        enhanced_config_manager.set_directory("preset", str(Path(file_path).parent))
+
+        try:
+            preset = PresetManager.load_preset(file_path)
+            if not preset:
+                raise ValueError("加载预设返回空值")
+
+            # 1. 应用色彩空间
+            if preset.input_color_space and preset.input_color_space.name:
+                cs_name = preset.input_color_space.name
+                # 如果预设包含定义，则优先使用定义注册或更新色彩空间
+                if preset.input_color_space.definition:
+                    try:
+                        primaries = np.array(preset.input_color_space.definition['primaries_xy'])
+                        wp = np.array(preset.input_color_space.definition['white_point_xy'])
+                        gamma = float(preset.input_color_space.definition.get('gamma', 1.0))
+                        # 注册为自定义空间，确保可追溯
+                        custom_name = f"{cs_name}_preset"
+                        self.color_space_manager.register_custom_colorspace(
+                            custom_name, primaries, white_point_xy=wp, gamma=gamma
+                        )
+                        self.input_color_space = custom_name
+                    except Exception as e:
+                        QMessageBox.warning(self, "色彩空间警告", f"无法从预设创建色彩空间 '{cs_name}': {e}。将尝试使用同名内置空间。")
+                        self.input_color_space = cs_name
+                else:
+                    self.input_color_space = cs_name
+            
+            # 2. 更新参数面板的下拉框
+            combo = self.parameter_panel.input_colorspace_combo
+            index = combo.findText(self.input_color_space, Qt.MatchFlag.MatchFixedString)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            else:
+                 # 如果找不到，可能是自定义的，尝试刷新列表
+                self.parameter_panel.input_colorspace_combo.blockSignals(True)
+                self.parameter_panel.input_colorspace_combo.clear()
+                self.parameter_panel.input_colorspace_combo.addItems(self.color_space_manager.get_available_color_spaces())
+                index = combo.findText(self.input_color_space, Qt.MatchFlag.MatchFixedString)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+                else:
+                    QMessageBox.warning(self, "警告", f"预设中的色彩空间 '{self.input_color_space}' 当前不可用。")
+                self.parameter_panel.input_colorspace_combo.blockSignals(False)
+
+
+            # 3. 应用调色参数（部分应用）
+            apply_preset_to_params(preset, self.parameter_panel.current_params)
+            
+            # 处理矩阵
+            if preset.correction_matrix:
+                matrix_def = preset.correction_matrix
+                if matrix_def.name == "custom" and matrix_def.values:
+                    self.parameter_panel.current_params.correction_matrix = np.array(matrix_def.values)
+                    self.parameter_panel.current_params.correction_matrix_file = "custom"
+                else:
+                    self.parameter_panel.current_params.correction_matrix_file = matrix_def.name
+                    self.parameter_panel.current_params.correction_matrix = None
+
+            self.parameter_panel.update_ui_from_params()
+            
+            # 4. 如果有图像，重新加载并应用
+            if self.current_image:
+                self._reload_with_color_space()
+
+            self.statusBar().showMessage(f"已加载预设: {preset.name}")
+
+        except (IOError, ValueError, FileNotFoundError) as e:
+            QMessageBox.critical(self, "加载预设失败", str(e))
+
+    def _save_preset(self):
+        """保存当前设置为预设文件"""
+        if not self.current_image:
+            QMessageBox.warning(self, "请先打开一张图片", "无法保存预设，因为需要基于当前状态创建。")
+            return
+
+        last_directory = enhanced_config_manager.get_directory("preset")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "保存预设", last_directory, "预设文件 (*.json)"
+        )
+        if not file_path:
+            return
+
+        # 确保文件名以.json结尾
+        if not file_path.lower().endswith('.json'):
+            file_path += '.json'
+        
+        enhanced_config_manager.set_directory("preset", str(Path(file_path).parent))
+
+        try:
+            # 弹窗让用户输入预设名称
+            from PySide6.QtWidgets import QInputDialog
+            preset_name, ok = QInputDialog.getText(self, "预设名称", "请输入预设名称:")
+            if not ok or not preset_name:
+                preset_name = Path(file_path).stem
+
+            # 创建Preset对象
+            params = self.parameter_panel.get_current_params()
+            
+            # 构造Input Color Space Definition
+            cs_def = None
+            cs_info = self.color_space_manager.get_color_space_info(self.input_color_space)
+            if cs_info:
+                cs_def = ColorSpaceDefinition(
+                    name=self.input_color_space,
+                    definition={
+                        "primaries_xy": np.array(cs_info["primaries"]).tolist(),
+                        "white_point_xy": np.array(cs_info["white_point"]).tolist(),
+                        "gamma": cs_info.get("gamma", 1.0)
+                    }
+                )
+
+            # 构造Matrix Definition
+            matrix_def = None
+            matrix_name = params.correction_matrix_file
+            matrix_values = None
+            if matrix_name == "custom" and params.correction_matrix is not None:
+                matrix_values = params.correction_matrix.tolist()
+            else:
+                matrix_data = self.the_enlarger._load_correction_matrix(matrix_name)
+                if matrix_data and "matrix" in matrix_data:
+                    matrix_values = matrix_data["matrix"]
+            
+            if matrix_name:
+                matrix_def = MatrixDefinition(name=matrix_name, values=matrix_values)
+
+            preset = Preset(
+                name=preset_name,
+                input_color_space=cs_def,
+                correction_matrix=matrix_def,
+                grading_params=params.to_dict()
+            )
+
+            # 保存预设
+            PresetManager.save_preset(preset, file_path)
+            self.statusBar().showMessage(f"预设已保存: {preset.name}")
+
+        except (IOError, KeyError) as e:
+            QMessageBox.critical(self, "保存预设失败", str(e))
+
     def _select_input_color_space(self):
         """选择输入色彩空间"""
         from PySide6.QtWidgets import QInputDialog
@@ -430,10 +601,7 @@ class MainWindow(QMainWindow):
             )
             
             # 重新生成小代理（如果需要）
-            if self.current_params.small_proxy:
-                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
-            else:
-                proxy_size = (512, 512)
+            proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
             
             self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
             
@@ -469,10 +637,7 @@ class MainWindow(QMainWindow):
             )
             
             # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
-            if self.current_params.small_proxy:
-                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
-            else:
-                proxy_size = (512, 512)
+            proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
             
             self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
             
@@ -519,78 +684,87 @@ class MainWindow(QMainWindow):
         # 获取保存设置
         settings = save_dialog.get_settings()
         
-        # 确定文件扩展名
-        extension = ".tiff" if settings["format"] == "tiff" else ".jpg"
-        filter_str = "TIFF文件 (*.tiff *.tif)" if settings["format"] == "tiff" else "JPEG文件 (*.jpg *.jpeg)"
+        self._execute_save(settings, force_dialog=True) # 强制弹出另存为
+    
+    def _save_image_as(self):
+        """“另存为”图像"""
+        if not self.current_image:
+            QMessageBox.warning(self, "警告", "没有可保存的图像")
+            return
         
-        # 生成默认文件名：{原文件名}_CC_{色彩空间名}
-        original_filename = Path(self.current_image.file_path).stem if self.current_image.file_path else "untitled"
-        default_filename = f"{original_filename}_CC_{settings['color_space']}{extension}"
-        
-        # 获取上次保存的目录
-        last_directory = enhanced_config_manager.get_directory("save_image")
-        if last_directory:
-            default_path = str(Path(last_directory) / default_filename)
-        else:
-            default_path = default_filename
-        
-        # 选择保存路径
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存图像",
-            default_path,
-            filter_str
-        )
-        
-        if file_path:
-            # 保存当前目录
-            enhanced_config_manager.set_directory("save_image", file_path)
+        available_spaces = self.color_space_manager.get_available_color_spaces()
+        save_dialog = SaveImageDialog(self, available_spaces)
+        if save_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
             
-            try:
-                # 重要：将原图转换到工作色彩空间，保持与预览一致
-                print(f"导出前的色彩空间转换:")
-                print(f"  原始图像色彩空间: {self.current_image.color_space}")
-                print(f"  输入色彩空间设置: {self.input_color_space}")
-                
-                # 先设置输入色彩空间
-                working_image = self.color_space_manager.set_image_color_space(
-                    self.current_image, self.input_color_space
-                )
-                # 转换到工作色彩空间（ACEScg）
-                working_image = self.color_space_manager.convert_to_working_space(
-                    working_image
-                )
-                print(f"  转换后工作色彩空间: {working_image.color_space}")
-                
-                # 应用调色参数到工作空间的图像（根据设置决定是否包含曲线）
-                # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
-                result_image = self.the_enlarger.apply_full_pipeline(
-                    working_image,
-                    self.current_params,
-                    include_curve=settings["include_curve"],
-                    for_export=True
-                )
-                
-                # 转换到输出色彩空间
-                result_image = self.color_space_manager.convert_to_display_space(
-                    result_image, settings["color_space"]
-                )
-                
-                # 保存图像
-                self.image_manager.save_image(
-                    result_image, 
-                    file_path, 
-                    bit_depth=settings["bit_depth"],
-                    quality=95
-                )
-                
-                self.statusBar().showMessage(
-                    f"图像已保存: {Path(file_path).name} "
-                    f"({settings['bit_depth']}bit, {settings['color_space']})"
-                )
-                
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"保存图像失败: {str(e)}")
+        settings = save_dialog.get_settings()
+        self._execute_save(settings, force_dialog=True)
+
+    def _execute_save(self, settings: dict, force_dialog: bool = False):
+        """执行保存操作"""
+        file_path = self.current_image.file_path if self.current_image else None
+        
+        if force_dialog or not file_path:
+            extension = ".tiff" if settings["format"] == "tiff" else ".jpg"
+            filter_str = "TIFF文件 (*.tiff *.tif)" if settings["format"] == "tiff" else "JPEG文件 (*.jpg *.jpeg)"
+            original_filename = Path(self.current_image.file_path).stem if self.current_image and self.current_image.file_path else "untitled"
+            default_filename = f"{original_filename}_CC_{settings['color_space']}{extension}"
+            
+            last_directory = enhanced_config_manager.get_directory("save_image")
+            default_path = str(Path(last_directory) / default_filename) if last_directory else default_filename
+            
+            file_path, _ = QFileDialog.getSaveFileName(self, "保存图像", default_path, filter_str)
+        
+        if not file_path:
+            return
+            
+        enhanced_config_manager.set_directory("save_image", str(Path(file_path).parent))
+            
+        try:
+            # 重要：将原图转换到工作色彩空间，保持与预览一致
+            print(f"导出前的色彩空间转换:")
+            print(f"  原始图像色彩空间: {self.current_image.color_space}")
+            print(f"  输入色彩空间设置: {self.input_color_space}")
+            
+            # 先设置输入色彩空间
+            working_image = self.color_space_manager.set_image_color_space(
+                self.current_image, self.input_color_space
+            )
+            # 转换到工作色彩空间（ACEScg）
+            working_image = self.color_space_manager.convert_to_working_space(
+                working_image
+            )
+            print(f"  转换后工作色彩空间: {working_image.color_space}")
+            
+            # 应用调色参数到工作空间的图像（根据设置决定是否包含曲线）
+            # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
+            result_image = self.the_enlarger.apply_full_pipeline(
+                working_image,
+                self.current_params,
+                include_curve=settings["include_curve"],
+                for_export=True
+            )
+            
+            # 转换到输出色彩空间
+            result_image = self.color_space_manager.convert_to_display_space(
+                result_image, settings["color_space"]
+            )
+            
+            # 保存图像
+            self.image_manager.save_image(
+                result_image, 
+                file_path, 
+                bit_depth=settings["bit_depth"],
+                quality=95
+            )
+            
+            self.statusBar().showMessage(
+                f"图像已保存: {Path(file_path).name} "
+                f"({settings['bit_depth']}bit, {settings['color_space']})"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存图像失败: {str(e)}")
     
     def _reset_parameters(self):
         """重置调色参数"""

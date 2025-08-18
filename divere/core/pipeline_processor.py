@@ -164,10 +164,10 @@ class FilmPipelineProcessor:
         profile['to_density_ms'] = (time.time() - t0) * 1000.0
         
         # 密度校正矩阵（强制禁用并行）
-        if params.enable_correction_matrix and params.correction_matrix_file:
+        if params.enable_correction_matrix:
             t1 = time.time()
             matrix = self._get_correction_matrix_from_params(params)
-            if matrix is not None:
+            if matrix is not None and not np.allclose(matrix, np.eye(3)):
                 density_array = self.math_ops.apply_correction_matrix(
                     density_array, matrix, params.density_dmax, use_parallel=False
                 )
@@ -185,22 +185,21 @@ class FilmPipelineProcessor:
         if include_curve and params.enable_density_curve:
             t3 = time.time()
             # RGB通用曲线
-            curve_points = None
-            if params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
-                curve_points = params.curve_points
+            curve_points = params.curve_points if not self._is_default_curve(params.curve_points) else None
             
             # 单通道曲线
             channel_curves = {}
-            if params.enable_curve_r and params.curve_points_r:
+            if not self._is_default_curve(params.curve_points_r):
                 channel_curves['r'] = params.curve_points_r
-            if params.enable_curve_g and params.curve_points_g:
+            if not self._is_default_curve(params.curve_points_g):
                 channel_curves['g'] = params.curve_points_g
-            if params.enable_curve_b and params.curve_points_b:
+            if not self._is_default_curve(params.curve_points_b):
                 channel_curves['b'] = params.curve_points_b
             
-            density_array = self.math_ops.apply_density_curve(
-                density_array, curve_points, channel_curves, use_parallel=False
-            )
+            if curve_points or channel_curves:
+                density_array = self.math_ops.apply_density_curve(
+                    density_array, curve_points, channel_curves, use_parallel=False
+                )
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
         
         # 转回线性
@@ -225,10 +224,10 @@ class FilmPipelineProcessor:
         profile['to_density_ms'] = (time.time() - t0) * 1000.0
         
         # 密度校正矩阵
-        if params.enable_correction_matrix and params.correction_matrix_file:
+        if params.enable_correction_matrix:
             t1 = time.time()
             matrix = self._get_correction_matrix_from_params(params)
-            if matrix is not None:
+            if matrix is not None and not np.allclose(matrix, np.eye(3)):
                 density_array = self.math_ops.apply_correction_matrix(
                     density_array, matrix, params.density_dmax, use_parallel=False
                 )
@@ -246,22 +245,21 @@ class FilmPipelineProcessor:
         if include_curve and params.enable_density_curve:
             t3 = time.time()
             # RGB通用曲线
-            curve_points = None
-            if params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
-                curve_points = params.curve_points
-            
+            curve_points = params.curve_points if not self._is_default_curve(params.curve_points) else None
+
             # 单通道曲线
             channel_curves = {}
-            if params.enable_curve_r and params.curve_points_r:
+            if not self._is_default_curve(params.curve_points_r):
                 channel_curves['r'] = params.curve_points_r
-            if params.enable_curve_g and params.curve_points_g:
+            if not self._is_default_curve(params.curve_points_g):
                 channel_curves['g'] = params.curve_points_g
-            if params.enable_curve_b and params.curve_points_b:
+            if not self._is_default_curve(params.curve_points_b):
                 channel_curves['b'] = params.curve_points_b
             
-            density_array = self.math_ops.apply_density_curve(
-                density_array, curve_points, channel_curves, use_parallel=False
-            )
+            if curve_points or channel_curves:
+                density_array = self.math_ops.apply_density_curve(
+                    density_array, curve_points, channel_curves, use_parallel=False
+                )
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
         
         # 转回线性
@@ -449,6 +447,10 @@ class FilmPipelineProcessor:
         
         return result
     
+    def _is_default_curve(self, points: list) -> bool:
+        """检查曲线是否为默认直线"""
+        return points == [(0.0, 0.0), (1.0, 1.0)] or not points
+
     def _get_correction_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
         """从参数中获取校正矩阵（需要外部设置矩阵加载器）"""
         if params.correction_matrix_file == "custom" and params.correction_matrix is not None:

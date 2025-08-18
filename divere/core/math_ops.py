@@ -1058,10 +1058,10 @@ class FilmMathOps:
     # =======================
     
     def apply_full_math_pipeline(self, image_array: np.ndarray, params: ColorGradingParams,
-                                include_curve: bool = True, 
-                                enable_density_inversion: bool = True,
-                                use_optimization: bool = True,
-                                profile: Optional[Dict[str, float]] = None) -> np.ndarray:
+                               include_curve: bool = True, 
+                               enable_density_inversion: bool = True,
+                               use_optimization: bool = True,
+                               profile: Optional[Dict[str, float]] = None) -> np.ndarray:
         """
         应用完整的数学处理管线
         
@@ -1098,10 +1098,10 @@ class FilmMathOps:
             profile['to_density_ms'] = (time.time() - t1) * 1000.0
         
         # 3. 密度校正矩阵
-        if params.enable_correction_matrix and params.correction_matrix_file:
+        if params.enable_correction_matrix:
             t2 = time.time()
             matrix = self._get_correction_matrix(params)
-            if matrix is not None:
+            if matrix is not None and not np.allclose(matrix, np.eye(3)):
                 density_array = self.apply_correction_matrix(
                     density_array, matrix, params.density_dmax
                 )
@@ -1119,22 +1119,21 @@ class FilmMathOps:
         if include_curve and params.enable_density_curve:
             t4 = time.time()
             # RGB通用曲线
-            curve_points = None
-            if params.enable_curve and params.curve_points and len(params.curve_points) >= 2:
-                curve_points = params.curve_points
+            curve_points = params.curve_points if not self._is_default_curve(params.curve_points) else None
             
             # 单通道曲线
             channel_curves = {}
-            if params.enable_curve_r and params.curve_points_r:
+            if not self._is_default_curve(params.curve_points_r):
                 channel_curves['r'] = params.curve_points_r
-            if params.enable_curve_g and params.curve_points_g:
+            if not self._is_default_curve(params.curve_points_g):
                 channel_curves['g'] = params.curve_points_g
-            if params.enable_curve_b and params.curve_points_b:
+            if not self._is_default_curve(params.curve_points_b):
                 channel_curves['b'] = params.curve_points_b
-            
-            density_array = self.apply_density_curve(
-                density_array, curve_points, channel_curves
-            )
+
+            if curve_points or channel_curves:
+                density_array = self.apply_density_curve(
+                    density_array, curve_points, channel_curves
+                )
             if profile is not None:
                 profile['density_curves_ms'] = (time.time() - t4) * 1000.0
         
@@ -1145,6 +1144,10 @@ class FilmMathOps:
             profile['to_linear_ms'] = (time.time() - t5) * 1000.0
         
         return result_array
+
+    def _is_default_curve(self, points: list) -> bool:
+        """检查曲线是否为默认直线"""
+        return points == [(0.0, 0.0), (1.0, 1.0)] or not points
     
     def _get_correction_matrix(self, params: ColorGradingParams) -> Optional[np.ndarray]:
         """获取校正矩阵（需要在外部实现具体的矩阵加载逻辑）"""

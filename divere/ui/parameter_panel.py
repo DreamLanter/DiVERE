@@ -154,7 +154,10 @@ class ParameterPanel(QWidget):
         # 添加说明文字框
         note_group = QGroupBox("重要说明")
         note_layout = QVBoxLayout(note_group)
-        note_text = QLabel("Note: \n 这一步并非要做传统意义上的色彩管理，而是通过一个线性变换将扫描仪的谱特性（光源谱x传感器谱）转化为Status M。不可避免地，若硬件条件不好（比如使用了显色非常高的光源），可能出现非常大的Luther误差。\n 任何新的扫描仪、翻拍套装都需要用常用胶片拍摄爱色丽色卡，用“扫描仪光谱锐化”工具计算输入色彩空间。\n 作者手头上有Nikon 5000ED，Epson V700扫描仪和哈苏X5的扫描件，推荐实践是：- Nikon 扫描仪使用Nikon5000ED_Linear，- Epson 扫描仪和哈苏扫描仪使用AdobeRGB_Linear。")
+        note_text = QLabel("""Note: 
+ 这一步并非要做传统意义上的色彩管理，而是通过一个线性变换将扫描仪的谱特性（光源谱x传感器谱）转化为Status M。不可避免地，若硬件条件不好（比如使用了显色非常高的光源），可能出现非常大的Luther误差。
+ 任何新的扫描仪、翻拍套装都需要用常用胶片拍摄爱色丽色卡，用"扫描仪光谱锐化"工具计算输入色彩空间。
+ 作者手头上有Nikon 5000ED，Epson V700扫描仪和哈苏X5的扫描件，推荐实践是：- Nikon 扫描仪使用Nikon5000ED_Linear，- Epson 扫描仪和哈苏扫描仪使用AdobeRGB_Linear。""")
         note_text.setWordWrap(True)  # 启用自动换行
         note_text.setObjectName('noteLabel')  # 主题样式通过全局QSS控制
         note_layout.addWidget(note_text)
@@ -194,6 +197,19 @@ class ParameterPanel(QWidget):
             if not self.enable_scanner_spectral_checkbox.isChecked():
                 return
             try:
+                # 核心逻辑：用户手动拖动，意味着创建了一个自定义空间
+                # 1. 将下拉菜单设置为自定义状态
+                self.input_colorspace_combo.blockSignals(True)
+                # 查找或添加 "自定义" 项
+                custom_text = "自定义"
+                index = self.input_colorspace_combo.findText(custom_text)
+                if index == -1:
+                    self.input_colorspace_combo.addItem(custom_text)
+                    index = self.input_colorspace_combo.findText(custom_text)
+                self.input_colorspace_combo.setCurrentIndex(index)
+                self.input_colorspace_combo.blockSignals(False)
+
+                # 2. 应用坐标来更新实际的色彩空间
                 r_uv = coords.get('R', (0.5, 0.5))
                 g_uv = coords.get('G', (0.16, 0.55))
                 b_uv = coords.get('B', (0.2, 0.1))
@@ -202,14 +218,17 @@ class ParameterPanel(QWidget):
                 g_xy = uv_to_xy(g_uv[0], g_uv[1])
                 b_xy = uv_to_xy(b_uv[0], b_uv[1])
                 primaries = np.array([r_xy, g_xy, b_xy], dtype=float)
-                name = "ScannerSpectralSharpening"
-                template_space = self.input_colorspace_combo.currentText()
+                
+                # 使用当前选定空间作为白点模板
+                template_space = self.main_window.input_color_space # 使用 MainWindow 的状态
                 wp = None
                 info = self.main_window.color_space_manager.get_color_space_info(template_space)
                 if info and 'white_point' in info:
                     wp = np.array(info['white_point'], dtype=float)
-                self.main_window.color_space_manager.register_custom_colorspace(name, primaries, white_point_xy=wp, gamma=1.0)
-                self.main_window.input_color_space = name
+
+                self.main_window.color_space_manager.register_custom_colorspace(custom_text, primaries, white_point_xy=wp, gamma=1.0)
+                self.main_window.input_color_space = custom_text # 更新主窗口状态
+                
                 if self.main_window.current_image:
                     self.main_window._reload_with_color_space()
             except Exception as e:
@@ -376,8 +395,8 @@ class ParameterPanel(QWidget):
         lut_grid.addWidget(self.input_cc_lut_size_combo, 0, 2)
 
         # 3D LUT导出
-        self.export_3dlut_button = QPushButton("导出3D LUT (应用所有使能功能)")
-        self.export_3dlut_button.setToolTip("生成包含所有使能调色功能的3D LUT文件，不包含输入色彩空间转换")
+        self.export_3dlut_button = QPushButton("导出3D LUT (应用所有功能)")
+        self.export_3dlut_button.setToolTip("生成包含所有调色功能的3D LUT文件，不包含输入色彩空间转换")
         self.export_3dlut_button.setMinimumHeight(30)  # 设置最小高度
         lut_grid.addWidget(self.export_3dlut_button, 1, 0)
         
@@ -508,8 +527,6 @@ class ParameterPanel(QWidget):
                 self.curve_editor.curve_edit_widget.set_dmax(params.density_dmax)
                 self.curve_editor.curve_edit_widget.set_gamma(params.density_gamma)
             
-
-
             self.enable_density_inversion_checkbox.setChecked(params.enable_density_inversion)
             self.enable_correction_matrix_checkbox.setChecked(params.enable_correction_matrix)
             self.enable_rgb_gains_checkbox.setChecked(params.enable_rgb_gains)
@@ -571,6 +588,11 @@ class ParameterPanel(QWidget):
             except Exception as e:
                 print(f"初始化UCS失败: {e}")
 
+        self.current_params.curve_points_g = all_curves.get('G', [(0.0, 0.0), (1.0, 1.0)])
+        self.current_params.curve_points_b = all_curves.get('B', [(0.0, 0.0), (1.0, 1.0)])
+        
+        self.parameter_changed.emit()
+
     def _on_cc_selector_toggled(self, checked: bool):
         """参数面板中的色卡选择器开关 → 同步到预览组件的色卡选择器。"""
         try:
@@ -609,7 +631,8 @@ class ParameterPanel(QWidget):
             # 2) 获取白点（使用当前输入色彩空间的白点作为模板）
             white_point = None
             try:
-                space = self.input_colorspace_combo.currentText()
+                # 总是基于主窗口的当前色彩空间状态来获取模板
+                space = self.main_window.input_color_space
                 info = self.main_window.color_space_manager.get_color_space_info(space)
                 if info and 'white_point' in info:
                     wp = info['white_point']
@@ -683,6 +706,18 @@ class ParameterPanel(QWidget):
 
     def _on_input_colorspace_changed(self, space):
         if self._is_updating_ui: return
+
+        custom_text = "自定义"
+        if space == custom_text:
+            return  # 由UCS控件拖动处理，这里忽略
+
+        # 如果选择了预设空间，检查并移除"自定义"项
+        custom_item_index = self.input_colorspace_combo.findText(custom_text)
+        if custom_item_index != -1:
+            self.input_colorspace_combo.blockSignals(True)
+            self.input_colorspace_combo.removeItem(custom_item_index)
+            self.input_colorspace_combo.blockSignals(False)
+        
         # 同步 UCS 三点到所选空间（无论是否开启扫描仪光谱锐化）
         try:
             info = self.main_window.color_space_manager.get_color_space_info(space)
@@ -705,6 +740,18 @@ class ParameterPanel(QWidget):
                     name = "ScannerSpectralSharpening"
                     self.main_window.color_space_manager.register_custom_colorspace(name, primaries, gamma=1.0)
                     self.main_window.input_color_space = name
+
+                    # 更新下拉框为"自定义"
+                    custom_text = "自定义"
+                    self.input_colorspace_combo.blockSignals(True)
+                    custom_item_index = self.input_colorspace_combo.findText(custom_text)
+                    if custom_item_index == -1:
+                        self.input_colorspace_combo.insertItem(0, custom_text)
+                        self.input_colorspace_combo.setCurrentIndex(0)
+                    else:
+                        self.input_colorspace_combo.setCurrentIndex(custom_item_index)
+                    self.input_colorspace_combo.blockSignals(False)
+
                     if self.main_window.current_image:
                         self.main_window._reload_with_color_space()
             except Exception as e:
@@ -1674,6 +1721,15 @@ class ParameterPanel(QWidget):
             # 应用优化结果到UI（解耦方法）
             try:
                 self._apply_ccm_optimization_result(optimization_result)
+                # 核心逻辑：计算完成后，下拉菜单应变为自定义
+                self.input_colorspace_combo.blockSignals(True)
+                custom_text = "自定义"
+                index = self.input_colorspace_combo.findText(custom_text)
+                if index == -1:
+                    self.input_colorspace_combo.addItem(custom_text)
+                    index = self.input_colorspace_combo.findText(custom_text)
+                self.input_colorspace_combo.setCurrentIndex(index)
+                self.input_colorspace_combo.blockSignals(False)
             except Exception as e:
                 print(f"应用优化结果到UI失败: {e}")
             

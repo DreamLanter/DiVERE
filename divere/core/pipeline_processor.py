@@ -63,7 +63,7 @@ class FilmPipelineProcessor:
                               include_curve: bool = True) -> ImageData:
         """
         预览版本管线（优化版）：
-        原图 -> 早期降采样 -> 输入色彩管理 -> dmax/gamma调整（图片级别） -> 
+        原图 -> 早期降采样 -> 输入色彩科学 -> dmax/gamma调整（图片级别） -> 
         套LUT（密度校正矩阵 -> RGB曝光 -> 曲线 -> 转线性） -> 输出色彩转换
         
         关键优化：更早进行降采样，减少后续所有操作的像素数量
@@ -79,7 +79,7 @@ class FilmPipelineProcessor:
         proxy_array, scale_factor = self._create_preview_proxy(image.array)
         profile['early_downsample_ms'] = (time.time() - t0) * 1000.0
         
-        # 2. 输入色彩管理（在较小的图像上）
+        # 2. 输入色彩科学（在较小的图像上）
         t1 = time.time()
         if input_colorspace_transform is not None:
             proxy_array = self._apply_colorspace_transform(proxy_array, input_colorspace_transform)
@@ -164,14 +164,14 @@ class FilmPipelineProcessor:
         profile['to_density_ms'] = (time.time() - t0) * 1000.0
         
         # 密度校正矩阵（强制禁用并行）
-        if params.enable_correction_matrix:
+        if params.enable_density_matrix:
             t1 = time.time()
-            matrix = self._get_correction_matrix_from_params(params)
+            matrix = self._get_density_matrix_from_params(params)
             if matrix is not None and not np.allclose(matrix, np.eye(3)):
-                density_array = self.math_ops.apply_correction_matrix(
+                density_array = self.math_ops.apply_density_matrix(
                     density_array, matrix, params.density_dmax, use_parallel=False
                 )
-            profile['correction_matrix_ms'] = (time.time() - t1) * 1000.0
+            profile['density_matrix_ms'] = (time.time() - t1) * 1000.0
         
         # RGB曝光调整（强制禁用并行）
         if params.enable_rgb_gains:
@@ -224,14 +224,14 @@ class FilmPipelineProcessor:
         profile['to_density_ms'] = (time.time() - t0) * 1000.0
         
         # 密度校正矩阵
-        if params.enable_correction_matrix:
+        if params.enable_density_matrix:
             t1 = time.time()
-            matrix = self._get_correction_matrix_from_params(params)
+            matrix = self._get_density_matrix_from_params(params)
             if matrix is not None and not np.allclose(matrix, np.eye(3)):
-                density_array = self.math_ops.apply_correction_matrix(
+                density_array = self.math_ops.apply_density_matrix(
                     density_array, matrix, params.density_dmax, use_parallel=False
                 )
-            profile['correction_matrix_ms'] = (time.time() - t1) * 1000.0
+            profile['density_matrix_ms'] = (time.time() - t1) * 1000.0
         
         # RGB曝光调整
         if params.enable_rgb_gains:
@@ -287,7 +287,7 @@ class FilmPipelineProcessor:
         Args:
             image: 输入图像
             params: 处理参数
-            input_colorspace_transform: 输入色彩空间变换矩阵
+            input_colorspace_transform: 输入色彩变换变换矩阵
             output_colorspace_transform: 输出色彩空间变换矩阵
             include_curve: 是否包含曲线处理
             use_optimization: 是否使用优化版本
@@ -310,7 +310,7 @@ class FilmPipelineProcessor:
         workers = max_workers or self.full_pipeline_max_workers
 
         if not chunked:
-            # 1. 输入色彩管理
+            # 1. 输入色彩科学
             t0 = time.time()
             working_array = image.array.copy()
             if input_colorspace_transform is not None:
@@ -322,8 +322,8 @@ class FilmPipelineProcessor:
             math_profile = {}
             
             # 注入矩阵获取函数到数学操作中（临时解决方案）
-            original_get_matrix = self.math_ops._get_correction_matrix
-            self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+            original_get_matrix = self.math_ops._get_density_matrix
+            self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
             
             try:
                 working_array = self.math_ops.apply_full_math_pipeline(
@@ -332,7 +332,7 @@ class FilmPipelineProcessor:
                 )
             finally:
                 # 恢复原函数
-                self.math_ops._get_correction_matrix = original_get_matrix
+                self.math_ops._get_density_matrix = original_get_matrix
                 
             profile['math_pipeline_ms'] = (time.time() - t1) * 1000.0
             profile.update({f"math/{k}": v for k, v in math_profile.items()})
@@ -378,15 +378,15 @@ class FilmPipelineProcessor:
                 t1_local = time.time()
                 math_profile_local: Dict[str, float] = {}
 
-                original_get_matrix = self.math_ops._get_correction_matrix
-                self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+                original_get_matrix = self.math_ops._get_density_matrix
+                self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
                 try:
                     block = self.math_ops.apply_full_math_pipeline(
                         block, params, include_curve,
                         params.enable_density_inversion, use_optimization, math_profile_local
                     )
                 finally:
-                    self.math_ops._get_correction_matrix = original_get_matrix
+                    self.math_ops._get_density_matrix = original_get_matrix
 
                 prof_local['math_ms'] = (time.time() - t1_local) * 1000.0
 
@@ -451,18 +451,9 @@ class FilmPipelineProcessor:
         """检查曲线是否为默认直线"""
         return points == [(0.0, 0.0), (1.0, 1.0)] or not points
 
-    def _get_correction_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
-        """从参数中获取校正矩阵（需要外部设置矩阵加载器）"""
-        if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
-            return np.array(params.correction_matrix)
-        
-        # 使用外部设置的矩阵加载器
-        if hasattr(self, '_matrix_loader') and self._matrix_loader:
-            matrix_data = self._matrix_loader(params.correction_matrix_file)
-            if matrix_data and matrix_data.get("matrix_space") == "density":
-                return np.array(matrix_data["matrix"])
-        
-        return None
+    def _get_density_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
+        """从参数中获取校正矩阵（重构后简化）"""
+        return params.density_matrix
     
     def set_matrix_loader(self, loader_func):
         """设置矩阵加载器函数"""
@@ -477,7 +468,7 @@ class FilmPipelineProcessor:
             f"Gamma/Dmax={profile.get('gamma_dmax_ms', 0.0):.1f}ms, "
             f"LUT管线={profile.get('lut_pipeline_ms', 0.0):.1f}ms "
             f"(密度转换={profile.get('lut/to_density_ms', 0.0):.1f}ms, "
-            f"矩阵={profile.get('lut/correction_matrix_ms', 0.0):.1f}ms, "
+            f"矩阵={profile.get('lut/density_matrix_ms', 0.0):.1f}ms, "
             f"RGB增益={profile.get('lut/rgb_gains_ms', 0.0):.1f}ms, "
             f"曲线={profile.get('lut/density_curves_ms', 0.0):.1f}ms, "
             f"转线性={profile.get('lut/to_linear_ms', 0.0):.1f}ms), "
@@ -493,7 +484,7 @@ class FilmPipelineProcessor:
             f"数学管线={profile.get('math_pipeline_ms', 0.0):.1f}ms "
             f"(密度反相={profile.get('math/density_inversion_ms', 0.0):.1f}ms, "
             f"密度转换={profile.get('math/to_density_ms', 0.0):.1f}ms, "
-            f"矩阵={profile.get('math/correction_matrix_ms', 0.0):.1f}ms, "
+            f"矩阵={profile.get('math/density_matrix_ms', 0.0):.1f}ms, "
             f"RGB增益={profile.get('math/rgb_gains_ms', 0.0):.1f}ms, "
             f"曲线={profile.get('math/density_curves_ms', 0.0):.1f}ms, "
             f"转线性={profile.get('math/to_linear_ms', 0.0):.1f}ms), "
@@ -527,8 +518,8 @@ class FilmPipelineProcessor:
         
         # 应用数学管线（不包含密度反相，因为LUT通常用于已经反相的图像）
         # 注入矩阵获取函数
-        original_get_matrix = self.math_ops._get_correction_matrix
-        self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+        original_get_matrix = self.math_ops._get_density_matrix
+        self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
         
         try:
             output_colors = self.math_ops.apply_full_math_pipeline(
@@ -536,6 +527,6 @@ class FilmPipelineProcessor:
                 params, include_curve, enable_density_inversion=False, use_optimization=True
             )
         finally:
-            self.math_ops._get_correction_matrix = original_get_matrix
+            self.math_ops._get_density_matrix = original_get_matrix
         
         return output_colors

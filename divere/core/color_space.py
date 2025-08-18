@@ -175,6 +175,21 @@ class ColorSpaceManager:
         # 该空间相关的转换结果需要失效
         self._invalidate_convert_cache_for(name)
 
+    def is_custom_color_space(self, name: str) -> bool:
+        """检查一个色彩空间是否是自定义的（基于命名约定）"""
+        return "_custom" in name or "_preset" in name
+
+    def get_color_space_definition(self, name: str) -> Optional[Dict[str, Any]]:
+        """获取自定义色彩空间的定义，用于保存"""
+        space = self._color_spaces.get(name)
+        if not space:
+            return None
+        return {
+            "primaries_xy": space["primaries"].tolist(),
+            "white_point_xy": space["white_point"].tolist(),
+            "gamma": space.get("gamma", 1.0)
+        }
+
     def _invalidate_convert_cache_for(self, space_name: str) -> None:
         try:
             keys_to_delete = [k for k in self._convert_cache.keys() if space_name in k]

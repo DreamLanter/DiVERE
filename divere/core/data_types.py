@@ -8,10 +8,11 @@ import numpy as np
 
 
 @dataclass
-class ColorSpaceDefinition:
-    """色彩空间定义（数值冗余）"""
-    name: str = "sRGB"
-    definition: Optional[Dict[str, Any]] = None  # { "primaries_xy": ..., "white_point_xy": ..., "gamma": ... }
+class InputTransformationDefinition:
+    """输入变换的定义，通常是色彩空间"""
+    name: str
+    definition: Dict[str, Any]
+
 
 @dataclass
 class MatrixDefinition:
@@ -28,43 +29,84 @@ class CurveDefinition:
 @dataclass
 class Preset:
     """
-    预设数据结构 (重构版)
-    - 遵循“名称+数值冗余”原则
-    - 仅包含有效设置，加载时做“部分应用”
+    预设文件的数据结构。
     """
-    name: str = "默认预设"
+    name: str = "未命名预设"
     version: int = 2
-    input_color_space: Optional[ColorSpaceDefinition] = None
-    correction_matrix: Optional[MatrixDefinition] = None
-    
-    # grading_params 存储 ColorGradingParams 中定义的参数
+
+    # Metadata
+    raw_file: Optional[str] = None
+    orientation: int = 0
+    crop: Optional[Tuple[float, float, float, float]] = None  # (x_pct, y_pct, w_pct, h_pct)
+
+    # Input Transformation
+    input_transformation: Optional[InputTransformationDefinition] = None
+
+    # Grading Parameters
     grading_params: Dict[str, Any] = field(default_factory=dict)
+    density_matrix: Optional[MatrixDefinition] = None
+    density_curve: Optional[CurveDefinition] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """序列化为字典"""
+        """将预设对象序列化为字典。"""
         data = {
             "name": self.name,
             "version": self.version,
-            "grading_params": self.grading_params,
         }
-        if self.input_color_space:
-            data["input_color_space"] = self.input_color_space.__dict__
-        if self.correction_matrix:
-            data["correction_matrix"] = self.correction_matrix.__dict__
+        # Metadata
+        if self.raw_file:
+            data["raw_file"] = self.raw_file
+        data["orientation"] = self.orientation
+        if self.crop:
+            data["crop"] = self.crop
+
+        # Input Transformation
+        if self.input_transformation:
+            data["input_transformation"] = self.input_transformation.__dict__
+
+        # Grading Parameters
+        data["grading_params"] = self.grading_params
+        if self.density_matrix:
+            data["density_matrix"] = self.density_matrix.__dict__
+        if self.density_curve:
+            data["density_curve"] = self.density_curve.__dict__
+
         return data
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Preset':
-        """从字典反序列化"""
+    def from_dict(cls, data: Dict[str, Any]) -> "Preset":
+        """从字典反序列化为预设对象。"""
         preset = cls(
             name=data.get("name", "未命名预设"),
             version=data.get("version", 2),
+            # Metadata
+            raw_file=data.get("raw_file"),
+            orientation=data.get("orientation", 0),
+            crop=tuple(data["crop"]) if data.get("crop") else None,
+            # Grading Parameters
             grading_params=data.get("grading_params", {}),
         )
-        if "input_color_space" in data and data["input_color_space"]:
-            preset.input_color_space = ColorSpaceDefinition(**data["input_color_space"])
-        if "correction_matrix" in data and data["correction_matrix"]:
-            preset.correction_matrix = MatrixDefinition(**data["correction_matrix"])
+
+        # Input Transformation (with backward compatibility)
+        if "input_transformation" in data and data["input_transformation"]:
+            preset.input_transformation = InputTransformationDefinition(**data["input_transformation"])
+        elif "input_color_space" in data and data["input_color_space"]:
+            # 旧格式兼容
+            preset.input_transformation = InputTransformationDefinition(**data["input_color_space"])
+
+        # Grading Parameters
+        if "density_matrix" in data and data["density_matrix"]:
+            preset.density_matrix = MatrixDefinition(**data["density_matrix"])
+        elif "correction_matrix" in data and data["correction_matrix"]:
+            preset.density_matrix = MatrixDefinition(**data["correction_matrix"])
+        # Backward compatibility for file-based matrix
+        elif "grading_params" in data and "density_matrix_file" in data["grading_params"]:
+            preset.density_matrix = MatrixDefinition(name=data["grading_params"]["density_matrix_file"], values=None)
+        elif "grading_params" in data and "correction_matrix_file" in data["grading_params"]:
+            preset.density_matrix = MatrixDefinition(name=data["grading_params"]["correction_matrix_file"], values=None)
+
+        if "density_curve" in data and data["density_curve"]:
+            preset.density_curve = CurveDefinition(**data["density_curve"])
         return preset
 
 
@@ -152,49 +194,73 @@ class ImageData:
 
 @dataclass
 class ColorGradingParams:
-    """调色参数配置 (重构版)"""
-    # 密度反相参数
+    """调色参数的数据类"""
+    # Density Inversion
     density_gamma: float = 2.6
     density_dmax: float = 2.0
-    
-    # 校正矩阵 (值由Preset或UI动态提供)
-    correction_matrix_file: str = ""
-    correction_matrix: Optional[np.ndarray] = None
-    
-    # RGB增益
+
+    # Density Matrix
+    density_matrix: Optional[np.ndarray] = None
+
+    # RGB Gains
     rgb_gains: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    
-    # 密度曲线
-    # RGB主曲线
+
+    # Density Curve
     curve_points: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
-    # 单通道曲线
     curve_points_r: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
     curve_points_g: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
     curve_points_b: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
-    
-    # 调试模式参数 (瞬态，不保存到预设)
+
+    # --- Pipeline Control Flags (transient, not saved in presets) ---
     enable_density_inversion: bool = True
-    enable_correction_matrix: bool = True
+    enable_density_matrix: bool = False
     enable_rgb_gains: bool = True
     enable_density_curve: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
-        """序列化为字典 (精简版) - 不包含enable_*标志"""
-        d = {
-            "density_gamma": self.density_gamma,
-            "density_dmax": self.density_dmax,
-            "rgb_gains": list(self.rgb_gains),
-            "curve_points": self.curve_points,
-            "curve_points_r": self.curve_points_r,
-            "curve_points_g": self.curve_points_g,
-            "curve_points_b": self.curve_points_b,
-        }
-        # 矩阵特殊处理：仅在自定义时保存数值
-        if self.correction_matrix_file == "custom" and self.correction_matrix is not None:
-             d["correction_matrix"] = self.correction_matrix.tolist()
+    def __post_init__(self):
+        # 确保matrix是ndarray
+        if self.density_matrix is not None and not isinstance(self.density_matrix, np.ndarray):
+            self.density_matrix = np.array(self.density_matrix)
+
+    def copy(self) -> "ColorGradingParams":
+        """返回此ColorGradingParams对象的深拷贝"""
+        new_params = ColorGradingParams()
         
-        return d
-    
+        # 复制基础参数
+        new_params.density_gamma = self.density_gamma
+        new_params.density_dmax = self.density_dmax
+        new_params.density_matrix = self.density_matrix.copy() if self.density_matrix is not None else None
+        new_params.rgb_gains = self.rgb_gains
+        
+        # 复制曲线参数
+        new_params.curve_points = self.curve_points.copy()
+        new_params.curve_points_r = self.curve_points_r.copy()
+        new_params.curve_points_g = self.curve_points_g.copy()
+        new_params.curve_points_b = self.curve_points_b.copy()
+
+        # 复制 transient 状态
+        new_params.enable_density_inversion = self.enable_density_inversion
+        new_params.enable_density_matrix = self.enable_density_matrix
+        new_params.enable_rgb_gains = self.enable_rgb_gains
+        new_params.enable_density_curve = self.enable_density_curve
+        
+        return new_params
+
+    def to_dict(self) -> Dict[str, Any]:
+        """将可保存的参数序列化为字典。"""
+        data = {
+            'density_gamma': self.density_gamma,
+            'density_dmax': self.density_dmax,
+            'rgb_gains': self.rgb_gains,
+            'curve_points': self.curve_points,
+            'curve_points_r': self.curve_points_r,
+            'curve_points_g': self.curve_points_g,
+            'curve_points_b': self.curve_points_b,
+        }
+        if self.density_matrix is not None:
+            data['density_matrix'] = self.density_matrix.tolist()
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ColorGradingParams':
         """
@@ -207,11 +273,10 @@ class ColorGradingParams:
         if "density_dmax" in data:
             params.density_dmax = data["density_dmax"]
         
-        if "correction_matrix" in data:
-            matrix_data = data["correction_matrix"]
+        if "density_matrix" in data:
+            matrix_data = data["density_matrix"]
             if matrix_data is not None:
-                params.correction_matrix = np.array(matrix_data)
-                params.correction_matrix_file = "custom"
+                params.density_matrix = np.array(matrix_data)
         
         if "rgb_gains" in data:
             rgb_gains = data["rgb_gains"]
@@ -227,20 +292,25 @@ class ColorGradingParams:
         if "curve_points_b" in data:
             params.curve_points_b = data["curve_points_b"]
         
+        # Backward compatibility for matrix
+        if 'density_matrix' in data:
+            params.density_matrix = np.array(data['density_matrix'])
+        elif 'correction_matrix' in data:
+            params.density_matrix = np.array(data['correction_matrix'])
+
         return params
 
-    def update_from_dict(self, data: Dict[str, Any]):
+    def update_from_dict(self, data: Dict[str, Any]) -> None:
         """用字典中的值部分更新当前实例"""
         if "density_gamma" in data:
             self.density_gamma = data["density_gamma"]
         if "density_dmax" in data:
             self.density_dmax = data["density_dmax"]
 
-        if "correction_matrix" in data:
-            matrix_data = data["correction_matrix"]
+        if "density_matrix" in data:
+            matrix_data = data["density_matrix"]
             if matrix_data is not None:
-                self.correction_matrix = np.array(matrix_data)
-                self.correction_matrix_file = "custom"
+                self.density_matrix = np.array(matrix_data)
         
         if "rgb_gains" in data:
             self.rgb_gains = tuple(data["rgb_gains"])
@@ -254,30 +324,16 @@ class ColorGradingParams:
         if "curve_points_b" in data:
             self.curve_points_b = data.get("curve_points_b", [(0.0, 0.0), (1.0, 1.0)])
 
-    def copy(self) -> 'ColorGradingParams':
-        """返回此ColorGradingParams对象的深拷贝"""
-        new_params = ColorGradingParams()
-        
-        # 复制基础参数
-        new_params.density_gamma = self.density_gamma
-        new_params.density_dmax = self.density_dmax
-        new_params.correction_matrix_file = self.correction_matrix_file
-        new_params.correction_matrix = self.correction_matrix.copy() if self.correction_matrix is not None else None
-        new_params.rgb_gains = self.rgb_gains
-        
-        # 复制曲线参数
-        new_params.curve_points = self.curve_points.copy()
-        new_params.curve_points_r = self.curve_points_r.copy()
-        new_params.curve_points_g = self.curve_points_g.copy()
-        new_params.curve_points_b = self.curve_points_b.copy()
+        # Backward compatibility for matrix
+        if 'density_matrix' in data:
+            self.density_matrix = np.array(data['density_matrix'])
+        elif 'correction_matrix' in data:
+            self.density_matrix = np.array(data['correction_matrix'])
 
-        # 复制调试模式参数 (瞬态)
-        new_params.enable_density_inversion = self.enable_density_inversion
-        new_params.enable_correction_matrix = self.enable_correction_matrix
-        new_params.enable_rgb_gains = self.enable_rgb_gains
-        new_params.enable_density_curve = self.enable_density_curve
-        
-        return new_params
+        if 'curve_points_r' in data: self.curve_points_r = data['curve_points_r']
+        if 'curve_points_g' in data: self.curve_points_g = data['curve_points_g']
+        if 'curve_points_b' in data: self.curve_points_b = data['curve_points_b']
+
 
 @dataclass
 class LUT3D:

@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **参数优化**: 优化DiVERE管线的关键参数
-  - `primaries_xy`: 输入色彩空间的RGB基色坐标
+  - `primaries_xy`: 输入色彩变换的RGB基色坐标
   - `gamma`: 密度反差参数
   - `dmax`: 最大密度参数
   - `r_gain`: R通道增益

@@ -8,7 +8,7 @@ CCM (Color Correction Matrix) 优化器
 主要功能:
 - 从原图提取ColorChecker色块
 - 模拟DiVERE完整处理管线
-- 优化输入色彩空间基色和处理参数
+- 优化输入色彩变换基色和处理参数
 - 与标准ACEScg RGB值比较并最小化MSE损失
 
 模块:

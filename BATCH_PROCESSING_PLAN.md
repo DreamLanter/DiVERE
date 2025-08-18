@@ -5,14 +5,14 @@
   - 好几个独立的scan
   我希望用一个统一方便的逻辑来实现，并且尽可能高效、优雅。包括：
   - 一批胶片，每一张都可能好几百MB，不可能全load到内存中，因此需要各自生成proxy
-  - 一批胶片，每一张的调色都可能不同，因此要想办法实现一个预设系统，保存所有的、ui上可能进行调整的操作，在文件夹内可以放一个json文件。保存每一张照片，或者每一张照片里的每一个crop，的所有设置（例如输入色彩空间、曲线等，不能只保存名字，还要保存基色、曲线选点等等）。
+  - 一批胶片，每一张的调色都可能不同，因此要想办法实现一个预设系统，保存所有的、ui上可能进行调整的操作，在文件夹内可以放一个json文件。保存每一张照片，或者每一张照片里的每一个crop，的所有设置（例如输入色彩变换、曲线等，不能只保存名字，还要保存基色、曲线选点等等）。
 
   帮我根据现在的实现，仔细思考一下，怎么样才能实现得很优雅。写一个markdown格式的计划出来。
 ### 目标
 - **统一处理单元**: 以 Crop 为最小处理单元，兼容两种批量模式：
   - 单图包含多个扫描帧（多个 Crop）
   - 多个独立扫描（每图一个全幅 Crop）
-- **分层参数继承**: Project → ScanItem → Crop 逐层合并，得到最终输入色彩空间与 `ColorGradingParams`。
+- **分层参数继承**: Project → ScanItem → Crop 逐层合并，得到最终输入色彩变换与 `ColorGradingParams`。
 - **高效与可重现**:
   - 预览：每张大图仅生成一次代理（proxy），Crop 仅做等比例裁切。
   - 导出：原图按 Crop 做窗口裁切，再走分块全精度管线，控制峰值内存。
@@ -122,7 +122,7 @@
   - `resume`/`force`（可选）：是否断点续跑、是否强制重算。
 - 命名模板占位符（便于简洁且可扩展）：
   - `{scan_base}` 源文件名（不含扩展）；`{crop_name}`；`{index}`（同一scan内从1开始）；
-  - `{width}x{height}` 导出尺寸；`{cs_name}`/`{cs_hash}` 输入色彩空间；`{params_hash}` 合并参数哈希；`{ts}` 时间戳。
+  - `{width}x{height}` 导出尺寸；`{cs_name}`/`{cs_hash}` 输入色彩变换；`{params_hash}` 合并参数哈希；`{ts}` 时间戳。
   - 例：`"{scan_base}/{index:02d}-{crop_name}-{params_hash}.tif"`。
 - 处理流程（每个 Crop 一条“任务”）：
   1) 合并 preset（Project→Scan→Crop）并解析 `input_colorspace`（名称+定义+哈希）；
@@ -151,7 +151,7 @@
 
 ### 预设与色彩空间（名称+数值冗余与一致性策略）
 - `ColorGradingParams`：直接复用 `to_dict()/from_dict()`，曲线点、矩阵值、RGB 增益、开关等完整保存。
-- 输入色彩空间：始终保存 `name + def`，加载时按以下优先级：
+- 输入色彩变换：始终保存 `name + def`，加载时按以下优先级：
   1) 若本地存在同名空间且计算出的 `hash` 与保存一致，则直接使用本地定义；
   2) 否则使用 `def` 注册临时空间（名称可派生为 `SavedCS_<hash>`），并使用该临时空间，确保跨设备一致；
   3) 若同时提供 `name` 与 `def` 且二者不一致，优先 `def`（保证重放一致性），并记录告警日志。
@@ -185,7 +185,7 @@
   - 在 `divere/ui/main_window.py` 新增一个 `QDockWidget`（例如“缩略图”），内部用 `QListView/QListWidget` 自定义 delegate 以网格形式展示 Scan/Crop 缩略图；设置 `objectName` 由主题控制。
   - 数据源来自 `BatchManager` 提供的缩略图 API，后台异步填充；
   - 点击某项：
-    1) 调用 `merge_presets` 得到该项的输入色彩空间与参数；
+    1) 调用 `merge_presets` 得到该项的输入色彩变换与参数；
     2) 生成 Selection 级 proxy；
     3) 将参数与 input colorspace 应用到 `ParameterPanel` 与 `MainWindow`，触发布局与主预览刷新；
     4) 首次选择时调用 `fit_to_window()`（遵循约定）。

@@ -308,7 +308,7 @@ class FilmMathOps:
     # 3. 密度校正矩阵
     # =======================
     
-    def apply_correction_matrix(self, density_array: np.ndarray, matrix: np.ndarray,
+    def apply_density_matrix(self, density_array: np.ndarray, matrix: np.ndarray,
                                dmax: float, pivot: float = 0.9, 
                                use_parallel: bool = True) -> np.ndarray:
         """
@@ -1098,15 +1098,15 @@ class FilmMathOps:
             profile['to_density_ms'] = (time.time() - t1) * 1000.0
         
         # 3. 密度校正矩阵
-        if params.enable_correction_matrix:
+        if params.enable_density_matrix:
             t2 = time.time()
-            matrix = self._get_correction_matrix(params)
+            matrix = self._get_density_matrix(params)
             if matrix is not None and not np.allclose(matrix, np.eye(3)):
-                density_array = self.apply_correction_matrix(
+                density_array = self.apply_density_matrix(
                     density_array, matrix, params.density_dmax
                 )
             if profile is not None:
-                profile['correction_matrix_ms'] = (time.time() - t2) * 1000.0
+                profile['density_matrix_ms'] = (time.time() - t2) * 1000.0
         
         # 4. RGB增益调整
         if params.enable_rgb_gains:
@@ -1149,11 +1149,11 @@ class FilmMathOps:
         """检查曲线是否为默认直线"""
         return points == [(0.0, 0.0), (1.0, 1.0)] or not points
     
-    def _get_correction_matrix(self, params: ColorGradingParams) -> Optional[np.ndarray]:
+    def _get_density_matrix(self, params: ColorGradingParams) -> Optional[np.ndarray]:
         """获取校正矩阵（需要在外部实现具体的矩阵加载逻辑）"""
         # 这里需要从外部传入矩阵或者依赖注入
         # 暂时返回None，在重构主类时会处理
-        if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
-            return np.array(params.correction_matrix)
+        if params.density_matrix_file == "custom" and params.density_matrix is not None:
+            return np.array(params.density_matrix)
         return None
 

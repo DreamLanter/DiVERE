@@ -27,12 +27,27 @@ class ParameterPanel(QWidget):
     """参数面板 (重构版)"""
     
     parameter_changed = Signal()
+    debounced_parameter_changed = Signal()  # 用于自动保存的防抖信号
     
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
         self.current_params = ColorGradingParams()
+        # 手动设置我们想要的非标准默认值
+        self.current_params.density_gamma = 2.6
+        self.current_params.density_matrix = self.main_window.the_enlarger._get_density_matrix_array("Cineon_States_M_to_Print_Density")
+        self.current_params.enable_density_matrix = True
+        
+        # 设置默认曲线为Kodak Endura Paper
+        self._load_default_curves()
+        
         self._is_updating_ui = False
+        
+        # 防抖计时器
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(300)  # 300ms延迟
+        self._debounce_timer.timeout.connect(self.debounced_parameter_changed.emit)
         
         # 自动校色迭代状态
         self._auto_color_iteration = 0
@@ -48,8 +63,8 @@ class ParameterPanel(QWidget):
         """由主窗口调用，在加载图像后设置并应用默认参数"""
         self._sync_ui_defaults_to_params()
         self.current_params.density_gamma = 2.6
-        self.current_params.correction_matrix_file = "Cineon_States_M_to_Print_Density"
-        self.current_params.enable_correction_matrix = True
+        self.current_params.density_matrix = self.main_window.the_enlarger._get_density_matrix_array("Cineon_States_M_to_Print_Density")
+        self.current_params.enable_density_matrix = True
         self.current_params.enable_density_inversion = True
         self.current_params.enable_rgb_gains = True
         self.current_params.enable_density_curve = True
@@ -65,7 +80,7 @@ class ParameterPanel(QWidget):
         """将优化得到的基色与参数应用到UCS widget与UI参数。
         - 将 primaries_xy 转为 u'v' 并更新 `self.ucs_widget`
         - 将 gamma、dmax、r_gain、b_gain 写回 `self.current_params` 并刷新 UI
-        - 同时注册临时输入色彩空间，便于后续选择（不强制切换）
+        - 同时注册临时输入色彩变换，便于后续选择（不强制切换）
         """
         if not optimization_result or not optimization_result.get('success', False):
             return
@@ -86,7 +101,7 @@ class ParameterPanel(QWidget):
         except Exception as e:
             print(f"xy→u'v' 转换失败: {e}")
 
-        # 2) 注册临时输入色彩空间（不强制切换，保持解耦）
+        # 2) 注册临时输入色彩变换（不强制切换，保持解耦）
         try:
             primaries = np.array([
                 [primaries_xy[0, 0], primaries_xy[0, 1]],
@@ -109,6 +124,7 @@ class ParameterPanel(QWidget):
             self.current_params.rgb_gains = (r_gain, float(self.current_params.rgb_gains[1]), b_gain)
             self.update_ui_from_params()
             self.parameter_changed.emit()
+            self._debounce_timer.start()  # 参数变化时启动防抖计时器
         except Exception as e:
             print(f"回填参数失败: {e}")
 
@@ -122,7 +138,7 @@ class ParameterPanel(QWidget):
         content_layout = QVBoxLayout(content_widget)
         
         tab_widget = QTabWidget()
-        tab_widget.addTab(self._create_basic_tab(), "输入色彩管理")
+        tab_widget.addTab(self._create_basic_tab(), "输入色彩科学")
         tab_widget.addTab(self._create_density_tab(), "密度与矩阵")
         tab_widget.addTab(self._create_rgb_tab(), "RGB曝光")
         tab_widget.addTab(self._create_curve_tab(), "密度曲线")
@@ -135,10 +151,50 @@ class ParameterPanel(QWidget):
         scroll_area.setWidget(content_widget)
         layout.addWidget(scroll_area)
 
+    def clear_preset_items(self):
+        """清除所有下拉框中的 'preset:' 条目"""
+        combos = [
+            self.input_colorspace_combo,
+            self.matrix_combo,
+            self.curve_editor.curve_combo
+        ]
+        for combo in combos:
+            if not combo:
+                continue
+            for i in range(combo.count() - 1, -1, -1):
+                if combo.itemText(i).startswith("preset:"):
+                    combo.removeItem(i)
+
+    def add_preset_item(self, combo_name: str, item_name: str):
+        """向指定的下拉框添加 'preset:' 条目并选中"""
+        combo_map = {
+            "input_colorspace_combo": self.input_colorspace_combo,
+            "matrix_combo": self.matrix_combo,
+            "curve_combo": self.curve_editor.curve_combo
+        }
+        combo = combo_map.get(combo_name)
+        if not combo:
+            return
+
+        preset_item_text = f"preset: {item_name}"
+        
+        # 检查是否已存在，避免重复添加
+        if combo.findText(preset_item_text) == -1:
+            if combo_name == "matrix_combo":
+                # matrix_combo 需要特殊处理，因为它有 associated data
+                combo.addItem(preset_item_text, "preset_custom")
+            else:
+                combo.addItem(preset_item_text)
+
+        # 选中该项
+        index = combo.findText(preset_item_text)
+        if index != -1:
+            combo.setCurrentIndex(index)
+
     def _create_basic_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        colorspace_group = QGroupBox("输入色彩空间")
+        colorspace_group = QGroupBox("输入色彩变换")
         colorspace_layout = QGridLayout(colorspace_group)
         self.input_colorspace_combo = QComboBox()
         if hasattr(self.main_window, 'color_space_manager'):
@@ -156,14 +212,14 @@ class ParameterPanel(QWidget):
         note_layout = QVBoxLayout(note_group)
         note_text = QLabel("""Note: 
  这一步并非要做传统意义上的色彩管理，而是通过一个线性变换将扫描仪的谱特性（光源谱x传感器谱）转化为Status M。不可避免地，若硬件条件不好（比如使用了显色非常高的光源），可能出现非常大的Luther误差。
- 任何新的扫描仪、翻拍套装都需要用常用胶片拍摄爱色丽色卡，用"扫描仪光谱锐化"工具计算输入色彩空间。
+ 任何新的扫描仪、翻拍套装都需要用常用胶片拍摄爱色丽色卡，用"扫描仪光谱锐化"工具计算输入色彩变换。
  作者手头上有Nikon 5000ED，Epson V700扫描仪和哈苏X5的扫描件，推荐实践是：- Nikon 扫描仪使用Nikon5000ED_Linear，- Epson 扫描仪和哈苏扫描仪使用AdobeRGB_Linear。""")
         note_text.setWordWrap(True)  # 启用自动换行
         note_text.setObjectName('noteLabel')  # 主题样式通过全局QSS控制
         note_layout.addWidget(note_text)
         layout.addWidget(note_group)
 
-        # 扫描仪光谱锐化（UCS u'v'三角形定义输入色彩空间）
+        # 扫描仪光谱锐化（UCS u'v'三角形定义输入色彩变换）
         self.enable_scanner_spectral_checkbox = QCheckBox("扫描仪光谱锐化")
         layout.addWidget(self.enable_scanner_spectral_checkbox)
 
@@ -178,16 +234,16 @@ class ParameterPanel(QWidget):
         layout.addWidget(self.cc_selector_checkbox)
 
         # 简单的CCM优化按钮（仅在开启扫描仪光谱锐化时显示）
-        self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换（输入色彩空间）")
+        self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换（输入色彩变换）")
         self.ccm_optimize_button.setToolTip("从色卡选择器读取24个颜色并优化参数")
         self.ccm_optimize_button.clicked.connect(self._on_simple_ccm_optimize)
         self.ccm_optimize_button.setVisible(False)
         self.ccm_optimize_button.setEnabled(False)
         layout.addWidget(self.ccm_optimize_button)
 
-        # 保存输入色彩空间结果（仅在开启扫描仪光谱锐化时显示）
-        self.save_input_colorspace_button = QPushButton("保存输入色彩空间结果")
-        self.save_input_colorspace_button.setToolTip("将当前UCS三角形对应的基色(primaries)与白点保存为输入色彩空间（gamma=1.0）")
+        # 保存输入色彩变换结果（仅在开启扫描仪光谱锐化时显示）
+        self.save_input_colorspace_button = QPushButton("保存输入色彩变换结果")
+        self.save_input_colorspace_button.setToolTip("将当前UCS三角形对应的基色(primaries)与白点保存为输入色彩变换（gamma=1.0）")
         self.save_input_colorspace_button.setVisible(False)
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
         layout.addWidget(self.save_input_colorspace_button)
@@ -294,7 +350,7 @@ class ParameterPanel(QWidget):
         self.matrix_combo.addItem("自定义", "custom")
         available = self.main_window.the_enlarger.get_available_matrices()
         for matrix_id in available:
-            data = self.main_window.the_enlarger._load_correction_matrix(matrix_id)
+            data = self.main_window.the_enlarger._load_density_matrix(matrix_id)
             if data: self.matrix_combo.addItem(data.get("name", matrix_id), matrix_id)
         combo_layout.addWidget(self.matrix_combo)
         matrix_layout.addLayout(combo_layout)
@@ -356,11 +412,11 @@ class ParameterPanel(QWidget):
         pipeline_group = QGroupBox("管道步骤控制")
         pipeline_layout = QVBoxLayout(pipeline_group)
         self.enable_density_inversion_checkbox = QCheckBox("启用密度反相")
-        self.enable_correction_matrix_checkbox = QCheckBox("启用校正矩阵")
+        self.enable_density_matrix_checkbox = QCheckBox("启用密度矩阵")
         self.enable_rgb_gains_checkbox = QCheckBox("启用RGB增益")
         self.enable_density_curve_checkbox = QCheckBox("启用密度曲线")
         pipeline_layout.addWidget(self.enable_density_inversion_checkbox)
-        pipeline_layout.addWidget(self.enable_correction_matrix_checkbox)
+        pipeline_layout.addWidget(self.enable_density_matrix_checkbox)
         pipeline_layout.addWidget(self.enable_rgb_gains_checkbox)
         pipeline_layout.addWidget(self.enable_density_curve_checkbox)
         layout.addWidget(pipeline_group)
@@ -376,13 +432,13 @@ class ParameterPanel(QWidget):
         lut_grid.setColumnStretch(1, 0)  # 标签列固定宽度
         lut_grid.setColumnStretch(2, 0)  # 下拉框列固定宽度
         
-        # 输入色彩管理LUT导出
-        self.export_input_cc_lut_button = QPushButton("导出输入色彩管理LUT")
-        self.export_input_cc_lut_button.setToolTip("生成包含输入色彩空间转换的3D LUT文件，将程序内置的输入色彩管理过程完全相同地应用于LUT")
+        # 输入色彩科学LUT导出
+        self.export_input_cc_lut_button = QPushButton("导出输入色彩科学LUT")
+        self.export_input_cc_lut_button.setToolTip("生成包含输入色彩变换转换的3D LUT文件，将程序内置的输入色彩科学过程完全相同地应用于LUT")
         self.export_input_cc_lut_button.setMinimumHeight(30)  # 设置最小高度
         lut_grid.addWidget(self.export_input_cc_lut_button, 0, 0)
         
-        # 输入色彩管理LUT size选择
+        # 输入色彩科学LUT size选择
         lut_size_label1 = QLabel("LUT Size:")
         lut_size_label1.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         lut_grid.addWidget(lut_size_label1, 0, 1)
@@ -396,7 +452,7 @@ class ParameterPanel(QWidget):
 
         # 3D LUT导出
         self.export_3dlut_button = QPushButton("导出3D LUT (应用所有功能)")
-        self.export_3dlut_button.setToolTip("生成包含所有调色功能的3D LUT文件，不包含输入色彩空间转换")
+        self.export_3dlut_button.setToolTip("生成包含所有调色功能的3D LUT文件，不包含输入色彩变换转换")
         self.export_3dlut_button.setMinimumHeight(30)  # 设置最小高度
         lut_grid.addWidget(self.export_3dlut_button, 1, 0)
         
@@ -478,7 +534,7 @@ class ParameterPanel(QWidget):
         self.curve_editor.curve_changed.connect(self._on_curve_changed)
 
         self.enable_density_inversion_checkbox.toggled.connect(self._on_debug_step_changed)
-        self.enable_correction_matrix_checkbox.toggled.connect(self._on_debug_step_changed)
+        self.enable_density_matrix_checkbox.toggled.connect(self._on_debug_step_changed)
         self.enable_rgb_gains_checkbox.toggled.connect(self._on_debug_step_changed)
         self.enable_density_curve_checkbox.toggled.connect(self._on_debug_step_changed)
         self.export_3dlut_button.clicked.connect(self._on_export_3dlut_clicked)
@@ -494,16 +550,8 @@ class ParameterPanel(QWidget):
             self.density_dmax_slider.setValue(int(float(params.density_dmax) * 100))
             self.density_dmax_spinbox.setValue(float(params.density_dmax))
             
-            matrix_id = params.correction_matrix_file if params.correction_matrix_file else ""
-            index = self.matrix_combo.findData(matrix_id)
-            self.matrix_combo.setCurrentIndex(index if index >= 0 else 0)
-            
-            matrix_to_display = np.eye(3)
-            if matrix_id == "custom" and params.correction_matrix is not None:
-                matrix_to_display = params.correction_matrix
-            elif matrix_id:
-                data = self.main_window.the_enlarger._load_correction_matrix(matrix_id)
-                if data and "matrix" in data: matrix_to_display = np.array(data["matrix"])
+            # 矩阵UI的更新现在只依赖于 params.density_matrix
+            matrix_to_display = params.density_matrix if params.density_matrix is not None else np.eye(3)
             for i in range(3):
                 for j in range(3): self.matrix_editor_widgets[i][j].setValue(float(matrix_to_display[i, j]))
 
@@ -528,7 +576,7 @@ class ParameterPanel(QWidget):
                 self.curve_editor.curve_edit_widget.set_gamma(params.density_gamma)
             
             self.enable_density_inversion_checkbox.setChecked(params.enable_density_inversion)
-            self.enable_correction_matrix_checkbox.setChecked(params.enable_correction_matrix)
+            self.enable_density_matrix_checkbox.setChecked(params.enable_density_matrix)
             self.enable_rgb_gains_checkbox.setChecked(params.enable_rgb_gains)
             self.enable_density_curve_checkbox.setChecked(params.enable_density_curve)
         finally:
@@ -592,6 +640,7 @@ class ParameterPanel(QWidget):
         self.current_params.curve_points_b = all_curves.get('B', [(0.0, 0.0), (1.0, 1.0)])
         
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_cc_selector_toggled(self, checked: bool):
         """参数面板中的色卡选择器开关 → 同步到预览组件的色卡选择器。"""
@@ -606,7 +655,7 @@ class ParameterPanel(QWidget):
             print(f"同步色卡选择器状态失败: {e}")
 
     def _on_save_input_colorspace_clicked(self):
-        """保存当前UCS三角形对应的输入色彩空间定义到JSON文件（gamma=1.0）。"""
+        """保存当前UCS三角形对应的输入色彩变换定义到JSON文件（gamma=1.0）。"""
         try:
             # 1) 获取当前 u'v' 三点并转换为 xy
             coords_uv = {}
@@ -628,7 +677,7 @@ class ParameterPanel(QWidget):
                 QMessageBox.critical(self, "错误", f"u'v' → xy 转换失败: {e}")
                 return
 
-            # 2) 获取白点（使用当前输入色彩空间的白点作为模板）
+            # 2) 获取白点（使用当前输入色彩变换的白点作为模板）
             white_point = None
             try:
                 # 总是基于主窗口的当前色彩空间状态来获取模板
@@ -646,10 +695,10 @@ class ParameterPanel(QWidget):
 
             # 3) 询问名称与可选描述
             from PySide6.QtWidgets import QInputDialog, QFileDialog, QMessageBox
-            name, ok = QInputDialog.getText(self, "保存输入色彩空间", "请输入色彩空间名称:")
+            name, ok = QInputDialog.getText(self, "保存输入色彩变换", "请输入色彩变换名称:")
             if not ok or not name:
                 return
-            description, ok = QInputDialog.getText(self, "保存输入色彩空间", "请输入描述（可选）:")
+            description, ok = QInputDialog.getText(self, "保存输入色彩变换", "请输入描述（可选）:")
             if not ok:
                 return
 
@@ -678,7 +727,7 @@ class ParameterPanel(QWidget):
             default_path = f"{last_directory}/{safe_filename or 'CustomColorspace'}_{timestamp}.json"
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "保存输入色彩空间",
+                "保存输入色彩变换",
                 default_path,
                 "JSON文件 (*.json)"
             )
@@ -697,12 +746,12 @@ class ParameterPanel(QWidget):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 with open(p, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-                QMessageBox.information(self, "成功", f"输入色彩空间已保存到：\n{str(p)}")
+                QMessageBox.information(self, "成功", f"输入色彩变换已保存到：\n{str(p)}")
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"保存输入色彩空间失败：\n{str(e)}")
+                QMessageBox.critical(self, "错误", f"保存输入色彩变换失败：\n{str(e)}")
                 return
         except Exception as e:
-            print(f"保存输入色彩空间异常: {e}")
+            print(f"保存输入色彩变换异常: {e}")
 
     def _on_input_colorspace_changed(self, space):
         if self._is_updating_ui: return
@@ -757,7 +806,7 @@ class ParameterPanel(QWidget):
             except Exception as e:
                 print(f"应用UCS模板失败: {e}")
         else:
-            # 未开启：直接切换输入色彩空间并刷新
+            # 未开启：直接切换输入色彩变换并刷新
             self.main_window.input_color_space = space
             if self.main_window.current_image:
                 self.main_window._reload_with_color_space()
@@ -770,6 +819,7 @@ class ParameterPanel(QWidget):
         if hasattr(self, 'curve_editor'):
             self.curve_editor.curve_edit_widget.set_gamma(self.current_params.density_gamma)
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_density_dmax_changed(self):
         if self._is_updating_ui: return
@@ -779,61 +829,90 @@ class ParameterPanel(QWidget):
         if hasattr(self, 'curve_editor'):
             self.curve_editor.curve_edit_widget.set_dmax(self.current_params.density_dmax)
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_matrix_combo_changed(self):
         if self._is_updating_ui: return
         matrix_id = self.matrix_combo.currentData()
-        self.current_params.correction_matrix_file = matrix_id
-        self.current_params.enable_correction_matrix = bool(matrix_id)
-        if matrix_id != "custom": self.current_params.correction_matrix = None
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        if matrix_id == "custom":
+             # "自定义"通常由手动编辑触发，这里可以选择重置为单位矩阵或保持不变
+             # 为保持一致性，我们选择重置为单位矩阵
+            self.current_params.density_matrix = np.eye(3, dtype=np.float32)
+        elif matrix_id == "preset_custom":
+            # 这是从预设加载的，数值已在 main_window 中设置好，这里什么都不用做
+            pass
+        else:
+            # 从预设列表中选择
+            matrix = self.main_window.the_enlarger._get_density_matrix_array(matrix_id)
+            if matrix is not None:
+                self.current_params.density_matrix = matrix
+        
+        self.current_params.enable_density_matrix = self.current_params.density_matrix is not None
+        self.update_ui_from_params()
+        self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_matrix_editor_changed(self):
         if self._is_updating_ui: return
         matrix = np.zeros((3, 3), dtype=np.float32)
         for i in range(3):
             for j in range(3): matrix[i, j] = self.matrix_editor_widgets[i][j].value()
-        self.current_params.correction_matrix = matrix
-        self.current_params.correction_matrix_file = "custom"
-        self.current_params.enable_correction_matrix = True
+        self.current_params.density_matrix = matrix
+        self.current_params.enable_density_matrix = True
         
-        # 直接设置下拉菜单为"自定义"，避免update_ui_from_params的复杂逻辑
+        # 手动编辑矩阵意味着进入了"自定义"状态
         self._is_updating_ui = True
-        self.matrix_combo.setCurrentIndex(0)  # "自定义"是第一个项
-        self._is_updating_ui = False
+        try:
+            index = self.matrix_combo.findData("custom")
+            if index != -1:
+                self.matrix_combo.setCurrentIndex(index)
+        finally:
+            self._is_updating_ui = False
         
         self.parameter_changed.emit()
+        self._debounce_timer.start()
     
     def _reset_matrix_to_identity(self):
         if self._is_updating_ui: return
-        self.current_params.correction_matrix = np.eye(3, dtype=np.float32)
-        self.current_params.correction_matrix_file = "custom"
-        self.current_params.enable_correction_matrix = True
+        self.current_params.density_matrix = np.eye(3, dtype=np.float32)
+        self.current_params.enable_density_matrix = True
         
-        # 直接设置下拉菜单为"自定义"，避免update_ui_from_params的复杂逻辑
+        # 直接设置下拉菜单为"自定义"，并更新编辑器
         self._is_updating_ui = True
-        self.matrix_combo.setCurrentIndex(0)  # "自定义"是第一个项
-        self._is_updating_ui = False
+        try:
+            index = self.matrix_combo.findData("custom")
+            if index != -1:
+                self.matrix_combo.setCurrentIndex(index)
+            self.update_ui_from_params() # 更新矩阵编辑器为单位矩阵
+        finally:
+            self._is_updating_ui = False
         
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_red_gain_changed(self):
         if self._is_updating_ui: return
         val = self.red_gain_slider.value() / 100.0 if self.sender() == self.red_gain_slider else self.red_gain_spinbox.value()
         self.current_params.rgb_gains = (float(val), self.current_params.rgb_gains[1], self.current_params.rgb_gains[2])
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        self.update_ui_from_params()
+        self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_green_gain_changed(self):
         if self._is_updating_ui: return
         val = self.green_gain_slider.value() / 100.0 if self.sender() == self.green_gain_slider else self.green_gain_spinbox.value()
         self.current_params.rgb_gains = (self.current_params.rgb_gains[0], float(val), self.current_params.rgb_gains[2])
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        self.update_ui_from_params()
+        self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_blue_gain_changed(self):
         if self._is_updating_ui: return
         val = self.blue_gain_slider.value() / 100.0 if self.sender() == self.blue_gain_slider else self.blue_gain_spinbox.value()
         self.current_params.rgb_gains = (self.current_params.rgb_gains[0], self.current_params.rgb_gains[1], float(val))
-        self.update_ui_from_params(); self.parameter_changed.emit()
+        self.update_ui_from_params()
+        self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_curve_changed(self, curve_name: str, points: list):
         if self._is_updating_ui: return
@@ -854,16 +933,18 @@ class ParameterPanel(QWidget):
         self.current_params.enable_curve_b = len(self.current_params.curve_points_b) >= 2 and self.current_params.curve_points_b != [(0.0, 0.0), (1.0, 1.0)]
         
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
 
     
     def _on_debug_step_changed(self):
         if self._is_updating_ui: return
         self.current_params.enable_density_inversion = self.enable_density_inversion_checkbox.isChecked()
-        self.current_params.enable_correction_matrix = self.enable_correction_matrix_checkbox.isChecked()
+        self.current_params.enable_density_matrix = self.enable_density_matrix_checkbox.isChecked()
         self.current_params.enable_rgb_gains = self.enable_rgb_gains_checkbox.isChecked()
         self.current_params.enable_density_curve = self.enable_density_curve_checkbox.isChecked()
         self.parameter_changed.emit()
+        self._debounce_timer.start()
 
     def _on_auto_color_single_clicked(self):
         """AI自动校色（单次）"""
@@ -911,6 +992,7 @@ class ParameterPanel(QWidget):
             self.current_params.rgb_gains = tuple(new_rgb_gains)
             self.update_ui_from_params()
             self.parameter_changed.emit()
+            self._debounce_timer.start()
             return
             
         # 重新读取当前预览图像（这很关键！）
@@ -925,6 +1007,7 @@ class ParameterPanel(QWidget):
                 self.current_params.rgb_gains = tuple(new_rgb_gains)
                 self.update_ui_from_params()
                 self.parameter_changed.emit()
+                self._debounce_timer.start()
             return
             
         # 计算当前图像的增益和光源RGB
@@ -953,6 +1036,7 @@ class ParameterPanel(QWidget):
             self.current_params.rgb_gains = tuple(new_rgb_gains)
             self.update_ui_from_params()
             self.parameter_changed.emit()
+            self._debounce_timer.start()
             return
         
         # 如果增益变化很小（接近收敛），也提前结束（打印提示）
@@ -960,6 +1044,7 @@ class ParameterPanel(QWidget):
             self.current_params.rgb_gains = tuple(new_rgb_gains)
             self.update_ui_from_params()
             self.parameter_changed.emit()
+            self._debounce_timer.start()
             print("自动校色提前收敛，停止迭代。")
             print(f"最终累计增益: R={self._auto_color_total_gains[0]:.3f}, G={self._auto_color_total_gains[1]:.3f}, B={self._auto_color_total_gains[2]:.3f}")
             return
@@ -968,6 +1053,7 @@ class ParameterPanel(QWidget):
         self.current_params.rgb_gains = tuple(new_rgb_gains)
         self.update_ui_from_params()
         self.parameter_changed.emit()  # 触发预览更新（异步）
+        self._debounce_timer.start()
         # 这里不再使用定时器推进迭代，改由 _on_preview_updated_tick 回调触发
 
     def _on_preview_updated_tick(self):
@@ -1025,7 +1111,7 @@ class ParameterPanel(QWidget):
             enabled_features = []
             if current_params.enable_density_inversion:
                 enabled_features.append("密度反相")
-            if current_params.enable_correction_matrix:
+            if current_params.enable_density_matrix:
                 enabled_features.append("校正矩阵")
             if current_params.enable_rgb_gains:
                 enabled_features.append("RGB增益")
@@ -1037,7 +1123,7 @@ class ParameterPanel(QWidget):
                 QMessageBox.warning(self, "警告", "没有启用任何调色功能，无法生成有意义的LUT。")
                 return
             
-            # 创建用于LUT生成的参数副本，确保不包含输入色彩空间转换
+            # 创建用于LUT生成的参数副本，确保不包含输入色彩变换转换
             lut_params = current_params.copy()
             
             # 生成LUT
@@ -1066,7 +1152,7 @@ class ParameterPanel(QWidget):
                     proxy_scale=1.0
                 )
                 
-                # 应用调色管道（不包含输入色彩空间转换）
+                # 应用调色管道（不包含输入色彩变换转换）
                 result = self.main_window.the_enlarger.apply_full_pipeline(virtual_image, lut_params)
                 
                 # 返回结果
@@ -1129,15 +1215,15 @@ class ParameterPanel(QWidget):
             traceback.print_exc()
 
     def _on_export_input_cc_lut_clicked(self):
-        """处理导出输入色彩管理LUT按钮点击事件"""
+        """处理导出输入色彩科学LUT按钮点击事件"""
         if self._is_updating_ui: return
         
         try:
-            # 获取当前输入色彩空间
+            # 获取当前输入色彩变换
             current_input_space = self.input_colorspace_combo.currentText()
             if not current_input_space:
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "警告", "请先选择输入色彩空间。")
+                QMessageBox.warning(self, "警告", "请先选择输入色彩变换。")
                 return
             
             # 获取工作色彩空间（通常是ACEScg）
@@ -1146,7 +1232,7 @@ class ParameterPanel(QWidget):
             # 检查色彩空间转换是否有效
             if not self.main_window.color_space_manager.validate_color_space(current_input_space):
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "警告", f"输入色彩空间 '{current_input_space}' 无效。")
+                QMessageBox.warning(self, "警告", f"输入色彩变换 '{current_input_space}' 无效。")
                 return
             
             if not self.main_window.color_space_manager.validate_color_space(working_space):
@@ -1158,7 +1244,7 @@ class ParameterPanel(QWidget):
             from divere.utils.lut_generator.core import LUTManager
             
             def transform_function(input_rgb):
-                """LUT变换函数，应用输入色彩空间转换"""
+                """LUT变换函数，应用输入色彩变换转换"""
                 # 创建虚拟图像数据
                 from divere.core.data_types import ImageData
                 import numpy as np
@@ -1167,20 +1253,20 @@ class ParameterPanel(QWidget):
                 if input_rgb.ndim == 1:
                     input_rgb = input_rgb.reshape(1, 3)
                 
-                # 创建虚拟图像，使用输入色彩空间
+                # 创建虚拟图像，使用输入色彩变换
                 virtual_image = ImageData(
                     array=input_rgb.reshape(-1, 1, 3),
                     width=1,
                     height=input_rgb.shape[0],
                     channels=3,
                     dtype=np.float32,
-                    color_space=current_input_space,  # 使用当前选择的输入色彩空间
+                    color_space=current_input_space,  # 使用当前选择的输入色彩变换
                     file_path="",
                     is_proxy=True,
                     proxy_scale=1.0
                 )
                 
-                # 应用输入色彩空间转换（与_reload_with_color_space中的逻辑完全相同）
+                # 应用输入色彩变换转换（与_reload_with_color_space中的逻辑完全相同）
                 # 1. 设置图像色彩空间
                 converted_image = self.main_window.color_space_manager.set_image_color_space(
                     virtual_image, current_input_space
@@ -1202,7 +1288,7 @@ class ParameterPanel(QWidget):
             lut_info = lut_manager.generate_3d_lut(
                 transform_function, 
                 size=lut_size, 
-                title=f"DiVERE 输入色彩管理LUT - {current_input_space} to {working_space} ({lut_size}x{lut_size}x{lut_size})"
+                title=f"DiVERE 输入色彩科学LUT - {current_input_space} to {working_space} ({lut_size}x{lut_size}x{lut_size})"
             )
             
             # 选择保存路径
@@ -1220,7 +1306,7 @@ class ParameterPanel(QWidget):
             
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "保存输入色彩管理LUT文件",
+                "保存输入色彩科学LUT文件",
                 default_path,
                 "CUBE Files (*.cube);;All Files (*)"
             )
@@ -1237,9 +1323,9 @@ class ParameterPanel(QWidget):
                     QMessageBox.information(
                         self, 
                         "成功", 
-                        f"输入色彩管理LUT已成功导出到:\n{file_path}\n\n"
+                        f"输入色彩科学LUT已成功导出到:\n{file_path}\n\n"
                         f"转换: {current_input_space} → {working_space}\n"
-                        f"此LUT包含完整的输入色彩空间转换过程，与程序内置的色彩管理完全相同。"
+                        f"此LUT包含完整的输入色彩变换转换过程，与程序内置的色彩管理完全相同。"
                     )
                 else:
                     from PySide6.QtWidgets import QMessageBox
@@ -1247,8 +1333,8 @@ class ParameterPanel(QWidget):
             
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "错误", f"导出输入色彩管理LUT时发生错误:\n{str(e)}")
-            print(f"导出输入色彩管理LUT错误: {e}")
+            QMessageBox.critical(self, "错误", f"导出输入色彩科学LUT时发生错误:\n{str(e)}")
+            print(f"导出输入色彩科学LUT错误: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1452,8 +1538,8 @@ class ParameterPanel(QWidget):
     def _save_matrix(self):
         """保存当前矩阵到文件"""
         # 检查当前是否有自定义矩阵
-        if (self.current_params.correction_matrix_file != "custom" or 
-            self.current_params.correction_matrix is None):
+        if (self.current_params.density_matrix_file != "custom" or 
+            self.current_params.density_matrix is None):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self, 
@@ -1489,7 +1575,7 @@ class ParameterPanel(QWidget):
             "description": description,
             "film_type": "custom",
             "matrix_space": "density",  # 默认保存为密度空间矩阵
-            "matrix": self.current_params.correction_matrix.tolist()
+            "matrix": self.current_params.density_matrix.tolist()
         }
         
         # 生成文件名（去除特殊字符）
@@ -1552,7 +1638,7 @@ class ParameterPanel(QWidget):
         # 重新加载可用矩阵
         available = self.main_window.the_enlarger.get_available_matrices()
         for matrix_id in available:
-            data = self.main_window.the_enlarger._load_correction_matrix(matrix_id)
+            data = self.main_window.the_enlarger._load_density_matrix(matrix_id)
             if data: 
                 self.matrix_combo.addItem(data.get("name", matrix_id), matrix_id)
         
@@ -1647,11 +1733,11 @@ class ParameterPanel(QWidget):
                 # 从UI获取当前密度校正矩阵（若启用）
                 correction_matrix = None
                 try:
-                    if getattr(self.current_params, 'enable_correction_matrix', False):
-                        if self.current_params.correction_matrix is not None:
-                            correction_matrix = np.asarray(self.current_params.correction_matrix, dtype=float)
-                        elif getattr(self.current_params, 'correction_matrix_file', None) and hasattr(self.main_window, 'the_enlarger'):
-                            data = self.main_window.the_enlarger._load_correction_matrix(self.current_params.correction_matrix_file)
+                    if getattr(self.current_params, 'enable_density_matrix', False):
+                        if self.current_params.density_matrix is not None:
+                            correction_matrix = np.asarray(self.current_params.density_matrix, dtype=float)
+                        elif getattr(self.current_params, 'density_matrix_file', None) and hasattr(self.main_window, 'the_enlarger'):
+                            data = self.main_window.the_enlarger._load_density_matrix(self.current_params.density_matrix_file)
                             if data and 'matrix' in data:
                                 correction_matrix = np.array(data['matrix'], dtype=float)
                 except Exception as e:

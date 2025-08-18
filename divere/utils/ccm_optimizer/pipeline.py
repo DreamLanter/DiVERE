@@ -6,8 +6,8 @@ DiVERE管线模拟器
 严格按照DiVERE的处理流程模拟色彩处理管线，用于CCM优化。
 
 处理流程:
-1. 注册自定义输入色彩空间（基于优化参数的基色）
-2. 输入色彩空间 → 工作色彩空间(ACEScg)
+1. 注册自定义输入色彩变换（基于优化参数的基色）
+2. 输入色彩变换 → 工作色彩空间(ACEScg)
 3. 密度反转 (RGB → 密度)
 4. RGB增益调整
 5. 密度曲线处理 (跳过，因为优化中不包含曲线)
@@ -87,7 +87,7 @@ class DiVEREPipelineSimulator:
         一体化DiVERE管线模拟器 - 所有操作在一个函数内完成。
         
         完整流程:
-        1. 注册输入色彩空间，转换到工作空间(ACEScg)
+        1. 注册输入色彩变换，转换到工作空间(ACEScg)
         2. original_density = -log10(safe_rgb)  
         3. adjusted_density = pivot + (original_density - pivot) * gamma - dmax
         4. 应用密度校正矩阵 (如果有)

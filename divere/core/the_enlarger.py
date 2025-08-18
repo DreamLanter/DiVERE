@@ -32,7 +32,7 @@ class TheEnlarger:
 
     def __init__(self, preview_config: Optional[PreviewConfig] = None):
         # 校正矩阵管理
-        self._correction_matrices = {}
+        self._density_matrices = {}
         self._load_default_matrices()
         
         # 预览配置（统一管理）
@@ -48,7 +48,7 @@ class TheEnlarger:
         self.gpu_accelerator = self.math_ops.gpu_accelerator
         
         # 设置矩阵加载器
-        self.pipeline_processor.set_matrix_loader(self._load_correction_matrix)
+        self.pipeline_processor.set_matrix_loader(self._load_density_matrix)
         
         # 深度白平衡相关
         self._deep_wb_wrapper = None
@@ -75,7 +75,7 @@ class TheEnlarger:
                     
                     # 使用文件名作为键，但保留name字段用于显示
                     matrix_key = matrix_file.stem
-                    self._correction_matrices[matrix_key] = data
+                    self._density_matrices[matrix_key] = data
                     
                     # 标记是否为用户配置
                     if matrix_file.parent == enhanced_config_manager.user_matrices_dir:
@@ -97,7 +97,7 @@ class TheEnlarger:
                         data = json.load(f)
                         # 使用文件名作为键，但保留name字段用于显示
                         matrix_key = matrix_file.stem
-                        self._correction_matrices[matrix_key] = data
+                        self._density_matrices[matrix_key] = data
                 except Exception as e:
                     print(f"Failed to load matrix {matrix_file}: {e}")
 
@@ -258,24 +258,24 @@ class TheEnlarger:
     # 矩阵管理
     # =======================
 
-    def _load_correction_matrix(self, matrix_file):
+    def _load_density_matrix(self, matrix_file):
         """加载校正矩阵"""
-        return self._correction_matrices.get(matrix_file)
+        return self._density_matrices.get(matrix_file)
     
-    def _get_correction_matrix_array(self, matrix_file):
+    def _get_density_matrix_array(self, matrix_file):
         """获取校正矩阵的numpy数组"""
-        matrix_data = self._correction_matrices.get(matrix_file)
+        matrix_data = self._density_matrices.get(matrix_file)
         if matrix_data and matrix_data.get("matrix_space") == "density":
             return np.array(matrix_data["matrix"])
         return None
 
     def get_available_matrices(self) -> List[str]:
         """获取可用的校正矩阵列表"""
-        return list(self._correction_matrices.keys())
+        return list(self._density_matrices.keys())
     
     def reload_matrices(self):
         """重新加载矩阵文件"""
-        self._correction_matrices = {}
+        self._density_matrices = {}
         self._load_default_matrices()
 
     # =======================
@@ -296,20 +296,20 @@ class TheEnlarger:
             3D LUT数组 [lut_size, lut_size, lut_size, 3]
         """
         # 设置矩阵加载器并生成LUT
-        original_get_matrix = self.math_ops._get_correction_matrix
-        self.math_ops._get_correction_matrix = lambda p: self._get_correction_matrix_from_params(p)
+        original_get_matrix = self.math_ops._get_density_matrix
+        self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
         
         try:
             return self.pipeline_processor.generate_3d_lut(params, lut_size, include_curve)
         finally:
-            self.math_ops._get_correction_matrix = original_get_matrix
+            self.math_ops._get_density_matrix = original_get_matrix
 
-    def _get_correction_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
+    def _get_density_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
         """从参数中获取校正矩阵"""
-        if params.correction_matrix_file == "custom" and params.correction_matrix is not None:
-            return np.array(params.correction_matrix)
+        if params.density_matrix_file == "custom" and params.density_matrix is not None:
+            return np.array(params.density_matrix)
         
-        return self._get_correction_matrix_array(params.correction_matrix_file)
+        return self._get_density_matrix_array(params.density_matrix_file)
 
     # =======================
     # 向后兼容的Legacy方法（标记为弃用）

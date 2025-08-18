@@ -4,7 +4,7 @@
 CCM参数优化器
 
 使用 CMA-ES 优化 DiVERE 管线的关键参数：
-- primaries_xy: 输入色彩空间的RGB基色
+- primaries_xy: 输入色彩变换的RGB基色
 - gamma: 密度反差参数
 - dmax: 最大密度参数
 - r_gain: R通道增益

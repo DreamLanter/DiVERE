@@ -399,7 +399,7 @@ class ConfigManagerDialog(QDialog):
             
     def _add_colorspace_config(self):
         """添加色彩空间配置"""
-        name, ok = QInputDialog.getText(self, "添加色彩空间", "请输入色彩空间名称:")
+        name, ok = QInputDialog.getText(self, "添加色彩空间", "请输入色彩变换名称:")
         if ok and name:
             # 创建默认配置
             default_config = {

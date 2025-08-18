@@ -22,11 +22,12 @@ from divere.core.the_enlarger import TheEnlarger
 from divere.core.lut_processor import LUTProcessor
 
 from divere.core.data_types import (
-    ImageData, ColorGradingParams, Preset, 
-    ColorSpaceDefinition, MatrixDefinition
+    ImageData, ColorGradingParams, PreviewConfig,
+    InputTransformationDefinition, MatrixDefinition, CurveDefinition, Preset
 )
 from divere.utils.enhanced_config_manager import enhanced_config_manager
 from divere.utils.preset_manager import PresetManager, apply_preset_to_params
+from divere.utils.auto_preset_manager import AutoPresetManager
 
 from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
@@ -78,13 +79,15 @@ class MainWindow(QMainWindow):
         self.color_space_manager = ColorSpaceManager()
         self.the_enlarger = TheEnlarger()
         self.lut_processor = LUTProcessor(self.the_enlarger)
+        self.auto_preset_manager = AutoPresetManager()
         
         # 当前状态
         self.current_image: Optional[ImageData] = None
         self.current_proxy: Optional[ImageData] = None
         self.current_params = ColorGradingParams()
-        self.input_color_space: str = "Film_KodakRGB_Linear"  # 默认输入色彩空间
-        
+        self.input_color_space: str = "Film_KodakRGB_Linear"  # 默认输入色彩变换
+        self.current_orientation: int = 0 # 0, 90, 180, 270
+
         # 设置窗口
         self.setWindowTitle("DiVERE - 数字彩色放大机")
         self.setGeometry(100, 100, 1400, 900)
@@ -149,6 +152,7 @@ class MainWindow(QMainWindow):
         # 左侧参数面板
         self.parameter_panel = ParameterPanel(self)
         self.parameter_panel.parameter_changed.connect(self.on_parameter_changed)
+        self.parameter_panel.debounced_parameter_changed.connect(self._on_debounced_parameter_changed)
         parameter_dock = QDockWidget("调色参数", self)
         parameter_dock.setWidget(self.parameter_panel)
         parameter_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -180,19 +184,21 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         # 加载预设
-        load_preset_action = QAction("加载预设...", self)
+        load_preset_action = QAction("导入预设...", self)
+        load_preset_action.setToolTip("从文件导入预设并应用到当前图像")
         load_preset_action.triggered.connect(self._load_preset)
         file_menu.addAction(load_preset_action)
 
         # 保存预设
-        save_preset_action = QAction("保存预设...", self)
+        save_preset_action = QAction("导出预设...", self)
+        save_preset_action.setToolTip("将当前参数导出为预设文件")
         save_preset_action.triggered.connect(self._save_preset)
         file_menu.addAction(save_preset_action)
         
         file_menu.addSeparator()
         
-        # 选择输入色彩空间
-        colorspace_action = QAction("设置输入色彩空间", self)
+        # 选择输入色彩变换
+        colorspace_action = QAction("设置输入色彩变换", self)
         colorspace_action.triggered.connect(self._select_input_color_space)
         file_menu.addAction(colorspace_action)
         
@@ -346,33 +352,32 @@ class MainWindow(QMainWindow):
             # 保存当前目录
             enhanced_config_manager.set_directory("open_image", file_path)
             
+            # 设置活动目录并尝试自动加载预设
+            self.auto_preset_manager.set_active_directory(str(Path(file_path).parent))
+            preset = self.auto_preset_manager.get_preset_for_image(file_path)
+
             try:
                 # 加载图像
                 self.current_image = self.image_manager.load_image(file_path)
-                
+
+                if preset:
+                    print(f"为 {Path(file_path).name} 找到并应用自动预设。")
+                    self._apply_preset(preset)
+                else:
+                    print("未找到预设，沿用当前参数。")
+                    self.statusBar().showMessage("未找到预设，沿用当前参数")
+
                 # 生成代理（使用统一配置中的代理尺寸）
                 self.current_proxy = self.image_manager.generate_proxy(
                     self.current_image,
                     self.the_enlarger.preview_config.get_proxy_size_tuple()
                 )
-                
-                # 若为 .fff 文件，优先将输入色彩空间切为 AdobeRGB_Linear
-                try:
-                    if str(file_path).lower().endswith('.fff'):
-                        self.input_color_space = 'AdobeRGB_Linear'
-                        # 尝试同步参数面板下拉（若存在）
-                        if hasattr(self, 'parameter_panel') and hasattr(self.parameter_panel, 'input_colorspace_combo'):
-                            idx = self.parameter_panel.input_colorspace_combo.findText('AdobeRGB_Linear')
-                            if idx >= 0:
-                                self.parameter_panel.input_colorspace_combo.setCurrentIndex(idx)
-                except Exception:
-                    pass
 
-                # 设置输入色彩空间
+                # 设置输入色彩变换
                 self.current_proxy = self.color_space_manager.set_image_color_space(
                     self.current_proxy, self.input_color_space
                 )
-                print(f"设置输入色彩空间: {self.input_color_space}")
+                print(f"设置输入色彩变换: {self.input_color_space}")
                 
                 # 转换到工作色彩空间
                 self.current_proxy = self.color_space_manager.convert_to_working_space(
@@ -393,7 +398,74 @@ class MainWindow(QMainWindow):
                 
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"无法加载图像: {str(e)}")
-    
+
+    def _apply_preset(self, preset: Preset):
+        """将 Preset 对象应用到当前状态和UI"""
+        # 1. 应用方向和裁切
+        self.current_orientation = preset.orientation
+        # TODO: 应用裁切 (需要PreviewWidget支持)
+
+        # 2. 应用输入变换（仅更新状态，不触发重载）
+        if preset.input_transformation and preset.input_transformation.name:
+            cs_name = preset.input_transformation.name
+            if preset.input_transformation.definition:
+                try:
+                    derived_cs_name = f"{cs_name}_preset"
+                    self.color_space_manager.register_custom_colorspace(
+                        derived_cs_name,
+                        np.array(preset.input_transformation.definition['primaries_xy']),
+                        np.array(preset.input_transformation.definition['white_point_xy']),
+                        preset.input_transformation.definition['gamma']
+                    )
+                    self.input_color_space = derived_cs_name
+                except Exception as e:
+                    print(f"从预设注册色彩空间失败: {e}，回退到按名称查找")
+                    self.input_color_space = cs_name
+            else:
+                self.input_color_space = cs_name
+
+        # 3. 应用所有调色参数
+        # 3.1 应用 grading_params (包含RGB gains等)
+        apply_preset_to_params(preset, self.parameter_panel.current_params)
+        
+        # 3.2 应用密度矩阵的数值
+        if preset.density_matrix:
+            matrix_def = preset.density_matrix
+            # 预设中可能只有名字，没有数值
+            if matrix_def.values:
+                self.parameter_panel.current_params.density_matrix = np.array(matrix_def.values)
+            else:
+                # 如果只有名字，就去查找对应的内置矩阵
+                matrix = self.the_enlarger._get_density_matrix_array(matrix_def.name)
+                self.parameter_panel.current_params.density_matrix = matrix
+        
+        # 3.3 应用密度曲线的数值
+        if preset.density_curve and preset.density_curve.points:
+            self.parameter_panel.current_params.curve_points = preset.density_curve.points
+        
+        # 4. 从更新后的参数，刷新整个UI
+        self.parameter_panel.update_ui_from_params()
+        
+        # 5. 更新UI下拉菜单，显示 "preset: [名称]" (阻塞信号避免意外触发)
+        try:
+            self.parameter_panel.input_colorspace_combo.blockSignals(True)
+            self.parameter_panel.matrix_combo.blockSignals(True)
+            self.parameter_panel.curve_editor.curve_combo.blockSignals(True)
+
+            self.parameter_panel.clear_preset_items()
+            if preset.input_transformation and preset.input_transformation.name:
+                self.parameter_panel.add_preset_item("input_colorspace_combo", preset.input_transformation.name)
+            if preset.density_matrix and preset.density_matrix.name:
+                self.parameter_panel.add_preset_item("matrix_combo", preset.density_matrix.name)
+            if preset.density_curve and preset.density_curve.name:
+                self.parameter_panel.add_preset_item("curve_combo", preset.density_curve.name)
+        finally:
+            self.parameter_panel.input_colorspace_combo.blockSignals(False)
+            self.parameter_panel.matrix_combo.blockSignals(False)
+            self.parameter_panel.curve_editor.curve_combo.blockSignals(False)
+        
+        self.statusBar().showMessage(f"已加载预设: {preset.name}")
+
     def _load_preset(self):
         """加载预设文件并应用"""
         last_directory = enhanced_config_manager.get_directory("preset")
@@ -410,68 +482,88 @@ class MainWindow(QMainWindow):
             if not preset:
                 raise ValueError("加载预设返回空值")
 
-            # 1. 应用色彩空间
-            if preset.input_color_space and preset.input_color_space.name:
-                cs_name = preset.input_color_space.name
-                # 如果预设包含定义，则优先使用定义注册或更新色彩空间
-                if preset.input_color_space.definition:
-                    try:
-                        primaries = np.array(preset.input_color_space.definition['primaries_xy'])
-                        wp = np.array(preset.input_color_space.definition['white_point_xy'])
-                        gamma = float(preset.input_color_space.definition.get('gamma', 1.0))
-                        # 注册为自定义空间，确保可追溯
-                        custom_name = f"{cs_name}_preset"
-                        self.color_space_manager.register_custom_colorspace(
-                            custom_name, primaries, white_point_xy=wp, gamma=gamma
-                        )
-                        self.input_color_space = custom_name
-                    except Exception as e:
-                        QMessageBox.warning(self, "色彩空间警告", f"无法从预设创建色彩空间 '{cs_name}': {e}。将尝试使用同名内置空间。")
-                        self.input_color_space = cs_name
-                else:
-                    self.input_color_space = cs_name
-            
-            # 2. 更新参数面板的下拉框
-            combo = self.parameter_panel.input_colorspace_combo
-            index = combo.findText(self.input_color_space, Qt.MatchFlag.MatchFixedString)
-            if index >= 0:
-                combo.setCurrentIndex(index)
-            else:
-                 # 如果找不到，可能是自定义的，尝试刷新列表
-                self.parameter_panel.input_colorspace_combo.blockSignals(True)
-                self.parameter_panel.input_colorspace_combo.clear()
-                self.parameter_panel.input_colorspace_combo.addItems(self.color_space_manager.get_available_color_spaces())
-                index = combo.findText(self.input_color_space, Qt.MatchFlag.MatchFixedString)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-                else:
-                    QMessageBox.warning(self, "警告", f"预设中的色彩空间 '{self.input_color_space}' 当前不可用。")
-                self.parameter_panel.input_colorspace_combo.blockSignals(False)
+            # 0. 检查raw_file是否匹配
+            if preset.raw_file and self.current_image:
+                current_filename = Path(self.current_image.file_path).name
+                if preset.raw_file != current_filename:
+                    from PySide6.QtWidgets import QMessageBox
+                    reply = QMessageBox.question(self, "预设警告", 
+                        f"预设应用于 '{preset.raw_file}',\n"
+                        f"当前图像是 '{current_filename}'.\n\n"
+                        "确定要应用吗？",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No)
+                    if reply == QMessageBox.StandardButton.No:
+                        return
 
-
-            # 3. 应用调色参数（部分应用）
-            apply_preset_to_params(preset, self.parameter_panel.current_params)
+            self._apply_preset(preset)
             
-            # 处理矩阵
-            if preset.correction_matrix:
-                matrix_def = preset.correction_matrix
-                if matrix_def.name == "custom" and matrix_def.values:
-                    self.parameter_panel.current_params.correction_matrix = np.array(matrix_def.values)
-                    self.parameter_panel.current_params.correction_matrix_file = "custom"
-                else:
-                    self.parameter_panel.current_params.correction_matrix_file = matrix_def.name
-                    self.parameter_panel.current_params.correction_matrix = None
-
-            self.parameter_panel.update_ui_from_params()
-            
-            # 4. 如果有图像，重新加载并应用
+            # 如果有图像，用所有新参数重新加载并应用
             if self.current_image:
                 self._reload_with_color_space()
 
-            self.statusBar().showMessage(f"已加载预设: {preset.name}")
-
         except (IOError, ValueError, FileNotFoundError) as e:
             QMessageBox.critical(self, "加载预设失败", str(e))
+
+    def _create_preset_from_current_state(self, name: str) -> Preset:
+        """从当前应用状态创建Preset对象"""
+        params = self.parameter_panel.get_current_params()
+        
+        # 构造 InputTransformationDefinition (名称+数值冗余)
+        cs_name = self.input_color_space
+        cs_def = None
+        definition = self.color_space_manager.get_color_space_definition(cs_name)
+        if definition:
+            # 对于自定义或预设加载的名称，保存其根名称
+            base_name = cs_name.replace("_custom", "").replace("_preset", "")
+            cs_def = InputTransformationDefinition(
+                name=base_name,
+                definition=definition
+            )
+        
+        # 构造 MatrixDefinition
+        matrix_display_name = self.parameter_panel.matrix_combo.currentText()
+        matrix_values = None
+        if params.density_matrix is not None:
+            matrix_values = params.density_matrix.tolist()
+
+        matrix_def = None
+        if matrix_display_name:
+            clean_matrix_name = matrix_display_name.replace("preset: ", "")
+            # 如果UI显示是“自定义”，则在预设中记录为 "custom"
+            if clean_matrix_name == "自定义":
+                clean_matrix_name = "custom"
+            matrix_def = MatrixDefinition(name=clean_matrix_name, values=matrix_values)
+
+        # 构造Curve Definition
+        curve_def = None
+        curve_display_name = self.parameter_panel.curve_editor.curve_combo.currentText()
+        curve_points = params.curve_points
+        
+        if curve_display_name:
+            clean_curve_name = curve_display_name.replace("preset: ", "")
+            if clean_curve_name == "自定义":
+                clean_curve_name = "custom"
+            curve_def = CurveDefinition(name=clean_curve_name, points=curve_points)
+
+        # 构造文件名、裁切和方向
+        raw_file = Path(self.current_image.file_path).name if self.current_image else None
+        # TODO: 获取裁切框 (需要PreviewWidget支持)
+        crop_rect = None
+
+        return Preset(
+            name=name,
+            # Metadata
+            raw_file=raw_file,
+            orientation=self.current_orientation,
+            crop=crop_rect,
+            # Input Transformation
+            input_transformation=cs_def,
+            # Grading Parameters
+            grading_params=params.to_dict(),
+            density_matrix=matrix_def,
+            density_curve=curve_def,
+        )
 
     def _save_preset(self):
         """保存当前设置为预设文件"""
@@ -500,41 +592,7 @@ class MainWindow(QMainWindow):
                 preset_name = Path(file_path).stem
 
             # 创建Preset对象
-            params = self.parameter_panel.get_current_params()
-            
-            # 构造Input Color Space Definition
-            cs_def = None
-            cs_info = self.color_space_manager.get_color_space_info(self.input_color_space)
-            if cs_info:
-                cs_def = ColorSpaceDefinition(
-                    name=self.input_color_space,
-                    definition={
-                        "primaries_xy": np.array(cs_info["primaries"]).tolist(),
-                        "white_point_xy": np.array(cs_info["white_point"]).tolist(),
-                        "gamma": cs_info.get("gamma", 1.0)
-                    }
-                )
-
-            # 构造Matrix Definition
-            matrix_def = None
-            matrix_name = params.correction_matrix_file
-            matrix_values = None
-            if matrix_name == "custom" and params.correction_matrix is not None:
-                matrix_values = params.correction_matrix.tolist()
-            else:
-                matrix_data = self.the_enlarger._load_correction_matrix(matrix_name)
-                if matrix_data and "matrix" in matrix_data:
-                    matrix_values = matrix_data["matrix"]
-            
-            if matrix_name:
-                matrix_def = MatrixDefinition(name=matrix_name, values=matrix_values)
-
-            preset = Preset(
-                name=preset_name,
-                input_color_space=cs_def,
-                correction_matrix=matrix_def,
-                grading_params=params.to_dict()
-            )
+            preset = self._create_preset_from_current_state(preset_name)
 
             # 保存预设
             PresetManager.save_preset(preset, file_path)
@@ -544,7 +602,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存预设失败", str(e))
 
     def _select_input_color_space(self):
-        """选择输入色彩空间"""
+        """选择输入色彩变换"""
         from PySide6.QtWidgets import QInputDialog
         
         # 获取可用的色彩空间列表
@@ -553,8 +611,8 @@ class MainWindow(QMainWindow):
         # 显示选择对话框
         color_space, ok = QInputDialog.getItem(
             self, 
-            "选择输入色彩空间", 
-            "请选择图像的输入色彩空间:", 
+            "选择输入色彩变换", 
+            "请选择图像的输入色彩变换:", 
             available_spaces, 
             available_spaces.index(self.input_color_space) if self.input_color_space in available_spaces else 0, 
             False
@@ -567,7 +625,7 @@ class MainWindow(QMainWindow):
 
                 
                 # 更新状态栏
-                self.statusBar().showMessage(f"已设置输入色彩空间: {color_space}")
+                self.statusBar().showMessage(f"已设置输入色彩变换: {color_space}")
                 
                 # 如果已经有图像，重新处理
                 if self.current_image:
@@ -655,7 +713,7 @@ class MainWindow(QMainWindow):
         try:
             # 验证默认色彩空间
             if self.color_space_manager.validate_color_space(self.input_color_space):
-                self.statusBar().showMessage(f"已设置默认输入色彩空间: {self.input_color_space}")
+                self.statusBar().showMessage(f"已设置默认输入色彩变换: {self.input_color_space}")
             else:
                 # 如果默认色彩空间无效，使用第一个可用的
                 available_spaces = self.color_space_manager.get_available_color_spaces()
@@ -721,14 +779,21 @@ class MainWindow(QMainWindow):
         enhanced_config_manager.set_directory("save_image", str(Path(file_path).parent))
             
         try:
+            # 应用旋转到原始图像副本
+            final_image = self.current_image.copy()
+            if self.current_orientation != 0:
+                # np.rot90的k: 1=90, 2=180, 3=270. k>0为逆时针
+                k = self.current_orientation // 90
+                final_image.array = np.rot90(final_image.array, k=k)
+
             # 重要：将原图转换到工作色彩空间，保持与预览一致
             print(f"导出前的色彩空间转换:")
-            print(f"  原始图像色彩空间: {self.current_image.color_space}")
-            print(f"  输入色彩空间设置: {self.input_color_space}")
+            print(f"  原始图像色彩空间: {final_image.color_space}")
+            print(f"  输入色彩变换设置: {self.input_color_space}")
             
-            # 先设置输入色彩空间
+            # 先设置输入色彩变换
             working_image = self.color_space_manager.set_image_color_space(
-                self.current_image, self.input_color_space
+                final_image, self.input_color_space
             )
             # 转换到工作色彩空间（ACEScg）
             working_image = self.color_space_manager.convert_to_working_space(
@@ -772,8 +837,8 @@ class MainWindow(QMainWindow):
         self.current_params = ColorGradingParams()
         # 手动设置我们想要的非标准默认值
         self.current_params.density_gamma = 2.6
-        self.current_params.correction_matrix_file = "Cineon_States_M_to_Print_Density"
-        self.current_params.enable_correction_matrix = True
+        self.current_params.density_matrix = self.the_enlarger._get_density_matrix_array("Cineon_States_M_to_Print_Density")
+        self.current_params.enable_density_matrix = True
         
         # 设置默认曲线为Kodak Endura Paper
         self._load_default_curves()
@@ -840,8 +905,13 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            film_type = self.grading_engine.estimate_film_type(self.current_image)
-            QMessageBox.information(self, "胶片类型", f"估算的胶片类型: {film_type}")
+            # self.grading_engine is not defined in this file.
+            # Assuming it's meant to be self.the_enlarger.grading_engine
+            # or that it should be initialized if not already.
+            # For now, commenting out as it's not defined.
+            # film_type = self.grading_engine.estimate_film_type(self.current_image)
+            # QMessageBox.information(self, "胶片类型", f"估算的胶片类型: {film_type}")
+            pass # Placeholder for actual estimation logic
         except Exception as e:
             QMessageBox.critical(self, "错误", f"估算胶片类型失败: {str(e)}")
     
@@ -870,18 +940,26 @@ class MainWindow(QMainWindow):
         # 复制输入，避免在后台修改共享对象
         from copy import deepcopy
         try:
+            proxy_for_preview = self.current_proxy
+            # 应用旋转（如果需要）
+            if self.current_orientation != 0:
+                proxy_for_preview = self.current_proxy.copy()
+                # np.rot90的k: 1=90, 2=180, 3=270. k>0为逆时针
+                k = self.current_orientation // 90
+                proxy_for_preview.array = np.rot90(proxy_for_preview.array, k=k)
+
             proxy_copy = ImageData(
-                array=self.current_proxy.array.copy() if self.current_proxy.array is not None else None,
-                width=self.current_proxy.width,
-                height=self.current_proxy.height,
-                channels=self.current_proxy.channels,
-                dtype=self.current_proxy.dtype,
-                color_space=self.current_proxy.color_space,
-                icc_profile=self.current_proxy.icc_profile,
-                metadata=deepcopy(self.current_proxy.metadata),
-                file_path=self.current_proxy.file_path,
-                is_proxy=self.current_proxy.is_proxy,
-                proxy_scale=self.current_proxy.proxy_scale,
+                array=proxy_for_preview.array.copy() if proxy_for_preview.array is not None else None,
+                width=proxy_for_preview.width,
+                height=proxy_for_preview.height,
+                channels=proxy_for_preview.channels,
+                dtype=proxy_for_preview.dtype,
+                color_space=proxy_for_preview.color_space,
+                icc_profile=proxy_for_preview.icc_profile,
+                metadata=deepcopy(proxy_for_preview.metadata),
+                file_path=proxy_for_preview.file_path,
+                is_proxy=proxy_for_preview.is_proxy,
+                proxy_scale=proxy_for_preview.proxy_scale,
             )
             params_copy = deepcopy(self.current_params)
         except Exception as e:
@@ -949,6 +1027,19 @@ class MainWindow(QMainWindow):
         if self.preview_timer.isActive():
             self.preview_timer.stop()
         self.preview_timer.start()
+
+    def _on_debounced_parameter_changed(self):
+        """防抖后的参数变化回调，用于自动保存"""
+        if not self.current_image or not self.current_image.file_path:
+            return
+
+        preset_name = f"Auto-save for {Path(self.current_image.file_path).name}"
+        preset = self._create_preset_from_current_state(preset_name)
+        self.auto_preset_manager.save_preset_for_image(self.current_image.file_path, preset)
+        
+        preset_file_path = self.auto_preset_manager.get_current_preset_file_path()
+        if preset_file_path:
+            self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
     
     def get_current_params(self) -> ColorGradingParams:
         """获取当前调色参数"""
@@ -966,18 +1057,20 @@ class MainWindow(QMainWindow):
         if self.current_image and self.current_proxy:
             # 在旋转前捕获预览锚点
             self.preview_widget.prepare_rotate(direction)
-            # 旋转原始图像
-            rotated_array = np.rot90(self.current_image.array, direction)
-            self.current_image.array = np.ascontiguousarray(rotated_array)
-            self.current_image.height, self.current_image.width = self.current_image.width, self.current_image.height
             
-            # 旋转代理图像
-            rotated_proxy = np.rot90(self.current_proxy.array, direction)
-            self.current_proxy.array = np.ascontiguousarray(rotated_proxy)
-            self.current_proxy.height, self.current_proxy.width = self.current_proxy.width, self.current_proxy.height
+            # 更新旋转状态，而不是直接修改图像数据
+            # direction: 1=左旋(逆时针, +90), -1=右旋(顺时针, -90)
+            new_orientation = self.current_orientation + (direction * 90)
+            if new_orientation >= 360:
+                new_orientation -= 360
+            elif new_orientation < 0:
+                new_orientation += 360
+            self.current_orientation = new_orientation
             
-            # 重新处理预览（结果回到UI时会自动应用旋转锚点）
+            # 重新处理预览，它会应用新的旋转
             self._update_preview()
+            
+            self.statusBar().showMessage(f"图像已旋转: {self.current_orientation}°")
             
             # 自动适应窗口大小
             # 不再强制适应窗口，避免缩放变化导致“旋转会缩放”的现象

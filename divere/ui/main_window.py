@@ -16,18 +16,12 @@ from PySide6.QtCore import Qt, QTimer, QObject, Signal, QRunnable, Slot, QThread
 from PySide6.QtGui import QAction, QKeySequence
 import numpy as np
 
-from divere.core.image_manager import ImageManager
-from divere.core.color_space import ColorSpaceManager
-from divere.core.the_enlarger import TheEnlarger
-from divere.core.lut_processor import LUTProcessor
-
-from divere.core.data_types import (
-    ImageData, ColorGradingParams, PreviewConfig,
-    InputTransformationDefinition, MatrixDefinition, CurveDefinition, Preset
-)
+from divere.core.app_context import ApplicationContext
+from divere.core.data_types import ImageData, ColorGradingParams, Preset, InputTransformationDefinition, MatrixDefinition, CurveDefinition
 from divere.utils.enhanced_config_manager import enhanced_config_manager
 from divere.utils.preset_manager import PresetManager, apply_preset_to_params
 from divere.utils.auto_preset_manager import AutoPresetManager
+from divere.utils.spectral_sharpening import run as run_spectral_sharpening
 
 from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
@@ -35,58 +29,21 @@ from .parameter_panel import ParameterPanel
 from .theme import apply_theme, current_theme
 
 
-class _PreviewWorkerSignals(QObject):
-    result = Signal(int, ImageData, tuple)
-    error = Signal(int, str)
-    finished = Signal(int)
-
-
-class _PreviewWorker(QRunnable):
-    def __init__(self, seq: int, image: ImageData, params: ColorGradingParams, the_enlarger, color_space_manager):
-        super().__init__()
-        self.seq = seq
-        self.image = image
-        self.params = params
-        self.the_enlarger = the_enlarger
-        self.color_space_manager = color_space_manager
-        self.signals = _PreviewWorkerSignals()
-
-    @Slot()
-    def run(self):
-        try:
-            import time
-            t0 = time.time()
-            result_image = self.the_enlarger.apply_full_pipeline(self.image, self.params)
-            t1 = time.time()
-            result_image = self.color_space_manager.convert_to_display_space(result_image, "DisplayP3")
-            t2 = time.time()
-            self.signals.result.emit(self.seq, result_image, (t0, t1, t2))
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            self.signals.error.emit(self.seq, f"{e}\n{tb}")
-        finally:
-            self.signals.finished.emit(self.seq)
 class MainWindow(QMainWindow):
     """主窗口"""
-    preview_updated = Signal()
     
     def __init__(self):
         super().__init__()
         
         # 初始化核心组件
-        self.image_manager = ImageManager()
-        self.color_space_manager = ColorSpaceManager()
-        self.the_enlarger = TheEnlarger()
-        self.lut_processor = LUTProcessor(self.the_enlarger)
-        self.auto_preset_manager = AutoPresetManager()
+        self.context = ApplicationContext(self)
         
         # 当前状态
-        self.current_image: Optional[ImageData] = None
-        self.current_proxy: Optional[ImageData] = None
-        self.current_params = ColorGradingParams()
-        self.input_color_space: str = "Film_KodakRGB_Linear"  # 默认输入色彩变换
-        self.current_orientation: int = 0 # 0, 90, 180, 270
+        # self.current_image: Optional[ImageData] = None # 已迁移
+        # self.current_proxy: Optional[ImageData] = None # 已迁移
+        # self.current_params = ColorGradingParams() # 已迁移
+        # self.input_color_space: str = "Film_KodakRGB_Linear"  # 已迁移
+        # self.current_orientation: int = 0 # 已迁移
 
         # 设置窗口
         self.setWindowTitle("DiVERE - 数字彩色放大机")
@@ -97,6 +54,9 @@ class MainWindow(QMainWindow):
         self._create_menus()
         self._create_toolbar()
         self._create_statusbar()
+        self._connect_context_signals()
+        self._connect_panel_signals()
+
         # 主题：启动时应用上次选择
         try:
             app = QApplication.instance()
@@ -105,25 +65,25 @@ class MainWindow(QMainWindow):
         except Exception as _:
             pass
         
-        # 初始化默认色彩空间
-        self._initialize_color_space_info()
+        # 初始化默认色彩空间 - 逻辑迁移到 Context
+        # self._initialize_color_space_info()
         
-        # 实时预览更新（智能延迟机制 + 后台线程）
-        self.preview_timer = QTimer()
-        self.preview_timer.timeout.connect(self._update_preview)
-        self.preview_timer.setSingleShot(True)
-        self.preview_timer.setInterval(10)  # 10ms延迟，超快响应
+        # 实时预览更新 - 逻辑迁移到 Context
+        # self.preview_timer = QTimer()
+        # self.preview_timer.timeout.connect(self._update_preview)
+        # self.preview_timer.setSingleShot(True)
+        # self.preview_timer.setInterval(10)  # 10ms延迟，超快响应
         
         # 拖动状态跟踪
         self.is_dragging = False
         # 首次加载后在首帧预览到达时适应窗口
         self._fit_after_next_preview: bool = False
         
-        # 预览后台线程池与任务调度
-        self.thread_pool: QThreadPool = QThreadPool.globalInstance()
+        # 预览后台线程池 - 逻辑迁移到 Context
+        # self.thread_pool: QThreadPool = QThreadPool.globalInstance()
         # 限制为1，防止堆积；配合“忙碌/待处理”标志实现去抖
         try:
-            self.thread_pool.setMaxThreadCount(1)
+            self.context.thread_pool.setMaxThreadCount(1)
         except Exception:
             pass
         self._preview_busy: bool = False
@@ -131,11 +91,37 @@ class MainWindow(QMainWindow):
         self._preview_seq_counter: int = 0
 
         # 最后，初始化参数面板的默认值
-        self.parameter_panel.initialize_defaults()
+        self.parameter_panel.initialize_defaults(self.context.get_current_params())
         
         # 自动加载测试图像（可选）
         # self._load_demo_image()
         
+    def _connect_context_signals(self):
+        """连接 ApplicationContext 的信号到UI槽函数"""
+        self.context.preview_updated.connect(self._on_preview_updated)
+        self.context.status_message_changed.connect(self.statusBar().showMessage)
+        self.context.image_loaded.connect(self._on_image_loaded)
+        self.context.autosave_requested.connect(self._on_autosave_requested)
+
+    def _connect_panel_signals(self):
+        """连接ParameterPanel的信号"""
+        self.parameter_panel.auto_color_requested.connect(self._on_auto_color_requested)
+        self.parameter_panel.auto_color_iterative_requested.connect(self._on_auto_color_iterative_requested)
+        self.parameter_panel.ccm_optimize_requested.connect(self._on_ccm_optimize_requested)
+        self.parameter_panel.save_custom_colorspace_requested.connect(self._on_save_custom_colorspace_requested)
+        self.parameter_panel.toggle_color_checker_requested.connect(self.preview_widget.toggle_color_checker)
+        # 当 UCS 三角拖动结束：注册/切换到一个临时 custom 输入空间，触发代理重建与预览
+        self.parameter_panel.custom_primaries_changed.connect(self._on_custom_primaries_changed)
+        # 预览裁剪交互
+        self.preview_widget.crop_committed.connect(self._on_crop_committed)
+        self.preview_widget.request_focus_crop.connect(self._on_request_focus_crop)
+        self.preview_widget.request_restore_crop.connect(self._on_request_restore_crop)
+        # Context → UI：裁剪改变后刷新 overlay
+        try:
+            self.context.crop_changed.connect(self.preview_widget.set_crop_overlay)
+        except Exception:
+            pass
+
     def _create_ui(self):
         """创建用户界面"""
         # 中央部件
@@ -150,9 +136,8 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter)
         
         # 左侧参数面板
-        self.parameter_panel = ParameterPanel(self)
+        self.parameter_panel = ParameterPanel(self.context)
         self.parameter_panel.parameter_changed.connect(self.on_parameter_changed)
-        self.parameter_panel.debounced_parameter_changed.connect(self._on_debounced_parameter_changed)
         parameter_dock = QDockWidget("调色参数", self)
         parameter_dock.setWidget(self.parameter_panel)
         parameter_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -351,120 +336,33 @@ class MainWindow(QMainWindow):
         if file_path:
             # 保存当前目录
             enhanced_config_manager.set_directory("open_image", file_path)
-            
-            # 设置活动目录并尝试自动加载预设
-            self.auto_preset_manager.set_active_directory(str(Path(file_path).parent))
-            preset = self.auto_preset_manager.get_preset_for_image(file_path)
+            self.context.load_image(file_path)
 
-            try:
-                # 加载图像
-                self.current_image = self.image_manager.load_image(file_path)
+    def _on_image_loaded(self):
+        self._fit_after_next_preview = True
 
-                if preset:
-                    print(f"为 {Path(file_path).name} 找到并应用自动预设。")
-                    self._apply_preset(preset)
-                else:
-                    print("未找到预设，沿用当前参数。")
-                    self.statusBar().showMessage("未找到预设，沿用当前参数")
+    def _on_autosave_requested(self):
+        """处理来自Context的自动保存请求"""
+        current_image = self.context.get_current_image()
+        if not current_image or not current_image.file_path:
+            return
 
-                # 生成代理（使用统一配置中的代理尺寸）
-                self.current_proxy = self.image_manager.generate_proxy(
-                    self.current_image,
-                    self.the_enlarger.preview_config.get_proxy_size_tuple()
-                )
-
-                # 设置输入色彩变换
-                self.current_proxy = self.color_space_manager.set_image_color_space(
-                    self.current_proxy, self.input_color_space
-                )
-                print(f"设置输入色彩变换: {self.input_color_space}")
-                
-                # 转换到工作色彩空间
-                self.current_proxy = self.color_space_manager.convert_to_working_space(
-                    self.current_proxy
-                )
-                print(f"转换到工作色彩空间: {self.current_proxy.color_space}")
-                
-                # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
-                proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
-                self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
-                print(f"生成实时预览代理: {self.current_proxy.width}x{self.current_proxy.height}")
-                
-                # 触发预览，并在首帧结果到达时适应窗口
-                self._fit_after_next_preview = True
-                self._update_preview()
-                
-                self.statusBar().showMessage(f"已加载图像: {Path(file_path).name}")
-                
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"无法加载图像: {str(e)}")
-
-    def _apply_preset(self, preset: Preset):
-        """将 Preset 对象应用到当前状态和UI"""
-        # 1. 应用方向和裁切
-        self.current_orientation = preset.orientation
-        # TODO: 应用裁切 (需要PreviewWidget支持)
-
-        # 2. 应用输入变换（仅更新状态，不触发重载）
-        if preset.input_transformation and preset.input_transformation.name:
-            cs_name = preset.input_transformation.name
-            if preset.input_transformation.definition:
-                try:
-                    derived_cs_name = f"{cs_name}_preset"
-                    self.color_space_manager.register_custom_colorspace(
-                        derived_cs_name,
-                        np.array(preset.input_transformation.definition['primaries_xy']),
-                        np.array(preset.input_transformation.definition['white_point_xy']),
-                        preset.input_transformation.definition['gamma']
-                    )
-                    self.input_color_space = derived_cs_name
-                except Exception as e:
-                    print(f"从预设注册色彩空间失败: {e}，回退到按名称查找")
-                    self.input_color_space = cs_name
-            else:
-                self.input_color_space = cs_name
-
-        # 3. 应用所有调色参数
-        # 3.1 应用 grading_params (包含RGB gains等)
-        apply_preset_to_params(preset, self.parameter_panel.current_params)
+        preset_name = f"Auto-save for {Path(current_image.file_path).name}"
+        preset = self._create_preset_from_current_state(preset_name)
+        self.context.auto_preset_manager.save_preset_for_image(current_image.file_path, preset)
         
-        # 3.2 应用密度矩阵的数值
-        if preset.density_matrix:
-            matrix_def = preset.density_matrix
-            # 预设中可能只有名字，没有数值
-            if matrix_def.values:
-                self.parameter_panel.current_params.density_matrix = np.array(matrix_def.values)
-            else:
-                # 如果只有名字，就去查找对应的内置矩阵
-                matrix = self.the_enlarger._get_density_matrix_array(matrix_def.name)
-                self.parameter_panel.current_params.density_matrix = matrix
-        
-        # 3.3 应用密度曲线的数值
-        if preset.density_curve and preset.density_curve.points:
-            self.parameter_panel.current_params.curve_points = preset.density_curve.points
-        
-        # 4. 从更新后的参数，刷新整个UI
-        self.parameter_panel.update_ui_from_params()
-        
-        # 5. 更新UI下拉菜单，显示 "preset: [名称]" (阻塞信号避免意外触发)
-        try:
-            self.parameter_panel.input_colorspace_combo.blockSignals(True)
-            self.parameter_panel.matrix_combo.blockSignals(True)
-            self.parameter_panel.curve_editor.curve_combo.blockSignals(True)
+        preset_file_path = self.context.auto_preset_manager.get_current_preset_file_path()
+        if preset_file_path:
+            self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
 
-            self.parameter_panel.clear_preset_items()
-            if preset.input_transformation and preset.input_transformation.name:
-                self.parameter_panel.add_preset_item("input_colorspace_combo", preset.input_transformation.name)
-            if preset.density_matrix and preset.density_matrix.name:
-                self.parameter_panel.add_preset_item("matrix_combo", preset.density_matrix.name)
-            if preset.density_curve and preset.density_curve.name:
-                self.parameter_panel.add_preset_item("curve_combo", preset.density_curve.name)
-        finally:
-            self.parameter_panel.input_colorspace_combo.blockSignals(False)
-            self.parameter_panel.matrix_combo.blockSignals(False)
-            self.parameter_panel.curve_editor.curve_combo.blockSignals(False)
-        
-        self.statusBar().showMessage(f"已加载预设: {preset.name}")
+    def _on_auto_color_requested(self):
+        self.context.run_auto_color_correction(self.preview_widget.get_current_image_data)
+
+    def _on_auto_color_iterative_requested(self):
+        self.context.run_iterative_auto_color(self.preview_widget.get_current_image_data)
+
+    # _apply_preset logic is now in ApplicationContext
+    # def _apply_preset(self, preset: Preset): ...
 
     def _load_preset(self):
         """加载预设文件并应用"""
@@ -483,8 +381,9 @@ class MainWindow(QMainWindow):
                 raise ValueError("加载预设返回空值")
 
             # 0. 检查raw_file是否匹配
-            if preset.raw_file and self.current_image:
-                current_filename = Path(self.current_image.file_path).name
+            current_image = self.context.get_current_image()
+            if preset.raw_file and current_image:
+                current_filename = Path(current_image.file_path).name
                 if preset.raw_file != current_filename:
                     from PySide6.QtWidgets import QMessageBox
                     reply = QMessageBox.question(self, "预设警告", 
@@ -496,23 +395,24 @@ class MainWindow(QMainWindow):
                     if reply == QMessageBox.StandardButton.No:
                         return
 
-            self._apply_preset(preset)
+            self.context.load_preset(preset)
             
-            # 如果有图像，用所有新参数重新加载并应用
-            if self.current_image:
-                self._reload_with_color_space()
+            # 如果有图像，触发预览更新
+            if current_image:
+                self.context._prepare_proxy()
+                self.context._trigger_preview_update()
 
         except (IOError, ValueError, FileNotFoundError) as e:
             QMessageBox.critical(self, "加载预设失败", str(e))
 
     def _create_preset_from_current_state(self, name: str) -> Preset:
         """从当前应用状态创建Preset对象"""
-        params = self.parameter_panel.get_current_params()
+        params = self.context.get_current_params()
         
         # 构造 InputTransformationDefinition (名称+数值冗余)
-        cs_name = self.input_color_space
+        cs_name = self.context.get_input_color_space()
         cs_def = None
-        definition = self.color_space_manager.get_color_space_definition(cs_name)
+        definition = self.context.color_space_manager.get_color_space_definition(cs_name)
         if definition:
             # 对于自定义或预设加载的名称，保存其根名称
             base_name = cs_name.replace("_custom", "").replace("_preset", "")
@@ -547,7 +447,8 @@ class MainWindow(QMainWindow):
             curve_def = CurveDefinition(name=clean_curve_name, points=curve_points)
 
         # 构造文件名、裁切和方向
-        raw_file = Path(self.current_image.file_path).name if self.current_image else None
+        current_image = self.context.get_current_image()
+        raw_file = Path(current_image.file_path).name if current_image else None
         # TODO: 获取裁切框 (需要PreviewWidget支持)
         crop_rect = None
 
@@ -555,8 +456,18 @@ class MainWindow(QMainWindow):
             name=name,
             # Metadata
             raw_file=raw_file,
-            orientation=self.current_orientation,
-            crop=crop_rect,
+            orientation=self.context.get_current_orientation(),
+            crop=self.context.get_active_crop() or crop_rect,
+            # 多裁剪镜像（单裁剪阶段仅写一项，字段名 rect_norm）
+            crops=(
+                [{
+                    'id': 'c1',
+                    'name': '裁剪1',
+                    'rect_norm': list(self.context.get_active_crop())
+                }]
+                if self.context.get_active_crop() is not None else None
+            ),
+            active_crop_id=('c1' if self.context.get_active_crop() is not None else None),
             # Input Transformation
             input_transformation=cs_def,
             # Grading Parameters
@@ -567,7 +478,7 @@ class MainWindow(QMainWindow):
 
     def _save_preset(self):
         """保存当前设置为预设文件"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             QMessageBox.warning(self, "请先打开一张图片", "无法保存预设，因为需要基于当前状态创建。")
             return
 
@@ -596,7 +507,7 @@ class MainWindow(QMainWindow):
 
             # 保存预设
             PresetManager.save_preset(preset, file_path)
-            self.statusBar().showMessage(f"预设已保存: {preset.name}")
+            self.context.statusBar().showMessage(f"预设已保存: {preset.name}")
 
         except (IOError, KeyError) as e:
             QMessageBox.critical(self, "保存预设失败", str(e))
@@ -606,7 +517,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QInputDialog
         
         # 获取可用的色彩空间列表
-        available_spaces = self.color_space_manager.get_available_color_spaces()
+        available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
         # 显示选择对话框
         color_space, ok = QInputDialog.getItem(
@@ -614,57 +525,57 @@ class MainWindow(QMainWindow):
             "选择输入色彩变换", 
             "请选择图像的输入色彩变换:", 
             available_spaces, 
-            available_spaces.index(self.input_color_space) if self.input_color_space in available_spaces else 0, 
+            available_spaces.index(self.context.input_color_space) if self.context.input_color_space in available_spaces else 0, 
             False
         )
         
         if ok and color_space:
             try:
-                self.input_color_space = color_space
+                self.context.input_color_space = color_space
                 
 
                 
                 # 更新状态栏
-                self.statusBar().showMessage(f"已设置输入色彩变换: {color_space}")
+                self.context.statusBar().showMessage(f"已设置输入色彩变换: {color_space}")
                 
                 # 如果已经有图像，重新处理
-                if self.current_image:
-                    self._reload_with_color_space()
+                if self.context.get_current_image():
+                    self.context._reload_with_color_space()
                     
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"设置色彩空间失败: {str(e)}")
     
     def _reload_with_icc(self):
         """使用新的ICC配置文件重新加载图像"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             return
             
         try:
             # 重新生成代理（使用统一配置中的代理尺寸）
-            self.current_proxy = self.image_manager.generate_proxy(
-                self.current_image,
-                self.the_enlarger.preview_config.get_proxy_size_tuple()
+            self.context.current_proxy = self.context.image_manager.generate_proxy(
+                self.context.current_image,
+                self.context.the_enlarger.preview_config.get_proxy_size_tuple()
             )
             
             # 应用ICC配置文件
-            if self.input_icc_profile:
-                self.current_proxy = self.color_space_manager.apply_icc_profile_to_image(
-                    self.current_proxy, self.input_icc_profile
+            if self.context.input_icc_profile:
+                self.context.current_proxy = self.context.color_space_manager.apply_icc_profile_to_image(
+                    self.context.current_proxy, self.context.input_icc_profile
                 )
             
             # 转换到工作色彩空间
-            source_color_space = self.current_proxy.color_space
-            self.current_proxy = self.color_space_manager.convert_to_working_space(
-                self.current_proxy, source_color_space
+            source_color_space = self.context.current_proxy.color_space
+            self.context.current_proxy = self.context.color_space_manager.convert_to_working_space(
+                self.context.current_proxy, source_color_space
             )
             
             # 重新生成小代理（如果需要）
-            proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
+            proxy_size = self.context.the_enlarger.preview_config.get_proxy_size_tuple()
             
-            self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
+            self.context.current_proxy = self.context.image_manager.generate_proxy(self.context.current_proxy, proxy_size)
             
             # 更新预览
-            self._update_preview()
+            self.context._trigger_preview_update()
             
             # 自动适应窗口大小
             self.preview_widget.fit_to_window()
@@ -674,52 +585,177 @@ class MainWindow(QMainWindow):
     
     def _reload_with_color_space(self):
         """使用新的色彩空间重新加载图像"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             return
         
         try:
             # 重新生成代理（使用统一配置中的代理尺寸）
-            self.current_proxy = self.image_manager.generate_proxy(
-                self.current_image,
-                self.the_enlarger.preview_config.get_proxy_size_tuple()
+            self.context.current_proxy = self.context.image_manager.generate_proxy(
+                self.context.current_image,
+                self.context.the_enlarger.preview_config.get_proxy_size_tuple()
             )
             
             # 设置新的色彩空间
-            self.current_proxy = self.color_space_manager.set_image_color_space(
-                self.current_proxy, self.input_color_space
+            self.context.current_proxy = self.context.color_space_manager.set_image_color_space(
+                self.context.current_proxy, self.context.input_color_space
             )
             
             # 转换到工作色彩空间
-            self.current_proxy = self.color_space_manager.convert_to_working_space(
-                self.current_proxy
+            self.context.current_proxy = self.context.color_space_manager.convert_to_working_space(
+                self.context.current_proxy
             )
             
             # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
-            proxy_size = self.the_enlarger.preview_config.get_proxy_size_tuple()
+            proxy_size = self.context.the_enlarger.preview_config.get_proxy_size_tuple()
             
-            self.current_proxy = self.image_manager.generate_proxy(self.current_proxy, proxy_size)
+            self.context.current_proxy = self.context.image_manager.generate_proxy(self.context.current_proxy, proxy_size)
             
             # 重新处理预览
-            self._update_preview()
+            self.context._trigger_preview_update()
             
             # 自动适应窗口大小
             self.preview_widget.fit_to_window()
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"重新加载图像失败: {str(e)}")
+
+    # ===== Spectral Sharpening Hooks =====
+    def _on_ccm_optimize_requested(self):
+        """根据色卡执行光谱锐化优化（后台），更新输入色彩空间与参数。"""
+        current_image = self.context.get_current_image()
+        if not (current_image and current_image.array is not None):
+            QMessageBox.warning(self, "提示", "请先打开一张图片")
+            return
+        # 获取当前输入空间 gamma（若取不到，退化为1.0）
+        cs_name = self.context.get_input_color_space()
+        cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+        input_gamma = float(cs_info.get("gamma", 1.0))
+
+        # 取色卡角点
+        cc_corners = getattr(self.preview_widget, 'cc_corners', None)
+        if not cc_corners or len(cc_corners) != 4:
+            QMessageBox.information(self, "提示", "请在预览中启用色卡选择器并设置四角点")
+            return
+
+        # 取当前密度校正矩阵
+        params = self.context.get_current_params()
+        use_mat = bool(params.enable_density_matrix)
+        corr_mat = params.density_matrix if (use_mat and params.density_matrix is not None) else None
+
+        self.statusBar().showMessage("正在根据色卡优化光谱锐化参数...（CMA-ES）")
+
+        # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
+        class _CCMWorker(QRunnable):
+            def __init__(self, image_array, corners, gamma, use_mat, mat):
+                super().__init__()
+                self.image_array = image_array
+                self.corners = corners
+                self.gamma = gamma
+                self.use_mat = use_mat
+                self.mat = mat
+                self.result = None
+                self.error = None
+            @Slot()
+            def run(self):
+                try:
+                    self.result = run_spectral_sharpening(
+                        self.image_array,
+                        self.corners,
+                        self.gamma,
+                        self.use_mat,
+                        self.mat,
+                        optimizer_max_iter=120,
+                        optimizer_tolerance=1e-6,
+                    )
+                except Exception as e:
+                    import traceback
+                    self.error = f"{e}\n{traceback.format_exc()}"
+
+        worker = _CCMWorker(current_image.array, cc_corners, input_gamma, use_mat, corr_mat)
+
+        def _on_done():
+            try:
+                if worker.error:
+                    QMessageBox.critical(self, "优化失败", worker.error)
+                    self.statusBar().showMessage("光谱锐化优化失败")
+                    return
+                res = worker.result or {}
+                params_dict = res.get('parameters', {})
+                primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
+                if primaries_xy is None or primaries_xy.shape != (3, 2):
+                    QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
+                    self.statusBar().showMessage("光谱锐化优化完成但结果无效")
+                    return
+
+                # 注册并切换到自定义输入色彩空间
+                base_name = cs_name.replace("_custom", "").replace("_preset", "")
+                custom_name = f"{base_name}_custom"
+                self.context.color_space_manager.register_custom_colorspace(custom_name, primaries_xy, None, gamma=1.0)
+                # 使用专用入口以便重建代理
+                self.context.set_input_color_space(custom_name)
+
+                # 应用其他参数更新
+                new_params = self.context.get_current_params().copy()
+                # 密度参数与RB对数增益
+                new_params.density_gamma = float(params_dict.get('gamma', new_params.density_gamma))
+                new_params.density_dmax = float(params_dict.get('dmax', new_params.density_dmax))
+                r_gain = float(params_dict.get('r_gain', new_params.rgb_gains[0]))
+                b_gain = float(params_dict.get('b_gain', new_params.rgb_gains[2]))
+                new_params.rgb_gains = (r_gain, new_params.rgb_gains[1], b_gain)
+
+                self.context.update_params(new_params)
+                self.statusBar().showMessage(
+                    f"光谱锐化完成：RMSE={float(res.get('rmse', 0.0)):.4f}, 已应用到自定义输入色彩变换"
+                )
+            finally:
+                pass
+
+        # 轮询检测任务完成（简化型）。
+        def _poll():
+            if getattr(worker, 'result', None) is not None or getattr(worker, 'error', None) is not None:
+                _on_done(); return
+            QTimer.singleShot(150, _poll)
+
+        self.context.thread_pool.start(worker)
+        QTimer.singleShot(150, _poll)
+
+    def _on_save_custom_colorspace_requested(self, primaries_dict: dict):
+        """保存 UCS 三角的基色坐标为输入色彩变换 JSON（用户目录）。"""
+        try:
+            # primaries_dict: {'R': (x,y), 'G': (x,y), 'B': (x,y)}
+            name_base = self.context.get_input_color_space().replace("_custom", "").replace("_preset", "")
+            save_name = f"{name_base}_custom"
+            data = {
+                "name": save_name,
+                "primaries": {
+                    "R": [float(primaries_dict['R'][0]), float(primaries_dict['R'][1])],
+                    "G": [float(primaries_dict['G'][0]), float(primaries_dict['G'][1])],
+                    "B": [float(primaries_dict['B'][0]), float(primaries_dict['B'][1])],
+                },
+                # 采用D65与 gamma=1.0（扫描线性）
+                "white_point": [0.3127, 0.3290],
+                "gamma": 1.0,
+            }
+            ok = enhanced_config_manager.save_user_config("colorspace", save_name, data)
+            if ok:
+                self.statusBar().showMessage(f"已保存输入色彩变换到用户目录: {save_name}.json")
+            else:
+                QMessageBox.warning(self, "保存失败", "无法保存到用户配置目录")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存输入色彩变换失败: {str(e)}")
     
     def _initialize_color_space_info(self):
         """初始化色彩空间信息"""
         try:
             # 验证默认色彩空间
-            if self.color_space_manager.validate_color_space(self.input_color_space):
-                self.statusBar().showMessage(f"已设置默认输入色彩变换: {self.input_color_space}")
+            if self.context.color_space_manager.validate_color_space(self.context.input_color_space):
+                self.context.statusBar().showMessage(f"已设置默认输入色彩变换: {self.context.input_color_space}")
             else:
                 # 如果默认色彩空间无效，使用第一个可用的
-                available_spaces = self.color_space_manager.get_available_color_spaces()
+                available_spaces = self.context.color_space_manager.get_available_color_spaces()
                 if available_spaces:
-                    self.input_color_space = available_spaces[0]
-                    self.statusBar().showMessage(f"默认色彩空间无效，使用: {self.input_color_space}")
+                    self.context.input_color_space = available_spaces[0]
+                    self.context.statusBar().showMessage(f"默认色彩空间无效，使用: {self.context.input_color_space}")
                 else:
                     print("错误: 没有可用的色彩空间")
         except Exception as e:
@@ -727,12 +763,12 @@ class MainWindow(QMainWindow):
     
     def _save_image(self):
         """保存图像"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             QMessageBox.warning(self, "警告", "没有可保存的图像")
             return
         
         # 获取可用的色彩空间
-        available_spaces = self.color_space_manager.get_available_color_spaces()
+        available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
         # 打开保存设置对话框
         save_dialog = SaveImageDialog(self, available_spaces)
@@ -746,11 +782,11 @@ class MainWindow(QMainWindow):
     
     def _save_image_as(self):
         """“另存为”图像"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             QMessageBox.warning(self, "警告", "没有可保存的图像")
             return
         
-        available_spaces = self.color_space_manager.get_available_color_spaces()
+        available_spaces = self.context.color_space_manager.get_available_color_spaces()
         save_dialog = SaveImageDialog(self, available_spaces)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -760,12 +796,13 @@ class MainWindow(QMainWindow):
 
     def _execute_save(self, settings: dict, force_dialog: bool = False):
         """执行保存操作"""
-        file_path = self.current_image.file_path if self.current_image else None
+        current_image = self.context.get_current_image()
+        file_path = current_image.file_path if current_image else None
         
         if force_dialog or not file_path:
             extension = ".tiff" if settings["format"] == "tiff" else ".jpg"
             filter_str = "TIFF文件 (*.tiff *.tif)" if settings["format"] == "tiff" else "JPEG文件 (*.jpg *.jpeg)"
-            original_filename = Path(self.current_image.file_path).stem if self.current_image and self.current_image.file_path else "untitled"
+            original_filename = Path(current_image.file_path).stem if current_image and current_image.file_path else "untitled"
             default_filename = f"{original_filename}_CC_{settings['color_space']}{extension}"
             
             last_directory = enhanced_config_manager.get_directory("save_image")
@@ -780,50 +817,50 @@ class MainWindow(QMainWindow):
             
         try:
             # 应用旋转到原始图像副本
-            final_image = self.current_image.copy()
-            if self.current_orientation != 0:
+            final_image = current_image.copy()
+            if self.context._current_orientation != 0:
                 # np.rot90的k: 1=90, 2=180, 3=270. k>0为逆时针
-                k = self.current_orientation // 90
+                k = self.context._current_orientation // 90
                 final_image.array = np.rot90(final_image.array, k=k)
 
             # 重要：将原图转换到工作色彩空间，保持与预览一致
             print(f"导出前的色彩空间转换:")
             print(f"  原始图像色彩空间: {final_image.color_space}")
-            print(f"  输入色彩变换设置: {self.input_color_space}")
+            print(f"  输入色彩变换设置: {self.context.input_color_space}")
             
             # 先设置输入色彩变换
-            working_image = self.color_space_manager.set_image_color_space(
-                final_image, self.input_color_space
+            working_image = self.context.color_space_manager.set_image_color_space(
+                final_image, self.context.input_color_space
             )
             # 转换到工作色彩空间（ACEScg）
-            working_image = self.color_space_manager.convert_to_working_space(
+            working_image = self.context.color_space_manager.convert_to_working_space(
                 working_image
             )
             print(f"  转换后工作色彩空间: {working_image.color_space}")
             
             # 应用调色参数到工作空间的图像（根据设置决定是否包含曲线）
             # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
-            result_image = self.the_enlarger.apply_full_pipeline(
+            result_image = self.context.the_enlarger.apply_full_pipeline(
                 working_image,
-                self.current_params,
+                self.context.current_params,
                 include_curve=settings["include_curve"],
                 for_export=True
             )
             
             # 转换到输出色彩空间
-            result_image = self.color_space_manager.convert_to_display_space(
+            result_image = self.context.color_space_manager.convert_to_display_space(
                 result_image, settings["color_space"]
             )
             
             # 保存图像
-            self.image_manager.save_image(
+            self.context.image_manager.save_image(
                 result_image, 
                 file_path, 
                 bit_depth=settings["bit_depth"],
                 quality=95
             )
             
-            self.statusBar().showMessage(
+            self.context.statusBar().showMessage(
                 f"图像已保存: {Path(file_path).name} "
                 f"({settings['bit_depth']}bit, {settings['color_space']})"
             )
@@ -833,74 +870,35 @@ class MainWindow(QMainWindow):
     
     def _reset_parameters(self):
         """重置调色参数"""
-        # 创建一个新的默认参数对象
-        self.current_params = ColorGradingParams()
-        # 手动设置我们想要的非标准默认值
-        self.current_params.density_gamma = 2.6
-        self.current_params.density_matrix = self.the_enlarger._get_density_matrix_array("Cineon_States_M_to_Print_Density")
-        self.current_params.enable_density_matrix = True
-        
-        # 设置默认曲线为Kodak Endura Paper
-        self._load_default_curves()
-        
-        # 将重置后的参数应用到UI
-        self.parameter_panel.current_params = self.current_params
-        self.parameter_panel.update_ui_from_params()
-        
-        # 触发预览更新
-        self._update_preview()
-        self.statusBar().showMessage("参数已重置")
+        self.context.reset_params()
     
     def _load_default_curves(self):
         """加载默认曲线（Kodak Endura Paper）"""
-        try:
-            curve_file = Path("config/curves/Kodak_Endura_Paper.json")
-            if curve_file.exists():
-                with open(curve_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if 'curves' in data and 'RGB' in data['curves']:
-                        # 设置RGB主曲线
-                        self.current_params.curve_points = data['curves']['RGB']
-                        self.current_params.enable_curve = True
-                        
-                        # 设置单通道曲线
-                        if 'R' in data['curves']:
-                            self.current_params.curve_points_r = data['curves']['R']
-                            self.current_params.enable_curve_r = True
-                        if 'G' in data['curves']:
-                            self.current_params.curve_points_g = data['curves']['G']
-                            self.current_params.enable_curve_g = True
-                        if 'B' in data['curves']:
-                            self.current_params.curve_points_b = data['curves']['B']
-                            self.current_params.enable_curve_b = True
-                        
-                    else:
-                        print("默认曲线文件格式不正确")
-            else:
-                print("默认曲线文件不存在")
-        except Exception as e:
-            print(f"加载默认曲线失败: {e}")
+        # 逻辑已迁移或将在Context中重新实现
+        pass
     
     def _toggle_original_view(self, checked: bool):
         """切换原始图像视图"""
         if checked:
             # 显示原始图像
-            if self.current_proxy:
-                self.preview_widget.set_image(self.current_proxy)
+            if self.context.get_current_image():
+                # TODO: 需要从Context获取原始代理图像
+                # self.preview_widget.set_image(self.current_proxy)
+                pass
         else:
             # 显示调色后的图像
-            self._update_preview()
+            self.context._trigger_preview_update()
     
     def _reset_view(self):
         """重置预览视图"""
         self.preview_widget.reset_view()
-        self.statusBar().showMessage("视图已重置")
+        self.context.statusBar().showMessage("视图已重置")
     
 
     
     def _estimate_film_type(self):
         """估算胶片类型"""
-        if not self.current_image:
+        if not self.context.get_current_image():
             QMessageBox.warning(self, "警告", "没有加载的图像")
             return
         
@@ -926,151 +924,91 @@ class MainWindow(QMainWindow):
             "© 2025 V7"
         )
     
-
-    
     def _update_preview(self):
-        """在后台线程中更新预览，保持UI线程响应。"""
-        if not self.current_proxy:
-            return
-        if self._preview_busy:
-            # 正在计算，标记一次待处理，稍后接力执行最新一次
-            self._preview_pending = True
-            return
+        """此方法现在由Context的信号触发，或直接调用Context的方法"""
+        self.context._trigger_preview_update()
 
-        # 复制输入，避免在后台修改共享对象
-        from copy import deepcopy
-        try:
-            proxy_for_preview = self.current_proxy
-            # 应用旋转（如果需要）
-            if self.current_orientation != 0:
-                proxy_for_preview = self.current_proxy.copy()
-                # np.rot90的k: 1=90, 2=180, 3=270. k>0为逆时针
-                k = self.current_orientation // 90
-                proxy_for_preview.array = np.rot90(proxy_for_preview.array, k=k)
-
-            proxy_copy = ImageData(
-                array=proxy_for_preview.array.copy() if proxy_for_preview.array is not None else None,
-                width=proxy_for_preview.width,
-                height=proxy_for_preview.height,
-                channels=proxy_for_preview.channels,
-                dtype=proxy_for_preview.dtype,
-                color_space=proxy_for_preview.color_space,
-                icc_profile=proxy_for_preview.icc_profile,
-                metadata=deepcopy(proxy_for_preview.metadata),
-                file_path=proxy_for_preview.file_path,
-                is_proxy=proxy_for_preview.is_proxy,
-                proxy_scale=proxy_for_preview.proxy_scale,
-            )
-            params_copy = deepcopy(self.current_params)
-        except Exception as e:
-            print(f"预览准备失败: {e}")
-            return
-
-        self._preview_busy = True
-        self._preview_seq_counter += 1
-        seq = int(self._preview_seq_counter)
-
-        worker = _PreviewWorker(
-            seq=seq,
-            image=proxy_copy,
-            params=params_copy,
-            the_enlarger=self.the_enlarger,
-            color_space_manager=self.color_space_manager,
-        )
-        worker.signals.result.connect(self._on_preview_result)
-        worker.signals.error.connect(self._on_preview_error)
-        worker.signals.finished.connect(self._on_preview_finished)
-        self.thread_pool.start(worker)
-
-    def _on_preview_result(self, seq: int, result_image: ImageData, timings: tuple[float, float, float]):
-        # 应用最新结果
-        t0, t1, t2 = timings
+    def _on_preview_updated(self, result_image: ImageData):
         self.preview_widget.set_image(result_image)
-        # 若标记为首帧需要适应窗口，则在真正有图像时触发一次
-        if getattr(self, "_fit_after_next_preview", False):
+        if self._fit_after_next_preview:
             try:
                 self.preview_widget.fit_to_window()
             finally:
                 self._fit_after_next_preview = False
-        print(f"预览耗时: 管线={(t1 - t0)*1000:.1f}ms, 显示色彩转换={(t2 - t1)*1000:.1f}ms, 总={(t2 - t0)*1000:.1f}ms")
-        # 发出预览已更新信号
-        self.preview_updated.emit()
-
-    def _on_preview_error(self, seq: int, message: str):
-        print(f"更新预览失败(seq={seq}): {message}")
-
-    def _on_preview_finished(self, seq: int):
-        self._preview_busy = False
-        if self._preview_pending:
-            self._preview_pending = False
-            # 立刻触发最新一次请求
-            self.preview_timer.start(0)
 
     def _open_config_manager(self):
         """打开配置管理器"""
         from divere.ui.config_manager_dialog import ConfigManagerDialog
         dialog = ConfigManagerDialog(self)
         dialog.exec()
+
+    # ===== 裁剪：UI协调槽 =====
+    def _on_crop_committed(self, rect_norm: tuple):
+        try:
+            self.context.set_single_crop(rect_norm)
+        except Exception:
+            pass
+
+    def _on_request_focus_crop(self):
+        try:
+            self._fit_after_next_preview = True
+            self.context.focus_on_active_crop()
+        except Exception:
+            pass
+
+    def _on_request_restore_crop(self):
+        try:
+            self.context.restore_crop_preview()
+        except Exception:
+            pass
+
+    def _on_custom_primaries_changed(self, primaries_xy: dict):
+        """当用户在 UCS 三角拖动完成后，基于 primaries_xy 注册并切换到临时输入空间。
+        遵循单向数据流：通过 Context 的 set_input_color_space 触发代理重建与预览更新。
+        """
+        try:
+            # 规范输入为 (3,2) 数组顺序 R,G,B
+            arr = np.array([primaries_xy['R'], primaries_xy['G'], primaries_xy['B']], dtype=float)
+            base_name = self.context.get_input_color_space().replace("_custom", "").replace("_preset", "")
+            temp_name = f"{base_name}_custom"
+            # 注册/覆盖临时空间（gamma=1.0，白点D65）
+            self.context.color_space_manager.register_custom_colorspace(temp_name, arr, None, gamma=1.0)
+            # 切换输入色彩变换（Context 内部会重建代理并刷新预览）
+            self.context.set_input_color_space(temp_name)
+            # 不修改其他调色参数，仅切换输入空间
+        except Exception as e:
+            try:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "提示", f"应用临时基色失败: {e}")
+            except Exception:
+                pass
         
     def _toggle_profiling(self, enabled: bool):
         """切换预览Profiling"""
-        self.the_enlarger.set_profiling_enabled(enabled)
-        self.color_space_manager.set_profiling_enabled(enabled)
-        self.statusBar().showMessage("预览Profiling已开启" if enabled else "预览Profiling已关闭")
+        self.context.the_enlarger.set_profiling_enabled(enabled)
+        self.context.color_space_manager.set_profiling_enabled(enabled)
+        self.context.statusBar().showMessage("预览Profiling已开启" if enabled else "预览Profiling已关闭")
     
     def on_parameter_changed(self):
         """参数改变时的回调"""
-        # 从参数面板获取最新参数
-        self.current_params = self.parameter_panel.get_current_params()
-        
-        # 使用智能延迟机制
-        if self.preview_timer.isActive():
-            self.preview_timer.stop()
-        self.preview_timer.start()
+        new_params = self.parameter_panel.get_current_params()
+        self.context.update_params(new_params)
 
-    def _on_debounced_parameter_changed(self):
-        """防抖后的参数变化回调，用于自动保存"""
-        if not self.current_image or not self.current_image.file_path:
-            return
-
-        preset_name = f"Auto-save for {Path(self.current_image.file_path).name}"
-        preset = self._create_preset_from_current_state(preset_name)
-        self.auto_preset_manager.save_preset_for_image(self.current_image.file_path, preset)
-        
-        preset_file_path = self.auto_preset_manager.get_current_preset_file_path()
-        if preset_file_path:
-            self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
-    
     def get_current_params(self) -> ColorGradingParams:
         """获取当前调色参数"""
-        return self.current_params
+        return self.context.get_current_params()
     
     def set_current_params(self, params: ColorGradingParams):
         """设置当前调色参数"""
-        self.current_params = params
-        
+        self.context.update_params(params)
+    
     def _on_image_rotated(self, direction):
-        """处理图像旋转
-        Args:
-            direction: 旋转方向，1=左旋，-1=右旋
-        """
-        if self.current_image and self.current_proxy:
-            # 在旋转前捕获预览锚点
-            self.preview_widget.prepare_rotate(direction)
-            
-            # 更新旋转状态，而不是直接修改图像数据
-            # direction: 1=左旋(逆时针, +90), -1=右旋(顺时针, -90)
-            new_orientation = self.current_orientation + (direction * 90)
-            if new_orientation >= 360:
-                new_orientation -= 360
-            elif new_orientation < 0:
-                new_orientation += 360
-            self.current_orientation = new_orientation
-            
-            # 重新处理预览，它会应用新的旋转
-            self._update_preview()
-            
-            self.statusBar().showMessage(f"图像已旋转: {self.current_orientation}°")
-            
-            # 自动适应窗口大小
-            # 不再强制适应窗口，避免缩放变化导致“旋转会缩放”的现象
+        """处理图像旋转：委托给 ApplicationContext 维护朝向与预览更新"""
+        try:
+            self.context.rotate(int(direction))
+        except Exception:
+            pass
+        
+# 移除 Worker 相关类定义
+# class _PreviewWorkerSignals(QObject): ...
+# class _PreviewWorker(QRunnable): ...

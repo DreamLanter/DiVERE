@@ -61,6 +61,12 @@ class ColorSpaceManager:
     def __init__(self):
         # 从JSON文件加载色彩空间定义
         self._color_spaces = {}
+        # 轻量调试开关（通过环境变量启用详细加载日志）——必须在加载前就初始化
+        try:
+            import os
+            self._verbose_logs: bool = bool(int(os.environ.get('DIVERE_VERBOSE', '0')))
+        except Exception:
+            self._verbose_logs = False
         self._load_colorspaces_from_json()
         
         # 不再需要预计算转换矩阵，使用在线计算
@@ -106,10 +112,11 @@ class ColorSpaceManager:
                     self._color_spaces[colorspace_name] = data
                     
                     # 标记是否为用户配置
-                    if json_file.parent == enhanced_config_manager.user_colorspace_dir:
-                        print(f"加载用户色彩空间: {colorspace_name}")
-                    else:
-                        print(f"加载内置色彩空间: {colorspace_name}")
+                    if self._verbose_logs:
+                        if json_file.parent == enhanced_config_manager.user_colorspace_dir:
+                            print(f"加载用户色彩空间: {colorspace_name}")
+                        else:
+                            print(f"加载内置色彩空间: {colorspace_name}")
                     
                 except Exception as e:
                     print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
@@ -118,7 +125,8 @@ class ColorSpaceManager:
             # 如果增强配置管理器不可用，使用原来的方法
             colorspace_dir = Path("config/colorspace")
             if not colorspace_dir.exists():
-                print(f"警告：色彩空间配置目录 {colorspace_dir} 不存在")
+                if self._verbose_logs:
+                    print(f"警告：色彩空间配置目录 {colorspace_dir} 不存在")
                 return
                 
             for json_file in colorspace_dir.glob("*.json"):
@@ -144,7 +152,8 @@ class ColorSpaceManager:
                     self._color_spaces[colorspace_name] = data
                     
                 except Exception as e:
-                    print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
+                    if self._verbose_logs:
+                        print(f"加载色彩空间配置文件 {json_file} 时出错: {e}")
     
     def _build_conversion_matrices(self):
         """构建色彩空间转换矩阵"""
@@ -223,7 +232,8 @@ class ColorSpaceManager:
         dst_space = self._color_spaces.get(dst_space_name)
         
         if src_space is None or dst_space is None:
-            print(f"警告: 未找到色彩空间定义，使用单位矩阵")
+            if self._verbose_logs:
+                print(f"警告: 未找到色彩空间定义，使用单位矩阵")
             return np.eye(3), np.array([1.0, 1.0, 1.0])
         
         try:
@@ -247,7 +257,8 @@ class ColorSpaceManager:
             return self._convert_cache[cache_key]
             
         except Exception as e:
-            print(f"色彩空间转换计算失败: {e}")
+            if self._verbose_logs or self._profiling_enabled:
+                print(f"色彩空间转换计算失败: {e}")
             return np.eye(3), np.array([1.0, 1.0, 1.0])
     
     def _calculate_rgb_to_xyz_matrix(self, color_space: dict) -> np.ndarray:
@@ -288,7 +299,8 @@ class ColorSpaceManager:
         try:
             scaling_factors = np.linalg.solve(primaries_matrix, W_XYZ)
         except np.linalg.LinAlgError:
-            print("警告: 基色矩阵奇异，使用默认缩放因子")
+            if self._verbose_logs:
+                print("警告: 基色矩阵奇异，使用默认缩放因子")
             scaling_factors = np.array([1.0, 1.0, 1.0])
         
         # 构建最终的RGB到XYZ转换矩阵
@@ -367,7 +379,8 @@ class ColorSpaceManager:
     def set_image_color_space(self, image: ImageData, color_space: str) -> ImageData:
         """设置图像的色彩空间"""
         if not self.validate_color_space(color_space):
-            print(f"无效的色彩空间: {color_space}，使用默认值Film_KodakRGB_Linear")
+            if self._verbose_logs:
+                print(f"无效的色彩空间: {color_space}，使用默认值Film_KodakRGB_Linear")
             color_space = "Film_KodakRGB_Linear"
         
         # 创建新的图像数据对象，更新色彩空间信息
@@ -379,9 +392,11 @@ class ColorSpaceManager:
             color_space=color_space,
             file_path=image.file_path,
             is_proxy=image.is_proxy,
-            proxy_scale=image.proxy_scale
+            proxy_scale=image.proxy_scale,
+            metadata=image.metadata  # 保留并传递元数据（如 source_wh/crop_overlay 等）
         )
-        print(f"设置图像色彩空间: {image.color_space} -> {color_space}")
+        if self._verbose_logs or self._profiling_enabled:
+            print(f"设置图像色彩空间: {image.color_space} -> {color_space}")
         return new_image
     
     def convert_to_working_space(self, image: ImageData, source_profile: str = None) -> ImageData:

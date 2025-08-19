@@ -17,13 +17,19 @@ from .data_types import ImageData, ColorGradingParams, LUT3D, PreviewConfig
 from .math_ops import FilmMathOps
 from .pipeline_processor import FilmPipelineProcessor
 
-# 尝试导入深度学习白平衡相关模块
+# 尝试导入深度学习白平衡相关模块（启动时静默，除非显式开启详细日志）
 try:
     from ..models.deep_wb_wrapper import create_deep_wb_wrapper
     DEEP_WB_AVAILABLE = True
-except ImportError as e:
-    print("Failed to import deep_wb_wrapper:")
-    traceback.print_exc()
+except ImportError:
+    try:
+        import os
+        _VERBOSE = bool(int(os.environ.get('DIVERE_VERBOSE', '0')))
+    except Exception:
+        _VERBOSE = False
+    if _VERBOSE:
+        print("Failed to import deep_wb_wrapper (optional dependency)")
+        traceback.print_exc()
     DEEP_WB_AVAILABLE = False
 
 
@@ -31,24 +37,15 @@ class TheEnlarger:
     """胶片放大机引擎，负责所有图像处理操作 - 重构版本"""
 
     def __init__(self, preview_config: Optional[PreviewConfig] = None):
-        # 校正矩阵管理
-        self._density_matrices = {}
-        self._load_default_matrices()
-        
-        # 预览配置（统一管理）
         self.preview_config = preview_config or PreviewConfig()
         
         # 核心处理组件
-        self.math_ops = FilmMathOps(preview_config=self.preview_config)
         self.pipeline_processor = FilmPipelineProcessor(
-            self.math_ops, self.preview_config
+            preview_config=self.preview_config
         )
         
-        # GPU加速器（共享math_ops的实例）
-        self.gpu_accelerator = self.math_ops.gpu_accelerator
-        
-        # 设置矩阵加载器
-        self.pipeline_processor.set_matrix_loader(self._load_density_matrix)
+        # GPU加速器
+        self.gpu_accelerator = self.pipeline_processor.gpu_accelerator
         
         # 深度白平衡相关
         self._deep_wb_wrapper = None
@@ -56,50 +53,9 @@ class TheEnlarger:
         # 性能分析
         self._profiling_enabled: bool = False
         
+        # Deep WB 可选，不可用时保持静默，避免启动期噪声
         if not DEEP_WB_AVAILABLE:
-            print("Warning: Deep White Balance not available, learning-based auto gain will be disabled")
-
-    def _load_default_matrices(self):
-        """加载默认的校正矩阵（支持用户配置优先）"""
-        try:
-            from divere.utils.enhanced_config_manager import enhanced_config_manager
-            
-            # 获取所有配置文件（用户配置优先）
-            config_files = enhanced_config_manager.get_config_files("matrices")
-            
-            for matrix_file in config_files:
-                try:
-                    data = enhanced_config_manager.load_config_file(matrix_file)
-                    if data is None:
-                        continue
-                    
-                    # 使用文件名作为键，但保留name字段用于显示
-                    matrix_key = matrix_file.stem
-                    self._density_matrices[matrix_key] = data
-                    
-                    # 标记是否为用户配置
-                    if matrix_file.parent == enhanced_config_manager.user_matrices_dir:
-                        print(f"加载用户矩阵: {matrix_key}")
-                    else:
-                        print(f"加载内置矩阵: {matrix_key}")
-                        
-                except Exception as e:
-                    print(f"Failed to load matrix {matrix_file}: {e}")
-                    
-        except ImportError:
-            # 如果增强配置管理器不可用，使用原来的方法
-            matrix_dir = Path("config/matrices")
-            if not matrix_dir.exists():
-                return
-            for matrix_file in matrix_dir.glob("*.json"):
-                try:
-                    with open(matrix_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        # 使用文件名作为键，但保留name字段用于显示
-                        matrix_key = matrix_file.stem
-                        self._density_matrices[matrix_key] = data
-                except Exception as e:
-                    print(f"Failed to load matrix {matrix_file}: {e}")
+            pass
 
     def set_profiling_enabled(self, enabled: bool) -> None:
         """启用/关闭预览管线Profiling"""
@@ -167,7 +123,8 @@ class TheEnlarger:
         if image.array is None: 
             return image
         
-        result_array = self.math_ops.density_inversion(
+        # This now directly calls the pipeline processor's math_ops
+        result_array = self.pipeline_processor.math_ops.density_inversion(
             image.array, gamma, dmax, use_optimization=True
         )
         
@@ -179,7 +136,7 @@ class TheEnlarger:
     
     def clear_caches(self) -> None:
         """清空内部缓存（调试用）"""
-        self.math_ops.clear_caches()
+        self.pipeline_processor.math_ops.clear_caches()
 
     # =======================
     # 自动白平衡
@@ -246,37 +203,19 @@ class TheEnlarger:
             illuminant = original_mean / np.sum(original_mean)
             
             t3 = time.time()
-            print(f"AI自动校色耗时: 预处理={(t1 - t0)*1000:.1f}ms, 推理={(t2 - t1)*1000:.1f}ms, 统计/收尾={(t3 - t2)*1000:.1f}ms, 总={(t3 - t0)*1000:.1f}ms")
+            if self._profiling_enabled:
+                print(f"AI自动校色耗时: 预处理={(t1 - t0)*1000:.1f}ms, 推理={(t2 - t1)*1000:.1f}ms, 统计/收尾={(t3 - t2)*1000:.1f}ms, 总={(t3 - t0)*1000:.1f}ms")
             
             return (gains[0], gains[1], gains[2], illuminant[0], illuminant[1], illuminant[2])
             
         except Exception as e:
-            print(f"Deep White Balance error: {e}")
+            if self._profiling_enabled:
+                print(f"Deep White Balance error: {e}")
             return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
 
     # =======================
-    # 矩阵管理
+    # 矩阵管理 (DEPRECATED - MOVED TO FilmPipelineProcessor)
     # =======================
-
-    def _load_density_matrix(self, matrix_file):
-        """加载校正矩阵"""
-        return self._density_matrices.get(matrix_file)
-    
-    def _get_density_matrix_array(self, matrix_file):
-        """获取校正矩阵的numpy数组"""
-        matrix_data = self._density_matrices.get(matrix_file)
-        if matrix_data and matrix_data.get("matrix_space") == "density":
-            return np.array(matrix_data["matrix"])
-        return None
-
-    def get_available_matrices(self) -> List[str]:
-        """获取可用的校正矩阵列表"""
-        return list(self._density_matrices.keys())
-    
-    def reload_matrices(self):
-        """重新加载矩阵文件"""
-        self._density_matrices = {}
-        self._load_default_matrices()
 
     # =======================
     # LUT生成
@@ -295,21 +234,7 @@ class TheEnlarger:
         Returns:
             3D LUT数组 [lut_size, lut_size, lut_size, 3]
         """
-        # 设置矩阵加载器并生成LUT
-        original_get_matrix = self.math_ops._get_density_matrix
-        self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
-        
-        try:
-            return self.pipeline_processor.generate_3d_lut(params, lut_size, include_curve)
-        finally:
-            self.math_ops._get_density_matrix = original_get_matrix
-
-    def _get_density_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
-        """从参数中获取校正矩阵"""
-        if params.density_matrix_file == "custom" and params.density_matrix is not None:
-            return np.array(params.density_matrix)
-        
-        return self._get_density_matrix_array(params.density_matrix_file)
+        return self.pipeline_processor.generate_3d_lut(params, lut_size, include_curve)
 
     # =======================
     # 向后兼容的Legacy方法（标记为弃用）

@@ -38,6 +38,9 @@ class Preset:
     raw_file: Optional[str] = None
     orientation: int = 0
     crop: Optional[Tuple[float, float, float, float]] = None  # (x_pct, y_pct, w_pct, h_pct)
+    # 预留多裁剪结构（向后兼容，当前实现仅填充单裁剪镜像）
+    crops: Optional[List[Dict[str, Any]]] = None
+    active_crop_id: Optional[str] = None
 
     # Input Transformation
     input_transformation: Optional[InputTransformationDefinition] = None
@@ -71,6 +74,18 @@ class Preset:
         if self.density_curve:
             data["density_curve"] = self.density_curve.__dict__
 
+        # 裁剪（多裁剪优先，镜像写单裁剪以兼容老版本）
+        if self.crops:
+            data["crops"] = self.crops
+            # 如果只有一个裁剪，镜像写入旧字段
+            try:
+                if len(self.crops) == 1 and "rect_norm" in self.crops[0]:
+                    data["crop"] = self.crops[0]["rect_norm"]
+            except Exception:
+                pass
+        if self.active_crop_id:
+            data["active_crop_id"] = self.active_crop_id
+        # 若无多裁剪，仅保留旧字段
         return data
 
     @classmethod
@@ -83,6 +98,8 @@ class Preset:
             raw_file=data.get("raw_file"),
             orientation=data.get("orientation", 0),
             crop=tuple(data["crop"]) if data.get("crop") else None,
+            crops=data.get("crops"),
+            active_crop_id=data.get("active_crop_id"),
             # Grading Parameters
             grading_params=data.get("grading_params", {}),
         )
@@ -195,17 +212,22 @@ class ImageData:
 @dataclass
 class ColorGradingParams:
     """调色参数的数据类"""
+    # Input Colorspace
+    input_color_space_name: str = "Film_KodakRGB_Linear" # UI state
+
     # Density Inversion
     density_gamma: float = 2.6
     density_dmax: float = 2.0
 
     # Density Matrix
     density_matrix: Optional[np.ndarray] = None
+    density_matrix_name: str = "custom" # UI state
 
     # RGB Gains
     rgb_gains: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     # Density Curve
+    density_curve_name: str = "custom" # UI state
     curve_points: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
     curve_points_r: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
     curve_points_g: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
@@ -227,12 +249,15 @@ class ColorGradingParams:
         new_params = ColorGradingParams()
         
         # 复制基础参数
+        new_params.input_color_space_name = self.input_color_space_name
         new_params.density_gamma = self.density_gamma
         new_params.density_dmax = self.density_dmax
         new_params.density_matrix = self.density_matrix.copy() if self.density_matrix is not None else None
+        new_params.density_matrix_name = self.density_matrix_name
         new_params.rgb_gains = self.rgb_gains
         
         # 复制曲线参数
+        new_params.density_curve_name = self.density_curve_name
         new_params.curve_points = self.curve_points.copy()
         new_params.curve_points_r = self.curve_points_r.copy()
         new_params.curve_points_g = self.curve_points_g.copy()
@@ -249,9 +274,12 @@ class ColorGradingParams:
     def to_dict(self) -> Dict[str, Any]:
         """将可保存的参数序列化为字典。"""
         data = {
+            'input_color_space_name': self.input_color_space_name,
             'density_gamma': self.density_gamma,
             'density_dmax': self.density_dmax,
             'rgb_gains': self.rgb_gains,
+            'density_matrix_name': self.density_matrix_name,
+            'density_curve_name': self.density_curve_name,
             'curve_points': self.curve_points,
             'curve_points_r': self.curve_points_r,
             'curve_points_g': self.curve_points_g,
@@ -268,6 +296,8 @@ class ColorGradingParams:
         - data 中存在的键才会更新 params 实例
         """
         params = cls()
+        if "input_color_space_name" in data:
+            params.input_color_space_name = data["input_color_space_name"]
         if "density_gamma" in data:
             params.density_gamma = data["density_gamma"]
         if "density_dmax" in data:
@@ -278,11 +308,16 @@ class ColorGradingParams:
             if matrix_data is not None:
                 params.density_matrix = np.array(matrix_data)
         
+        if "density_matrix_name" in data:
+            params.density_matrix_name = data["density_matrix_name"]
+
         if "rgb_gains" in data:
             rgb_gains = data["rgb_gains"]
             params.rgb_gains = tuple(rgb_gains)
         
         # 曲线参数
+        if "density_curve_name" in data:
+            params.density_curve_name = data["density_curve_name"]
         if "curve_points" in data:
             params.curve_points = data["curve_points"]
         if "curve_points_r" in data:
@@ -302,6 +337,8 @@ class ColorGradingParams:
 
     def update_from_dict(self, data: Dict[str, Any]) -> None:
         """用字典中的值部分更新当前实例"""
+        if "input_color_space_name" in data:
+            self.input_color_space_name = data["input_color_space_name"]
         if "density_gamma" in data:
             self.density_gamma = data["density_gamma"]
         if "density_dmax" in data:
@@ -312,9 +349,14 @@ class ColorGradingParams:
             if matrix_data is not None:
                 self.density_matrix = np.array(matrix_data)
         
+        if "density_matrix_name" in data:
+            self.density_matrix_name = data["density_matrix_name"]
+
         if "rgb_gains" in data:
             self.rgb_gains = tuple(data["rgb_gains"])
 
+        if "density_curve_name" in data:
+            self.density_curve_name = data["density_curve_name"]
         if "curve_points" in data:
             self.curve_points = data.get("curve_points", [(0.0, 0.0), (1.0, 1.0)])
         if "curve_points_r" in data:

@@ -4,13 +4,15 @@
 """
 
 import numpy as np
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import cv2
 
 from .data_types import ImageData, ColorGradingParams, PreviewConfig
 from .math_ops import FilmMathOps
+from ..utils.enhanced_config_manager import enhanced_config_manager
+from pathlib import Path
 
 
 class FilmPipelineProcessor:
@@ -30,12 +32,45 @@ class FilmPipelineProcessor:
         self._profiling_enabled = False
         self._last_profile: Dict[str, float] = {}
 
+        # 矩阵管理
+        self._density_matrices: Dict[str, Any] = {}
+        self._load_default_matrices()
+
         # 全精度管线分块参数（自动阈值与默认tile设置）
         # 当图像像素数超过该阈值时，自动启用分块处理以降低峰值内存并提高吞吐
         self.full_pipeline_chunk_threshold: int = 4096 * 4096  # 约16MP
         self.full_pipeline_tile_size: Tuple[int, int] = (2048, 2048)
         self.full_pipeline_max_workers: int = self.math_ops.num_threads
     
+    def _load_default_matrices(self):
+        """加载默认的校正矩阵"""
+        config_files = enhanced_config_manager.get_config_files("matrices")
+        for matrix_file in config_files:
+            try:
+                data = enhanced_config_manager.load_config_file(matrix_file)
+                if data:
+                    matrix_key = matrix_file.stem
+                    self._density_matrices[matrix_key] = data
+            except Exception as e:
+                print(f"Failed to load matrix {matrix_file}: {e}")
+
+    def get_available_matrices(self) -> List[str]:
+        return list(self._density_matrices.keys())
+
+    def get_matrix_data(self, key: str) -> Optional[Dict[str, Any]]:
+        return self._density_matrices.get(key)
+        
+    def get_density_matrix_array(self, key: str) -> Optional[np.ndarray]:
+        """获取校正矩阵的numpy数组"""
+        matrix_data = self.get_matrix_data(key)
+        if matrix_data and matrix_data.get("matrix_space") == "density":
+            return np.array(matrix_data["matrix"])
+        return None
+
+    def reload_matrices(self):
+        self._density_matrices.clear()
+        self._load_default_matrices()
+
     def set_profiling_enabled(self, enabled: bool) -> None:
         """启用/关闭性能分析"""
         self._profiling_enabled = enabled
@@ -322,7 +357,7 @@ class FilmPipelineProcessor:
             math_profile = {}
             
             # 注入矩阵获取函数到数学操作中（临时解决方案）
-            original_get_matrix = self.math_ops._get_density_matrix
+            # original_get_matrix = self.math_ops._get_density_matrix
             self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
             
             try:
@@ -332,7 +367,8 @@ class FilmPipelineProcessor:
                 )
             finally:
                 # 恢复原函数
-                self.math_ops._get_density_matrix = original_get_matrix
+                # self.math_ops._get_density_matrix = original_get_matrix
+                pass
                 
             profile['math_pipeline_ms'] = (time.time() - t1) * 1000.0
             profile.update({f"math/{k}": v for k, v in math_profile.items()})
@@ -378,7 +414,7 @@ class FilmPipelineProcessor:
                 t1_local = time.time()
                 math_profile_local: Dict[str, float] = {}
 
-                original_get_matrix = self.math_ops._get_density_matrix
+                # original_get_matrix = self.math_ops._get_density_matrix
                 self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
                 try:
                     block = self.math_ops.apply_full_math_pipeline(
@@ -386,7 +422,8 @@ class FilmPipelineProcessor:
                         params.enable_density_inversion, use_optimization, math_profile_local
                     )
                 finally:
-                    self.math_ops._get_density_matrix = original_get_matrix
+                    # self.math_ops._get_density_matrix = original_get_matrix
+                    pass
 
                 prof_local['math_ms'] = (time.time() - t1_local) * 1000.0
 
@@ -453,11 +490,16 @@ class FilmPipelineProcessor:
 
     def _get_density_matrix_from_params(self, params: ColorGradingParams) -> Optional[np.ndarray]:
         """从参数中获取校正矩阵（重构后简化）"""
-        return params.density_matrix
+        if params.density_matrix is not None:
+            return params.density_matrix
+        # Fallback to file-based for older preset compatibility if needed
+        # but the new flow should ensure density_matrix is always populated.
+        return None
     
     def set_matrix_loader(self, loader_func):
         """设置矩阵加载器函数"""
-        self._matrix_loader = loader_func
+        # Deprecated: matrix loading is now internal.
+        pass
     
     def _print_preview_profile(self, profile: Dict[str, float]) -> None:
         """打印预览性能分析"""
@@ -518,7 +560,7 @@ class FilmPipelineProcessor:
         
         # 应用数学管线（不包含密度反相，因为LUT通常用于已经反相的图像）
         # 注入矩阵获取函数
-        original_get_matrix = self.math_ops._get_density_matrix
+        # original_get_matrix = self.math_ops._get_density_matrix
         self.math_ops._get_density_matrix = lambda p: self._get_density_matrix_from_params(p)
         
         try:
@@ -527,6 +569,7 @@ class FilmPipelineProcessor:
                 params, include_curve, enable_density_inversion=False, use_optimization=True
             )
         finally:
-            self.math_ops._get_density_matrix = original_get_matrix
+            # self.math_ops._get_density_matrix = original_get_matrix
+            pass
         
         return output_colors

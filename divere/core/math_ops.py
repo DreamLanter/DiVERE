@@ -1150,10 +1150,12 @@ class FilmMathOps:
         return points == [(0.0, 0.0), (1.0, 1.0)] or not points
     
     def _get_density_matrix(self, params: ColorGradingParams) -> Optional[np.ndarray]:
-        """获取校正矩阵（需要在外部实现具体的矩阵加载逻辑）"""
-        # 这里需要从外部传入矩阵或者依赖注入
-        # 暂时返回None，在重构主类时会处理
-        if params.density_matrix_file == "custom" and params.density_matrix is not None:
-            return np.array(params.density_matrix)
+        """获取密度校正矩阵（与新参数结构对齐）。"""
+        # 新结构：直接使用 ColorGradingParams.density_matrix（若存在）
+        try:
+            if getattr(params, 'density_matrix', None) is not None:
+                return np.array(params.density_matrix)
+        except Exception:
+            pass
         return None
 

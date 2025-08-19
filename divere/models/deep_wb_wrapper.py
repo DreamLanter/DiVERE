@@ -32,7 +32,14 @@ try:
     import onnxruntime as ort
     ONNX_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: ONNX Runtime not available: {e}")
+    # 静默缺省，避免启动时噪声；需要时通过环境变量开启详细日志
+    _VERBOSE = False
+    try:
+        _VERBOSE = bool(int(os.environ.get('DIVERE_VERBOSE', '0')))
+    except Exception:
+        _VERBOSE = False
+    if _VERBOSE:
+        print(f"Warning: ONNX Runtime not available: {e}")
     ONNX_AVAILABLE = False
 
 
@@ -165,7 +172,11 @@ class DeepWBWrapper:
             cwd_model_path = os.path.join('models', 'net_awb.onnx')
             if os.path.exists(cwd_model_path):
                 self.onnx_model_path = cwd_model_path
-                print(f"Found model at working directory: {self.onnx_model_path}")
+                try:
+                    if bool(int(os.environ.get('DIVERE_VERBOSE', '0'))):
+                        print(f"Found model at working directory: {self.onnx_model_path}")
+                except Exception:
+                    pass
             else:
                 raise FileNotFoundError(f"ONNX model not found at {self.onnx_model_path}")
         
@@ -177,8 +188,12 @@ class DeepWBWrapper:
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
         
-        print(f"ONNX model loaded from: {self.onnx_model_path}")
-        print(f"Using providers: {self.session.get_providers()}")
+        try:
+            if bool(int(os.environ.get('DIVERE_VERBOSE', '0'))):
+                print(f"ONNX model loaded from: {self.onnx_model_path}")
+                print(f"Using providers: {self.session.get_providers()}")
+        except Exception:
+            pass
     
     def process_image(self, image: np.ndarray, max_size: int = 656) -> np.ndarray:
         """

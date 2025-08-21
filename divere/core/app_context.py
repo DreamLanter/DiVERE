@@ -1,9 +1,9 @@
 from PySide6.QtCore import QObject, Signal, QRunnable, Slot, QThreadPool, QTimer
-from typing import Optional
+from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
 
-from .data_types import ImageData, ColorGradingParams, Preset
+from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition
 from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
@@ -92,11 +92,28 @@ class ApplicationContext(QObject):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(500) # 500ms delay for autosave
         self._autosave_timer.timeout.connect(self.autosave_requested.emit)
+
+        # 应用集中式“默认预设”（config/default.json 或内置回退）
+        try:
+            from divere.utils.defaults import load_default_preset
+            default_preset = load_default_preset()
+            # 仅在无图像初始状态或每次启动时应用到 contactsheet 基线
+            self.load_preset(default_preset)
+        except Exception:
+            pass
         
         # 裁剪状态
-        self._crops: list = []  # list of dict: { 'id': str, 'rect': (x,y,w,h), 'name': str }
+        self._crops: list = []  # list[CropInstance]
         self._active_crop_id: Optional[str] = None
         self._crop_focused: bool = False
+        # 原图 contactsheet 的临时裁剪（不视为正式 crop 列表项）
+        self._contactsheet_crop_rect: Optional[tuple[float, float, float, float]] = None
+        
+        # 预设 Profile：contactsheet 与 per-crop 参数集
+        self._current_profile_kind: str = 'contactsheet'  # 'contactsheet' | 'crop'
+        self._contactsheet_params: ColorGradingParams = self._current_params.copy()
+        self._per_crop_params: dict = {}
+        self._contactsheet_orientation: int = 0
 
     def _create_default_params(self) -> ColorGradingParams:
         params = ColorGradingParams()
@@ -105,20 +122,7 @@ class ApplicationContext(QObject):
         params.density_matrix_name = "Cineon_States_M_to_Print_Density"
         params.enable_density_matrix = True
         
-        # 加载默认曲线
-        try:
-            from ..utils.app_paths import resolve_data_path
-            import json
-            
-            curve_path = resolve_data_path("config", "curves", "Kodak_Endura_Paper.json")
-            if curve_path.exists():
-                with open(curve_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if 'curves' in data and 'RGB' in data['curves']:
-                    params.curve_points = data['curves']['RGB']
-                    params.density_curve_name = "Kodak_Endura_Paper"
-        except Exception as e:
-            print(f"加载默认曲线失败: {e}")
+        # 默认曲线改由 default preset 决定；此处不再强行加载硬编码曲线
             
         return params
 
@@ -134,38 +138,96 @@ class ApplicationContext(QObject):
     def get_input_color_space(self) -> str:
         return self._current_params.input_color_space_name
 
+    def get_contactsheet_crop_rect(self) -> Optional[tuple[float, float, float, float]]:
+        """获取接触印像/原图的单张裁剪矩形（归一化），可能为 None。"""
+        return self._contactsheet_crop_rect
+
     # =================
-    # 裁剪（Crops）API
+    # 裁剪（Crops）API - 支持新的CropInstance模型
     # =================
-    def set_single_crop(self, rect_norm: tuple[float, float, float, float]) -> None:
-        """设置/替换单一裁剪，并设为激活；不自动聚焦。"""
+    def set_single_crop(self, rect_norm: tuple[float, float, float, float], orientation: int = None, preserve_focus: bool = True) -> None:
+        """设置/替换单一裁剪，并设为激活。
+        
+        Args:
+            rect_norm: 归一化裁剪坐标
+            orientation: crop的orientation（None时使用默认值0）
+            preserve_focus: 是否保持当前的crop_focused状态（默认True）
+        """
         try:
             x, y, w, h = [float(max(0.0, min(1.0, v))) for v in rect_norm]
             # 规范到图像范围内
             w = max(0.0, min(1.0 - x, w))
             h = max(0.0, min(1.0 - y, h))
-            crop_id = 'c1'
-            self._crops = [{ 'id': crop_id, 'rect': (x, y, w, h), 'name': '裁剪1' }]
-            self._active_crop_id = crop_id
-            self._crop_focused = False
-            self.crop_changed.emit((x, y, w, h))
+            
+            # 使用新的CropInstance模型
+            # 如果没有指定orientation，使用默认值0（不继承全局orientation）
+            if orientation is None:
+                orientation = 0  # 默认无旋转，crop独立于全局orientation
+            
+            crop_instance = CropInstance(
+                id="default",
+                name="默认裁剪",
+                rect_norm=(x, y, w, h),
+                orientation=orientation
+            )
+            
+            # 更新内部状态：直接存储CropInstance
+            self._crops = [crop_instance]  # 存储CropInstance对象而不是字典
+            self._active_crop_id = crop_instance.id
+            
+            # 保持crop_focused状态（重要修复！）
+            if not preserve_focus:
+                self._crop_focused = False
+            # 如果preserve_focus=True，保持当前的_crop_focused状态不变
+            
+            # 发送crop变化信号
+            self.crop_changed.emit(crop_instance.rect_norm)
             # 触发自动保存（裁剪变化也应持久化）
             self._autosave_timer.start()
         except Exception:
             pass
 
     def get_active_crop(self) -> Optional[tuple[float, float, float, float]]:
-        if not self._active_crop_id:
+        """获取激活crop的坐标（向后兼容）"""
+        crop_instance = self.get_active_crop_instance()
+        return crop_instance.rect_norm if crop_instance else None
+    
+    def get_active_crop_instance(self) -> Optional[CropInstance]:
+        """获取激活的CropInstance对象"""
+        if not self._active_crop_id or not self._crops:
             return None
-        for c in self._crops:
-            if c.get('id') == self._active_crop_id:
-                return tuple(c.get('rect'))  # type: ignore
+        
+        # 直接从存储的CropInstance对象获取
+        for crop_instance in self._crops:
+            if isinstance(crop_instance, CropInstance) and crop_instance.id == self._active_crop_id:
+                return crop_instance
+            elif isinstance(crop_instance, dict) and crop_instance.get('id') == self._active_crop_id:
+                # 兼容旧格式（字典）
+                return CropInstance(
+                    id=crop_instance.get('id', 'default'),
+                    name=crop_instance.get('name', '默认裁剪'),
+                    rect_norm=crop_instance.get('rect', (0, 0, 1, 1)),
+                    orientation=0  # 旧格式默认无旋转
+                )
         return None
+    
+    def get_all_crops(self) -> List[CropInstance]:
+        """获取所有裁剪实例列表"""
+        return self._crops.copy()
+    
+    def get_active_crop_id(self) -> Optional[str]:
+        """获取当前活跃的裁剪ID"""
+        return self._active_crop_id
+    
+    def get_current_profile_kind(self) -> str:
+        """获取当前Profile类型 'contactsheet' 或 'crop'"""
+        return self._current_profile_kind
 
     def clear_crop(self) -> None:
         self._crops = []
         self._active_crop_id = None
         self._crop_focused = False
+        self._contactsheet_crop_rect = None
         self.crop_changed.emit(None)
         self._autosave_timer.start()
 
@@ -185,6 +247,247 @@ class ApplicationContext(QObject):
         self._trigger_preview_update()
         self._autosave_timer.start()
 
+    def focus_on_contactsheet_crop(self) -> None:
+        """在原图/接触印像模式下聚焦 contactsheet 裁剪（若存在）。"""
+        try:
+            if not self._current_image:
+                return
+            if self._active_crop_id is not None:
+                return  # 仅在原图/接触印像模式下允许
+            if self._contactsheet_crop_rect is None:
+                return
+            self._crop_focused = True
+            self._prepare_proxy()
+            self._trigger_preview_update()
+            self._autosave_timer.start()
+        except Exception:
+            pass
+
+    # =================
+    # Profile 切换与裁剪管理（Bundle 支持）
+    # =================
+    def switch_to_contactsheet(self) -> None:
+        """切换到原图 Profile（不自动聚焦）。"""
+        try:
+            self._current_profile_kind = 'contactsheet'
+            self._current_params = self._contactsheet_params.copy()
+            self._crop_focused = False
+            self._active_crop_id = None
+            # 同步 orientation
+            self._current_orientation = self._contactsheet_orientation
+            # 发送参数变更信号
+            self.params_changed.emit(self._current_params)
+            self._prepare_proxy(); self._trigger_preview_update()
+        except Exception:
+            pass
+
+    def switch_to_crop(self, crop_id: str) -> None:
+        """切换到指定裁剪的 Profile（不自动聚焦）。"""
+        try:
+            self._current_profile_kind = 'crop'
+            self._active_crop_id = crop_id
+            params = self._per_crop_params.get(crop_id)
+            if params is None:
+                # 如果不存在，使用 contactsheet 复制一份初始化
+                params = self._contactsheet_params.copy()
+                self._per_crop_params[crop_id] = params
+            self._current_params = params.copy()
+            self._crop_focused = False
+            # 同步 orientation （从裁剪实例获取）
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                self._current_orientation = crop_instance.orientation
+            # 发送参数变更信号
+            self.params_changed.emit(self._current_params)
+            self._prepare_proxy(); self._trigger_preview_update()
+        except Exception:
+            pass
+
+    def switch_to_crop_focused(self, crop_id: str) -> None:
+        """一次性切换到指定裁剪并进入聚焦模式（单次预览更新，避免先显示原图再聚焦的闪烁）。"""
+        try:
+            self._current_profile_kind = 'crop'
+            self._active_crop_id = crop_id
+            # 参数集
+            params = self._per_crop_params.get(crop_id)
+            if params is None:
+                params = self._contactsheet_params.copy()
+                self._per_crop_params[crop_id] = params
+            self._current_params = params.copy()
+            # 使用该裁剪的 orientation
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                self._current_orientation = crop_instance.orientation
+            # 直接进入聚焦
+            self._crop_focused = True
+            # 一次性刷新
+            self.params_changed.emit(self._current_params)
+            self._prepare_proxy(); self._trigger_preview_update()
+        except Exception:
+            pass
+
+    def smart_add_crop(self) -> str:
+        """智能添加裁剪：根据现有裁剪自动计算最佳位置"""
+        try:
+            from divere.utils.crop_layout_manager import CropLayoutManager
+            
+            # 获取图片宽高比
+            aspect_ratio = 1.0
+            if self._current_image and self._current_image.array is not None:
+                h, w = self._current_image.array.shape[:2]
+                aspect_ratio = w / h if h > 0 else 1.0
+            
+            # 获取现有裁剪
+            existing_crops = [crop.rect_norm for crop in self._crops]
+            
+            # 使用布局管理器找到最佳位置
+            layout_manager = CropLayoutManager()
+            new_rect = layout_manager.find_next_position(
+                existing_crops=existing_crops,
+                template_size=None,  # 使用最后一个裁剪的尺寸或默认值
+                image_aspect_ratio=aspect_ratio
+            )
+            
+            # 创建新裁剪
+            return self.add_crop(new_rect, self._current_orientation)
+            
+        except Exception as e:
+            print(f"智能添加裁剪失败: {e}")
+            # 失败时使用默认位置
+            return self.add_crop((0.1, 0.1, 0.25, 0.25), self._current_orientation)
+    
+    def add_crop(self, rect_norm: Tuple[float, float, float, float], orientation: int) -> str:
+        """新增一个裁剪：复制 contactsheet 的参数作为初始值，返回 crop_id。"""
+        try:
+            # 规范 rect
+            x, y, w, h = [float(max(0.0, min(1.0, v))) for v in rect_norm]
+            w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
+            crop_id = f"crop_{len(self._crops) + 1}"
+            crop = CropInstance(id=crop_id, name=f"裁剪 {len(self._crops) + 1}", rect_norm=(x, y, w, h), orientation=int(orientation) % 360)
+            self._crops.append(crop)
+            self._active_crop_id = crop_id
+            # 初始化该裁剪的参数集（深拷贝 contactsheet）
+            self._per_crop_params[crop_id] = self._contactsheet_params.copy()
+            # 切到该裁剪 Profile（不聚焦）
+            self.switch_to_crop(crop_id)
+            # 发信号
+            self.crop_changed.emit(crop.rect_norm)
+            self._autosave_timer.start()
+            return crop_id
+        except Exception:
+            return ""
+    
+    def update_active_crop(self, rect_norm: tuple[float, float, float, float]) -> None:
+        """更新当前活跃裁剪的区域"""
+        try:
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                # 规范 rect
+                x, y, w, h = [float(max(0.0, min(1.0, v))) for v in rect_norm]
+                w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
+                crop_instance.rect_norm = (x, y, w, h)
+                # 发信号
+                self.crop_changed.emit(crop_instance.rect_norm)
+                # 如果当前处于聚焦状态，需要重新准备proxy
+                if self._crop_focused:
+                    self._prepare_proxy()
+                    self._trigger_preview_update()
+                self._autosave_timer.start()
+        except Exception as e:
+            print(f"更新裁剪失败: {e}")
+
+    def delete_crop(self, crop_id: str) -> None:
+        """删除指定裁剪；维护active_id与预览状态。"""
+        try:
+            if not crop_id:
+                return
+            kept: list[CropInstance] = []
+            removed = False
+            for crop in self._crops:
+                if isinstance(crop, CropInstance) and crop.id == crop_id:
+                    removed = True
+                    continue
+                kept.append(crop)
+            if not removed:
+                return
+            self._crops = kept
+            # 清理该裁剪的独立参数集
+            try:
+                if crop_id in self._per_crop_params:
+                    del self._per_crop_params[crop_id]
+            except Exception:
+                pass
+            # 维护 active id
+            if self._active_crop_id == crop_id:
+                self._active_crop_id = kept[0].id if kept else None
+            # 退出聚焦
+            self._crop_focused = False
+            # 触发预览刷新
+            self._prepare_proxy(); self._trigger_preview_update()
+            # 发裁剪变化信号（传当前active或None）
+            try:
+                active_rect = self.get_active_crop()
+                self.crop_changed.emit(active_rect)
+            except Exception:
+                pass
+            # 自动保存
+            self._autosave_timer.start()
+        except Exception as e:
+            print(f"删除裁剪失败: {e}")
+
+    def apply_contactsheet_to_active_crop(self) -> None:
+        """将接触印像（contactsheet）的参数复制到当前活跃裁剪的参数集。"""
+        try:
+            active_id = self._active_crop_id
+            if not active_id:
+                return
+            # 复制参数
+            cs_params = self._contactsheet_params.copy()
+            self._per_crop_params[active_id] = cs_params
+            # 若当前正聚焦该裁剪，同步当前参数并刷新预览
+            if self._crop_focused:
+                self._current_params = cs_params.copy()
+                self._prepare_proxy(); self._trigger_preview_update()
+            self._autosave_timer.start()
+        except Exception as e:
+            print(f"沿用接触印像设置失败: {e}")
+
+    def export_preset_bundle(self) -> PresetBundle:
+        """导出 Bundle：contactsheet + 各裁剪条目（每个带独立Preset）。"""
+        # 1) contactsheet preset
+        cs_preset = self._create_preset_from_params(self._contactsheet_params, name="contactsheet")
+        cs_preset.orientation = self._contactsheet_orientation  # 保存原图的 orientation
+        # 写入 contactsheet 裁剪（旧字段，用于兼容）
+        if self._contactsheet_crop_rect is not None:
+            cs_preset.crop = tuple(self._contactsheet_crop_rect)
+        # 2) crops
+        entries: list[CropPresetEntry] = []
+        for crop in self._crops:
+            params = self._per_crop_params.get(crop.id, self._contactsheet_params)
+            crop_preset = self._create_preset_from_params(params, name=crop.name)
+            # 将 crop 的 orientation 写入 crop 或 preset（preset.orientation 用于 BWC）
+            crop_preset.orientation = crop.orientation
+            entries.append(CropPresetEntry(crop=crop, preset=crop_preset))
+        active_id = self._active_crop_id if self._active_crop_id in [c.id for c in self._crops] else None
+        return PresetBundle(contactsheet=cs_preset, crops=entries, active_crop_id=active_id)
+
+    def _create_preset_from_params(self, params: ColorGradingParams, name: str = "Preset") -> Preset:
+        """将当前参数打包为 Preset（用于 Bundle 导出）。"""
+        preset = Preset(name=name)
+        # input transformation
+        preset.input_transformation = InputTransformationDefinition(name=params.input_color_space_name, definition={})
+        # grading params（从 params.to_dict 获取 UI 相关字段）
+        preset.grading_params = params.to_dict()
+        # density matrix（镜像冗余）
+        if params.density_matrix is not None:
+            preset.density_matrix = MatrixDefinition(name=params.density_matrix_name, values=params.density_matrix.tolist())
+        else:
+            preset.density_matrix = MatrixDefinition(name=params.density_matrix_name, values=None)
+        # 曲线（若命名为 custom，直接写 points）
+        preset.density_curve = CurveDefinition(name=params.density_curve_name, points=params.curve_points)
+        # orientation 由上层（contactsheet/crop）决定
+        return preset
+
     # =================
     # 核心业务逻辑 (Actions)
     # =================
@@ -198,24 +501,41 @@ class ApplicationContext(QObject):
             self._crops = []
             self._active_crop_id = None
             self._crop_focused = False
+            self._contactsheet_crop_rect = None
             self.crop_changed.emit(None)
             
             # 检查并应用自动预设
             self.auto_preset_manager.set_active_directory(str(Path(file_path).parent))
-            preset = self.auto_preset_manager.get_preset_for_image(file_path)
-
-            if preset:
-                self.load_preset(preset)
-                self.status_message_changed.emit(f"已为图像加载自动预设: {preset.name}")
+            bundle = self.auto_preset_manager.get_bundle_for_image(file_path)
+            if bundle:
+                self.load_preset_bundle(bundle)
+                self.status_message_changed.emit("已为图像加载自动预设（Bundle）")
+                # Bundle内部已触发预览；此处不再重复
             else:
-                # 如果没有预设，则重置为默认参数
-                self.reset_params()
-                self.status_message_changed.emit("未找到预设，已应用默认参数")
+                preset = self.auto_preset_manager.get_preset_for_image(file_path)
+                if preset:
+                    self.load_preset(preset)
+                    self.status_message_changed.emit(f"已为图像加载自动预设: {preset.name}")
+                    # 统一在此处强制按当前参数重建一次预览（确保顺序正确）
+                    try:
+                        print(f"[DEBUG] after load_preset(user): input={self._current_params.input_color_space_name}, gamma={self._current_params.density_gamma}, dmax={self._current_params.density_dmax}, rgb={self._current_params.rgb_gains}")
+                    except Exception:
+                        pass
+                    self._prepare_proxy(); self._trigger_preview_update()
+                else:
+                    # 如果没有预设，则应用集中式 default preset（而不是内部硬编码）
+                    try:
+                        from divere.utils.defaults import load_default_preset
+                        self.load_preset(load_default_preset())
+                        self.status_message_changed.emit("未找到预设，已应用默认预设")
+                        # 强制按默认预设重建一次预览
+                        self._prepare_proxy(); self._trigger_preview_update()
+                    except Exception:
+                        self.reset_params()
+                        self.status_message_changed.emit("未找到预设，已应用默认参数（回退）")
 
-            self._prepare_proxy()
-            
+            # 通知UI：图像已加载完成
             self.image_loaded.emit()
-            self._trigger_preview_update()
 
         except Exception as e:
             import traceback
@@ -223,18 +543,14 @@ class ApplicationContext(QObject):
             self.status_message_changed.emit(f"无法加载图像: {e}")
 
     def load_preset(self, preset: Preset):
-        """从Preset对象加载状态"""
-        # 1. 更新方向
-        self._current_orientation = preset.orientation
-
-        # 2. 更新输入色彩变换
-        if preset.input_transformation and preset.input_transformation.name:
-            new_params = self._current_params.copy() # Create a copy to avoid modifying the current params directly
-            new_params.input_color_space_name = preset.input_transformation.name
-            self.update_params(new_params)
-
-        # 3. 更新调色参数
+        """从Preset对象加载状态 - 使用新的CropInstance模型"""
+        # 1. 清理当前状态
+        self.clear_crop()
+        
+        # 2/3. 合并更新参数：先从 grading_params 构造，再应用 input_transformation（若有）
         new_params = ColorGradingParams.from_dict(preset.grading_params or {})
+        if preset.input_transformation and preset.input_transformation.name:
+            new_params.input_color_space_name = preset.input_transformation.name
         
         # 兼容处理矩阵和曲线
         if preset.density_matrix:
@@ -254,28 +570,184 @@ class ApplicationContext(QObject):
             new_params.density_curve_name = preset.density_curve.name
             if preset.density_curve.points:
                 new_params.curve_points = preset.density_curve.points
+            else:
+                # 仅提供曲线名称时，尝试从配置中加载对应曲线点
+                try:
+                    loaded = self._load_density_curve_points_by_name(preset.density_curve.name)
+                    if loaded:
+                        if 'RGB' in loaded and loaded['RGB']:
+                            new_params.curve_points = loaded['RGB']
+                        if 'R' in loaded and loaded['R']:
+                            new_params.curve_points_r = loaded['R']
+                        if 'G' in loaded and loaded['G']:
+                            new_params.curve_points_g = loaded['G']
+                        if 'B' in loaded and loaded['B']:
+                            new_params.curve_points_b = loaded['B']
+                        # 解析到有效曲线则保持启用
+                        new_params.enable_density_curve = True
+                except Exception:
+                    pass
         
         self.update_params(new_params)
+        self._contactsheet_params = self._current_params.copy()
 
-        # 4. 加载裁剪（多裁剪优先；兼容旧字段）
+        # 4. 加载crop和orientation（完全分离模型）
         try:
-            if preset.crops and isinstance(preset.crops, list) and len(preset.crops) > 0:
-                # 仅映射第一项到单裁剪（当前阶段）
-                first = preset.crops[0]
-                rect = tuple(first.get('rect_norm') or first.get('rect') or [])
-                if rect and len(rect) == 4:
-                    self.set_single_crop(rect)  # type: ignore[arg-type]
-                    self._active_crop_id = first.get('id', 'c1')
-                    self._crop_focused = False
-            elif preset.crop and len(preset.crop) == 4:
-                self.set_single_crop(tuple(preset.crop))
+            # 先设置全局orientation
+            self._current_orientation = preset.orientation
+            
+            # 再加载crop（使用新的CropInstance接口）
+            crop_instances = preset.get_crop_instances()
+            if crop_instances:
+                # 当前阶段：仅支持单crop，取第一个
+                crop_instance = crop_instances[0] 
+                # 保持crop的独立orientation
+                self.set_single_crop(crop_instance.rect_norm, crop_instance.orientation, preserve_focus=False)
                 self._crop_focused = False
+            elif preset.crop and len(preset.crop) == 4:
+                # 回退：旧字段作为 contactsheet 临时裁剪
+                try:
+                    x, y, w, h = [float(max(0.0, min(1.0, v))) for v in tuple(preset.crop)]
+                    w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
+                    self._contactsheet_crop_rect = (x, y, w, h)
+                    self._crop_focused = False
+                    self.crop_changed.emit(self._contactsheet_crop_rect)
+                except Exception:
+                    self._contactsheet_crop_rect = None
         except Exception:
-            pass
+            # 最终回退：只设置全局orientation
+            self._current_orientation = preset.orientation
+        
+        # 切换到 contactsheet profile
+        self._current_profile_kind = 'contactsheet'
+    
+    # === 新增：Bundle 加载/保存 API ===
+    def load_preset_bundle(self, bundle: PresetBundle):
+        """加载预设集合：设置 contactsheet 与 per-crop 参数集，并默认切换到 contactsheet。"""
+        try:
+            # 加载 contactsheet preset
+            self.load_preset(bundle.contactsheet)
+            # 构建 per-crop 参数与 crop list
+            self._per_crop_params.clear()
+            self._crops = []
+            self._active_crop_id = None
+            for entry in bundle.crops:
+                crop = entry.crop
+                # 保证 id 存在
+                cid = crop.id or f"crop_{len(self._crops)+1}"
+                crop.id = cid
+                self._crops.append(crop)
+                # 解析该裁剪的参数
+                params = ColorGradingParams.from_dict(entry.preset.grading_params or {})
+                # 同步 input colorspace 与显式矩阵等
+                if entry.preset.input_transformation and entry.preset.input_transformation.name:
+                    params.input_color_space_name = entry.preset.input_transformation.name
+                if entry.preset.density_matrix:
+                    params.density_matrix_name = entry.preset.density_matrix.name
+                    if entry.preset.density_matrix.values:
+                        params.density_matrix = np.array(entry.preset.density_matrix.values)
+                        params.enable_density_matrix = True
+                    elif entry.preset.density_matrix.name:
+                        matrix = self.the_enlarger.pipeline_processor.get_density_matrix_array(entry.preset.density_matrix.name)
+                        params.density_matrix = matrix
+                        if matrix is not None:
+                            params.enable_density_matrix = True
+                if entry.preset.density_curve:
+                    params.density_curve_name = entry.preset.density_curve.name
+                    if entry.preset.density_curve.points:
+                        params.curve_points = entry.preset.density_curve.points
+                    else:
+                        try:
+                            loaded = self._load_density_curve_points_by_name(entry.preset.density_curve.name)
+                            if loaded:
+                                if 'RGB' in loaded and loaded['RGB']:
+                                    params.curve_points = loaded['RGB']
+                                if 'R' in loaded and loaded['R']:
+                                    params.curve_points_r = loaded['R']
+                                if 'G' in loaded and loaded['G']:
+                                    params.curve_points_g = loaded['G']
+                                if 'B' in loaded and loaded['B']:
+                                    params.curve_points_b = loaded['B']
+                                params.enable_density_curve = True
+                        except Exception:
+                            pass
+
+                self._per_crop_params[cid] = params
+            # 活跃裁剪（仅记录，不自动聚焦）
+            self._active_crop_id = bundle.active_crop_id
+            self._crop_focused = False
+            self._current_profile_kind = 'contactsheet'
+            self._prepare_proxy(); self._trigger_preview_update()
+        except Exception as e:
+            print(f"加载Bundle失败: {e}")
+
+    # === 名称解析辅助：按名字加载曲线点 ===
+    def _load_density_curve_points_by_name(self, curve_name: str):
+        """根据曲线名称从配置文件加载曲线点。
+        返回 dict: {'RGB': [...], 'R': [...], 'G': [...], 'B': [...]} 或 None。
+        """
+        if not curve_name:
+            return None
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            def _norm(s: str) -> str:
+                return " ".join(str(s).strip().lower().replace('_', ' ').split())
+
+            target = _norm(curve_name)
+            for json_path in enhanced_config_manager.get_config_files("curves"):
+                try:
+                    data = enhanced_config_manager.load_config_file(json_path)
+                    if data is None:
+                        continue
+                    name_in_file = data.get("name") or json_path.stem
+                    if _norm(name_in_file) != target and _norm(json_path.stem) != target:
+                        continue
+                    # 统一输出结构
+                    result = { 'RGB': None, 'R': None, 'G': None, 'B': None }
+                    if isinstance(data.get("curves"), dict):
+                        curves = data["curves"]
+                        # 兼容键名
+                        if "RGB" in curves:
+                            result['RGB'] = curves.get('RGB')
+                        result['R'] = curves.get('R')
+                        result['G'] = curves.get('G')
+                        result['B'] = curves.get('B')
+                    elif isinstance(data.get("points"), list):
+                        result['RGB'] = data.get('points')
+                    # 若至少有一条曲线，返回
+                    if any(result.values()):
+                        # 规范化为 float tuple 列表
+                        def _normalize(lst):
+                            if not lst:
+                                return None
+                            out = []
+                            for p in lst:
+                                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                                    out.append((float(p[0]), float(p[1])))
+                            return out if out else None
+                        return {
+                            'RGB': _normalize(result['RGB']),
+                            'R': _normalize(result['R']),
+                            'G': _normalize(result['G']),
+                            'B': _normalize(result['B']),
+                        }
+                except Exception:
+                    continue
+        except Exception:
+            return None
+        return None
         
     def update_params(self, new_params: ColorGradingParams):
         """由UI调用以更新参数"""
         self._current_params = new_params
+        # 同步到当前 profile 存根
+        try:
+            if self._current_profile_kind == 'contactsheet':
+                self._contactsheet_params = new_params.copy()
+            elif self._current_profile_kind == 'crop' and self._active_crop_id is not None:
+                self._per_crop_params[self._active_crop_id] = new_params.copy()
+        except Exception:
+            pass
         self.params_changed.emit(self._current_params)
         self._trigger_preview_update()
         self._autosave_timer.start() # 每次参数变更都启动自动保存计时器
@@ -288,9 +760,16 @@ class ApplicationContext(QObject):
             self._trigger_preview_update()
 
     def reset_params(self):
-        self._current_params = self._create_default_params()
-        self.params_changed.emit(self._current_params)
-        self.status_message_changed.emit("参数已重置")
+        """重置参数：优先使用 default preset；失败时回退到内部默认构造。"""
+        try:
+            from divere.utils.defaults import load_default_preset
+            self.load_preset(load_default_preset())
+            self.status_message_changed.emit("参数已重置为默认预设")
+        except Exception:
+            self._current_params = self._create_default_params()
+            self._contactsheet_params = self._current_params.copy()
+            self.params_changed.emit(self._current_params)
+            self.status_message_changed.emit("参数已重置（回退内部默认）")
 
     def run_auto_color_correction(self, get_preview_callback):
         """执行AI自动白平衡"""
@@ -302,15 +781,20 @@ class ApplicationContext(QObject):
         try:
             gains_t = self.the_enlarger.calculate_auto_gain_learning_based(preview_image)
             gains = np.array(gains_t[:3])
+            # rgb gain的调整量与gamma是耦合的：最终的增量 = 原始建议增量 × (gamma / 2)
+            gamma = float(self._current_params.density_gamma)
+            scale = gamma / 2.0
+            delta = gains * scale
             
             current_gains = np.array(self._current_params.rgb_gains)
-            new_gains = np.clip(current_gains + gains, -2.0, 2.0)
-            
-            self._current_params.rgb_gains = tuple(new_gains)
-            self.params_changed.emit(self._current_params)
-            self._trigger_preview_update()
-            self._autosave_timer.start() # AI校准后也触发自动保存
-            self.status_message_changed.emit(f"AI自动校色完成. Gains: R={gains[0]:.2f}, G={gains[1]:.2f}, B={gains[2]:.2f}")
+            new_gains = np.clip(current_gains + delta, -2.0, 2.0)
+            # 低侵入：改用统一入口，确保写入当前 profile 存根并触发 autosave
+            new_params = self._current_params.copy()
+            new_params.rgb_gains = tuple(new_gains)
+            self.update_params(new_params)
+            self.status_message_changed.emit(
+                f"AI自动校色完成. ΔGains(×γ/2): R={delta[0]:.2f}, G={delta[1]:.2f}, B={delta[2]:.2f}"
+            )
         except Exception as e:
             self.status_message_changed.emit(f"AI自动校色失败: {e}")
 
@@ -334,9 +818,12 @@ class ApplicationContext(QObject):
         try:
             gains_t = self.the_enlarger.calculate_auto_gain_learning_based(preview_image)
             gains = np.array(gains_t[:3])
+            gamma = float(self._current_params.density_gamma)
+            scale = gamma / 2.0
+            delta = gains * scale
 
             current_gains = np.array(self._current_params.rgb_gains)
-            new_gains = np.clip(current_gains + gains, -2.0, 2.0)
+            new_gains = np.clip(current_gains + delta, -2.0, 2.0)
             
             self._auto_color_iterations -= 1
             
@@ -348,10 +835,10 @@ class ApplicationContext(QObject):
                 self._autosave_timer.start() # Save on convergence
                 return
 
-            self._current_params.rgb_gains = tuple(new_gains)
-            self.params_changed.emit(self._current_params)
-            self._trigger_preview_update() # This will trigger the next iteration via _on_preview_result
-            self._autosave_timer.start() # Save after each iteration step
+            # 低侵入：改用统一入口，确保写入当前 profile 存根并触发 autosave
+            new_params = self._current_params.copy()
+            new_params.rgb_gains = tuple(new_gains)
+            self.update_params(new_params)  # 将触发预览；_on_preview_result 会调度下一次迭代
             self.status_message_changed.emit(f"AI校色迭代剩余: {self._auto_color_iterations}")
 
         except Exception as e:
@@ -361,19 +848,34 @@ class ApplicationContext(QObject):
 
 
     def _prepare_proxy(self):
+        """准备proxy图像，应用标准变换链：裁剪 → 旋转"""
         if not self._current_image:
             return
         
-        # 源图（可能用于裁剪）
+        
+
+        # 源图（用于变换）
         src_image = self._current_image
         orig_h, orig_w = src_image.height, src_image.width
 
-        # 若聚焦裁剪：先裁切原图副本
+        # === 标准变换链：Step 1 - 裁剪（若聚焦） ===
         if self._crop_focused:
-            rect = self.get_active_crop()
-            if rect is not None and src_image.array is not None:
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance and crop_instance.rect_norm and src_image.array is not None:
                 try:
-                    x, y, w, h = rect
+                    x, y, w, h = crop_instance.rect_norm
+                    x0 = int(round(x * orig_w)); y0 = int(round(y * orig_h))
+                    x1 = int(round((x + w) * orig_w)); y1 = int(round((y + h) * orig_h))
+                    x0 = max(0, min(orig_w - 1, x0)); x1 = max(x0 + 1, min(orig_w, x1))
+                    y0 = max(0, min(orig_h - 1, y0)); y1 = max(y0 + 1, min(orig_h, y1))
+                    cropped_arr = src_image.array[y0:y1, x0:x1, :].copy()
+                    src_image = src_image.copy_with_new_array(cropped_arr)
+                except Exception:
+                    pass
+            # 接触印像聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
+            elif (self._active_crop_id is None and self._contactsheet_crop_rect is not None and src_image.array is not None):
+                try:
+                    x, y, w, h = self._contactsheet_crop_rect
                     x0 = int(round(x * orig_w)); y0 = int(round(y * orig_h))
                     x1 = int(round((x + w) * orig_w)); y1 = int(round((y + h) * orig_h))
                     x0 = max(0, min(orig_w - 1, x0)); x1 = max(x0 + 1, min(orig_w, x1))
@@ -383,6 +885,7 @@ class ApplicationContext(QObject):
                 except Exception:
                     pass
 
+        # 生成proxy和色彩空间转换
         proxy = self.image_manager.generate_proxy(
             src_image,
             self.the_enlarger.preview_config.get_proxy_size_tuple()
@@ -393,11 +896,23 @@ class ApplicationContext(QObject):
         self._current_proxy = self.color_space_manager.convert_to_working_space(
             proxy
         )
-        # 应用朝向旋转到代理图像（仅预览路径）
-        if self._current_proxy and self._current_proxy.array is not None and self._current_orientation % 360 != 0:
+        
+        # === 标准变换链：Step 2 - 旋转 ===
+        # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用全局orientation
+        effective_orientation = self._current_orientation  # 默认使用全局orientation
+        
+        if self._crop_focused:
+            # 聚焦状态：使用crop的独立orientation
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                effective_orientation = crop_instance.orientation
+        
+        # 应用旋转到代理图像
+        if (self._current_proxy and self._current_proxy.array is not None and 
+            effective_orientation % 360 != 0):
             try:
                 import numpy as np
-                k = (self._current_orientation // 90) % 4
+                k = (effective_orientation // 90) % 4
                 if k != 0:
                     rotated = np.rot90(self._current_proxy.array, k=int(k))
                     self._current_proxy = self._current_proxy.copy_with_new_array(rotated)
@@ -408,10 +923,32 @@ class ApplicationContext(QObject):
         try:
             md = self._current_proxy.metadata
             md['source_wh'] = (int(orig_w), int(orig_h))
-            md['crop_overlay'] = self.get_active_crop()
+            
+            # 传递CropInstance信息到UI层
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                md['crop_overlay'] = crop_instance.rect_norm
+                md['crop_instance'] = crop_instance  # 传递完整的crop实例
+            else:
+                # 无正式裁剪时，传递 contactsheet 裁剪（若有）
+                md['crop_overlay'] = self._contactsheet_crop_rect
+                # 若此时处于“接触印像聚焦”，为坐标换算提供一个临时的 CropInstance
+                if self._crop_focused and self._contactsheet_crop_rect is not None:
+                    try:
+                        md['crop_instance'] = CropInstance(
+                            id='contactsheet_focus',
+                            name='接触印像聚焦',
+                            rect_norm=self._contactsheet_crop_rect,
+                            orientation=int(self._current_orientation) % 360
+                        )
+                    except Exception:
+                        md['crop_instance'] = None
+                else:
+                    md['crop_instance'] = None
+                
             md['crop_focused'] = bool(self._crop_focused)
             md['active_crop_id'] = self._active_crop_id
-            md['orientation'] = int(self._current_orientation)
+            md['global_orientation'] = int(self._current_orientation)  # 全局orientation
         except Exception:
             pass
 
@@ -424,6 +961,7 @@ class ApplicationContext(QObject):
             return
 
         self._preview_busy = True
+        
         
         from copy import deepcopy
         proxy_copy = self._current_proxy.copy()
@@ -471,17 +1009,65 @@ class ApplicationContext(QObject):
             choices = [0, 90, 180, 270]
             closest = min(choices, key=lambda x: abs(x - deg))
             self._current_orientation = closest
+            # 同步到当前 Profile 的 orientation
+            if self._current_profile_kind == 'contactsheet':
+                self._contactsheet_orientation = closest
+            elif self._current_profile_kind == 'crop':
+                crop = self.get_active_crop_instance()
+                if crop:
+                    # 仅更新当前裁剪的方向，保留裁剪列表
+                    self.update_active_crop_orientation(closest)
             if self._current_image:
                 self._prepare_proxy()
                 self._trigger_preview_update()
+                # 方向修改触发自动保存
+                self._autosave_timer.start()
         except Exception:
             pass
 
     def rotate(self, direction: int):
-        """direction: 1=左旋+90°, -1=右旋-90°"""
+        """direction: 1=左旋+90°, -1=右旋-90°
+        纯净的旋转逻辑：crop和全局orientation完全分离
+        """
         try:
             step = 90 if int(direction) >= 0 else -90
-            new_deg = (self._current_orientation + step) % 360
-            self.set_orientation(new_deg)
+            
+            if self._crop_focused or self._current_profile_kind == 'crop':
+                # 聚焦或裁剪Profile下：只旋转当前crop的orientation
+                crop_instance = self.get_active_crop_instance()
+                if crop_instance:
+                    new_orientation = (crop_instance.orientation + step) % 360
+                    # 仅更新当前裁剪的方向，保留其它裁剪
+                    self.update_active_crop_orientation(new_orientation)
+                    self._prepare_proxy()
+                    self._trigger_preview_update()
+                    self._autosave_timer.start()
+            else:
+                # 非聚焦状态：只旋转全局orientation（不影响crop）
+                new_deg = (self._current_orientation + step) % 360
+                self.set_orientation(new_deg)
+                # 注意：不同步crop的orientation，保持完全分离
+        except Exception:
+            pass
+
+    def update_active_crop_orientation(self, orientation: int) -> None:
+        """仅更新当前活跃裁剪的 orientation，保留所有裁剪与激活状态。"""
+        try:
+            crop_instance = self.get_active_crop_instance()
+            if crop_instance:
+                crop_instance.orientation = int(orientation) % 360
+        except Exception:
+            pass
+
+    # ==== 单张裁剪：仅记录在 contactsheet，不创建正式 crop ====
+    def set_contactsheet_crop(self, rect_norm: tuple[float, float, float, float]) -> None:
+        try:
+            x, y, w, h = [float(max(0.0, min(1.0, v))) for v in rect_norm]
+            w = max(0.0, min(1.0 - x, w))
+            h = max(0.0, min(1.0 - y, h))
+            self._contactsheet_crop_rect = (x, y, w, h)
+            # 不改变 profile 与聚焦，仅发出 overlay 的变更
+            self.crop_changed.emit(self._contactsheet_crop_rect)
+            self._autosave_timer.start()
         except Exception:
             pass

@@ -27,6 +27,43 @@ class CurveDefinition:
     points: List[Tuple[float, float]] = field(default_factory=list)
 
 @dataclass
+class CropInstance:
+    """单个裁剪实例，包含独立的几何变换"""
+    id: str
+    name: str = "默认裁剪"
+    
+    # === 几何定义（相对于原始图像） ===
+    rect_norm: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)  # (x,y,w,h) 0-1
+    orientation: int = 0  # 0, 90, 180, 270
+    
+    # === 元数据 ===
+    enabled: bool = True
+    tags: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式（序列化）"""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'rect_norm': list(self.rect_norm),
+            'orientation': self.orientation,
+            'enabled': self.enabled,
+            'tags': self.tags.copy()
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CropInstance':
+        """从字典创建实例（反序列化）"""
+        return cls(
+            id=data.get('id', 'default'),
+            name=data.get('name', '默认裁剪'),
+            rect_norm=tuple(data.get('rect_norm', [0.0, 0.0, 1.0, 1.0])),
+            orientation=data.get('orientation', 0),
+            enabled=data.get('enabled', True),
+            tags=data.get('tags', [])
+        )
+
+@dataclass
 class Preset:
     """
     预设文件的数据结构。
@@ -125,7 +162,129 @@ class Preset:
         if "density_curve" in data and data["density_curve"]:
             preset.density_curve = CurveDefinition(**data["density_curve"])
         return preset
+    
+    # === 新的crop管理方法（面向未来扩展） ===
+    def get_crop_instances(self) -> List[CropInstance]:
+        """获取所有CropInstance对象"""
+        if not self.crops:
+            # 向后兼容：从旧字段创建CropInstance
+            if self.crop:
+                return [CropInstance(
+                    id="default",
+                    name="默认裁剪", 
+                    rect_norm=self.crop,
+                    orientation=self.orientation
+                )]
+            return []
+        
+        # 从新字段解析
+        return [CropInstance.from_dict(crop_data) for crop_data in self.crops]
+    
+    def get_active_crop(self) -> Optional[CropInstance]:
+        """获取当前激活的crop"""
+        crops = self.get_crop_instances()
+        if not crops:
+            return None
+            
+        if self.active_crop_id:
+            for crop in crops:
+                if crop.id == self.active_crop_id:
+                    return crop
+                    
+        # 默认返回第一个
+        return crops[0]
+    
+    def set_crop_instances(self, crops: List[CropInstance], active_id: Optional[str] = None):
+        """设置CropInstance列表"""
+        self.crops = [crop.to_dict() for crop in crops]
+        self.active_crop_id = active_id or (crops[0].id if crops else None)
+        
+        # 向后兼容：仅同步crop坐标到旧字段，不同步orientation
+        if crops:
+            active_crop = self.get_active_crop()
+            if active_crop:
+                self.crop = active_crop.rect_norm
+                # 注意：不同步orientation，保持crop和全局orientation分离
+        else:
+            self.crop = None
+    
+    def set_single_crop(self, rect_norm: Tuple[float, float, float, float], orientation: int = 0):
+        """设置单个crop（当前使用的简化接口）"""
+        crop_instance = CropInstance(
+            id="default",
+            name="默认裁剪",
+            rect_norm=rect_norm,
+            orientation=orientation
+        )
+        self.set_crop_instances([crop_instance], "default")
+    
+    # === 向后兼容属性 ===
+    @property
+    def computed_crop(self) -> Optional[Tuple[float, float, float, float]]:
+        """计算得出的crop坐标（向后兼容）"""
+        active_crop = self.get_active_crop()
+        return active_crop.rect_norm if active_crop else None
+        
+    @property  
+    def computed_orientation(self) -> int:
+        """计算得出的orientation（向后兼容）"""
+        active_crop = self.get_active_crop()
+        return active_crop.orientation if active_crop else 0
 
+
+@dataclass
+class CropPresetEntry:
+    """多裁剪条目的组合：裁剪定义 + 专属预设。
+    设计意图：每个裁剪拥有一份完整的调色预设，彼此独立；
+    orientation 为绝对取值，存放在各自的 `Preset` 或 `CropInstance` 中，不叠加。
+    """
+    crop: CropInstance
+    preset: Preset
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "crop": self.crop.to_dict(),
+            "preset": self.preset.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CropPresetEntry":
+        return cls(
+            crop=CropInstance.from_dict(data.get("crop", {})),
+            preset=Preset.from_dict(data.get("preset", {})),
+        )
+
+
+@dataclass
+class PresetBundle:
+    """一张图片的“预设集合”
+    - contactsheet: 原图预设（恢复视图用，作为默认基准）
+    - crops: 多裁剪条目列表（每个裁剪各自有预设）
+    - active_crop_id: 可选，记录上次活跃裁剪
+    """
+    contactsheet: Preset
+    crops: List[CropPresetEntry] = field(default_factory=list)
+    active_crop_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "bundle",
+            "contactsheet": self.contactsheet.to_dict(),
+            "crops": [entry.to_dict() for entry in self.crops],
+            "active_crop_id": self.active_crop_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PresetBundle":
+        # 兼容：若缺少 type 但具备 bundle 结构，也允许解析
+        contactsheet_data = data.get("contactsheet", {})
+        crops_data = data.get("crops", [])
+        active_id = data.get("active_crop_id")
+        return cls(
+            contactsheet=Preset.from_dict(contactsheet_data) if isinstance(contactsheet_data, dict) else Preset(),
+            crops=[CropPresetEntry.from_dict(d) for d in crops_data if isinstance(d, dict)],
+            active_crop_id=active_id,
+        )
 
 @dataclass 
 class PreviewConfig:
@@ -213,18 +372,18 @@ class ImageData:
 class ColorGradingParams:
     """调色参数的数据类"""
     # Input Colorspace
-    input_color_space_name: str = "Film_KodakRGB_Linear" # UI state
+    input_color_space_name: str = "" # 由 default preset 或用户选择提供
 
     # Density Inversion
-    density_gamma: float = 2.6
-    density_dmax: float = 2.0
+    density_gamma: float = 1.0
+    density_dmax: float = 3.0
 
     # Density Matrix
     density_matrix: Optional[np.ndarray] = None
     density_matrix_name: str = "custom" # UI state
 
     # RGB Gains
-    rgb_gains: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rgb_gains: Tuple[float, float, float] = (0.5, 0.0, 0.0)
 
     # Density Curve
     density_curve_name: str = "custom" # UI state

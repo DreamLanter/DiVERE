@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QMenuBar, QToolBar, QStatusBar, QFileDialog, QMessageBox,
-    QSplitter, QLabel, QDockWidget, QDialog, QApplication
+    QSplitter, QLabel, QDockWidget, QDialog, QApplication, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal, QRunnable, Slot, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
         # self.current_image: Optional[ImageData] = None # 已迁移
         # self.current_proxy: Optional[ImageData] = None # 已迁移
         # self.current_params = ColorGradingParams() # 已迁移
-        # self.input_color_space: str = "Film_KodakRGB_Linear"  # 已迁移
+        # self.input_color_space: str = "CCFLGeneric_Linear"  # 已迁移
         # self.current_orientation: int = 0 # 已迁移
 
         # 设置窗口
@@ -102,6 +102,14 @@ class MainWindow(QMainWindow):
         self.context.status_message_changed.connect(self.statusBar().showMessage)
         self.context.image_loaded.connect(self._on_image_loaded)
         self.context.autosave_requested.connect(self._on_autosave_requested)
+        try:
+            self.context.preview_updated.connect(lambda _: self._update_apply_contactsheet_enabled())
+        except Exception:
+            pass
+        try:
+            self.preview_widget.request_focus_contactsheet.connect(self._on_request_focus_contactsheet)
+        except Exception:
+            pass
 
     def _connect_panel_signals(self):
         """连接ParameterPanel的信号"""
@@ -112,10 +120,25 @@ class MainWindow(QMainWindow):
         self.parameter_panel.toggle_color_checker_requested.connect(self.preview_widget.toggle_color_checker)
         # 当 UCS 三角拖动结束：注册/切换到一个临时 custom 输入空间，触发代理重建与预览
         self.parameter_panel.custom_primaries_changed.connect(self._on_custom_primaries_changed)
+        # LUT导出信号
+        self.parameter_panel.lut_export_requested.connect(self._on_lut_export_requested)
         # 预览裁剪交互
         self.preview_widget.crop_committed.connect(self._on_crop_committed)
+        # 单张裁剪（不创建正式crop项）
+        try:
+            self.preview_widget.single_crop_committed.connect(self._on_single_crop_committed)
+        except Exception:
+            pass
+        self.preview_widget.crop_updated.connect(self._on_crop_updated)
         self.preview_widget.request_focus_crop.connect(self._on_request_focus_crop)
         self.preview_widget.request_restore_crop.connect(self._on_request_restore_crop)
+        # 裁剪选择条信号
+        try:
+            self.preview_widget.request_switch_profile.connect(self._on_request_switch_profile)
+            self.preview_widget.request_new_crop.connect(self._on_request_new_crop)
+            self.preview_widget.request_delete_crop.connect(self._on_request_delete_crop)
+        except Exception:
+            pass
         # Context → UI：裁剪改变后刷新 overlay
         try:
             self.context.crop_changed.connect(self.preview_widget.set_crop_overlay)
@@ -297,6 +320,17 @@ class MainWindow(QMainWindow):
         reset_action = QAction("重置", self)
         reset_action.triggered.connect(self._reset_parameters)
         toolbar.addAction(reset_action)
+        # 沿用接触印像设置（只在聚焦裁剪时可用）
+        apply_contactsheet_action = QAction("沿用接触印像设置", self)
+        apply_contactsheet_action.setToolTip("将接触印像的调色参数复制到当前裁剪")
+        apply_contactsheet_action.triggered.connect(self._on_apply_contactsheet_to_crop)
+        toolbar.addAction(apply_contactsheet_action)
+        self._apply_contactsheet_action = apply_contactsheet_action
+        # 初始禁用，进入聚焦模式后启用
+        try:
+            self._apply_contactsheet_action.setEnabled(False)
+        except Exception:
+            pass
         
 
     
@@ -340,6 +374,13 @@ class MainWindow(QMainWindow):
 
     def _on_image_loaded(self):
         self._fit_after_next_preview = True
+        # 图像加载后刷新裁剪选择条（基于 Context 内部列表）
+        try:
+            crops = getattr(self.context, '_crops', [])
+            active_id = getattr(self.context, '_active_crop_id', None)
+            self.preview_widget.refresh_crop_selector(crops, active_id)
+        except Exception:
+            pass
 
     def _on_autosave_requested(self):
         """处理来自Context的自动保存请求"""
@@ -347,13 +388,93 @@ class MainWindow(QMainWindow):
         if not current_image or not current_image.file_path:
             return
 
-        preset_name = f"Auto-save for {Path(current_image.file_path).name}"
-        preset = self._create_preset_from_current_state(preset_name)
-        self.context.auto_preset_manager.save_preset_for_image(current_image.file_path, preset)
+        # 保存为 Bundle（优先新格式）
+        bundle = self.context.export_preset_bundle()
+        self.context.auto_preset_manager.save_bundle_for_image(current_image.file_path, bundle)
         
         preset_file_path = self.context.auto_preset_manager.get_current_preset_file_path()
         if preset_file_path:
             self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
+
+    def _on_request_switch_profile(self, kind: str, crop_id: object):
+        """处理切换Profile请求"""
+        try:
+            if kind == 'contactsheet':
+                # 切换到原图模式
+                self.context.switch_to_contactsheet()
+                self.context.restore_crop_preview()
+                is_focused = False
+                # 恢复原图需要等预览更新完成再适应窗口
+                self._fit_after_next_preview = True
+            elif kind == 'crop' and isinstance(crop_id, str):
+                # 一次性切换到裁剪并聚焦，避免闪烁
+                self.context.switch_to_crop_focused(crop_id)
+                is_focused = True
+                # 聚焦需要等预览更新完成再适应窗口
+                self._fit_after_next_preview = True
+            else:
+                is_focused = False
+                
+            # 刷新选择条状态
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            self.preview_widget.refresh_crop_selector(crops, active_id, is_focused)
+            # 同步参数面板
+            self.parameter_panel.initialize_defaults(self.context.get_current_params())
+            # 更新工具可见性/可用性
+            self._update_apply_contactsheet_enabled()
+        except Exception as e:
+            print(f"切换Profile失败: {e}")
+
+    def _on_request_new_crop(self):
+        """响应新增裁剪请求
+        - 若已有 >=1 个裁剪：智能新增（复制相同大小并布局），不进入鼠标框选
+        - 若没有裁剪：保持现有逻辑，由预览进入手动框选
+        """
+        try:
+            crops = self.context.get_all_crops()
+            if isinstance(crops, list) and len(crops) >= 1:
+                # 调用智能新增：复制尺寸、按长宽比布局
+                new_id = self.context.smart_add_crop()
+                if new_id:
+                    # 切回原图显示所有裁剪（不聚焦），并显示编号按钮
+                    self.context.switch_to_contactsheet()
+                    try:
+                        self.preview_widget._hide_single_crop_selector = False
+                    except Exception:
+                        pass
+                    self.preview_widget.refresh_crop_selector(
+                        self.context.get_all_crops(),
+                        self.context.get_active_crop_id(),
+                        is_focused=False
+                    )
+                    # 同步参数面板
+                    self.parameter_panel.initialize_defaults(self.context.get_current_params())
+                return
+        except Exception as e:
+            print(f"智能新增裁剪失败: {e}")
+        # 无裁剪时，保持原逻辑：预览组件会进入手动框选
+        return
+
+    def _on_request_delete_crop(self, crop_id: str):
+        try:
+            self.context.delete_crop(crop_id)
+            # 刷新选择条
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            self.preview_widget.refresh_crop_selector(crops, active_id, is_focused=False)
+            # 更新工具可用性
+            self._update_apply_contactsheet_enabled()
+        except Exception as e:
+            print(f"删除裁剪失败: {e}")
+
+    def _on_apply_contactsheet_to_crop(self):
+        try:
+            self.context.apply_contactsheet_to_active_crop()
+            # 同步参数面板
+            self.parameter_panel.initialize_defaults(self.context.get_current_params())
+        except Exception as e:
+            print(f"沿用接触印像设置失败: {e}")
 
     def _on_auto_color_requested(self):
         self.context.run_auto_color_correction(self.preview_widget.get_current_image_data)
@@ -449,25 +570,24 @@ class MainWindow(QMainWindow):
         # 构造文件名、裁切和方向
         current_image = self.context.get_current_image()
         raw_file = Path(current_image.file_path).name if current_image else None
-        # TODO: 获取裁切框 (需要PreviewWidget支持)
-        crop_rect = None
+        # 裁切：优先使用当前激活的 crop；否则使用 contactsheet 的单裁剪（BWC）
+        crop_rect = self.context.get_active_crop() or self.context.get_contactsheet_crop_rect()
 
+        # 获取当前crop实例（包含独立orientation）
+        crop_instance = self.context.get_active_crop_instance()
+        
         return Preset(
             name=name,
             # Metadata
             raw_file=raw_file,
-            orientation=self.context.get_current_orientation(),
-            crop=self.context.get_active_crop() or crop_rect,
-            # 多裁剪镜像（单裁剪阶段仅写一项，字段名 rect_norm）
+            orientation=self.context.get_current_orientation(),  # 全局orientation
+            crop=crop_rect,  # 向后兼容（single/原图裁剪）
+            # 新的多裁剪结构（包含crop的独立orientation）
             crops=(
-                [{
-                    'id': 'c1',
-                    'name': '裁剪1',
-                    'rect_norm': list(self.context.get_active_crop())
-                }]
-                if self.context.get_active_crop() is not None else None
+                [crop_instance.to_dict()]
+                if crop_instance is not None else None
             ),
-            active_crop_id=('c1' if self.context.get_active_crop() is not None else None),
+            active_crop_id=(crop_instance.id if crop_instance is not None else None),
             # Input Transformation
             input_transformation=cs_def,
             # Grading Parameters
@@ -932,9 +1052,30 @@ class MainWindow(QMainWindow):
         self.preview_widget.set_image(result_image)
         if self._fit_after_next_preview:
             try:
-                self.preview_widget.fit_to_window()
+                # 确保图像设置完成后再适应窗口
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(10, self.preview_widget.fit_to_window)
             finally:
                 self._fit_after_next_preview = False
+        # 更新工具可用性
+        try:
+            self._update_apply_contactsheet_enabled()
+        except Exception:
+            pass
+
+    def _update_apply_contactsheet_enabled(self):
+        """仅在 contact sheet 模式下、进入单张 crop 聚焦时才显示该按钮。"""
+        try:
+            focused = bool(getattr(self.context, '_crop_focused', False))
+            kind = self.context.get_current_profile_kind()
+            # 只有当 kind == 'crop' 且聚焦时，显示“沿用接触印像设置”
+            visible = (kind == 'crop' and focused)
+            try:
+                self._apply_contactsheet_action.setVisible(visible)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _open_config_manager(self):
         """打开配置管理器"""
@@ -944,23 +1085,126 @@ class MainWindow(QMainWindow):
 
     # ===== 裁剪：UI协调槽 =====
     def _on_crop_committed(self, rect_norm: tuple):
+        """处理新建裁剪"""
         try:
-            self.context.set_single_crop(rect_norm)
-        except Exception:
-            pass
+            # 不论当前 Profile，点击“+”后的裁剪都视为“新增 crop”
+            orientation = self.context.get_current_orientation()
+            crop_id = self.context.add_crop(rect_norm, orientation)
+            if crop_id:
+                # 切换到该 crop 的 profile（不自动聚焦）
+                self.context.switch_to_crop(crop_id)
+                # 刷新裁剪选择条（强制显示编号）
+                try:
+                    self.preview_widget._hide_single_crop_selector = False
+                except Exception:
+                    pass
+                crops = self.context.get_all_crops()
+                active_id = self.context.get_active_crop_id()
+                self.preview_widget.refresh_crop_selector(crops, active_id)
+                # 更新参数面板
+                self.parameter_panel.on_context_params_changed(self.context.get_current_params())
+        except Exception as e:
+            print(f"创建裁剪失败: {e}")
+    
+    def _on_single_crop_committed(self, rect_norm: tuple):
+        """处理单张裁剪：不创建正式crop项，仅在 contactsheet 上记录裁剪并显示 overlay。"""
+        try:
+            # 设置 contactsheet 裁剪（新方法）
+            if hasattr(self.context, 'set_contactsheet_crop'):
+                self.context.set_contactsheet_crop(rect_norm)
+            else:
+                # 回退：直接通过 crop_changed 信号驱动 overlay
+                self.preview_widget.set_crop_overlay(rect_norm)
+            # 刷新选择条：当仅存在 single 裁剪时隐藏编号
+            try:
+                self.preview_widget._hide_single_crop_selector = True
+                crops = self.context.get_all_crops()
+                active_id = self.context.get_active_crop_id()
+                self.preview_widget.refresh_crop_selector(crops, active_id, is_focused=False)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"创建单张裁剪失败: {e}")
+    
+    def _on_crop_updated(self, crop_id_or_rect, rect_norm=None):
+        """处理更新现有裁剪"""
+        try:
+            # 兼容两种调用方式
+            if isinstance(crop_id_or_rect, str):
+                # 新格式: (crop_id, rect_norm)
+                crop_id = crop_id_or_rect
+                if rect_norm:
+                    # 更新指定裁剪
+                    for crop in self.context._crops:
+                        if crop.id == crop_id:
+                            crop.rect_norm = rect_norm
+                            break
+                    self.context._autosave_timer.start()
+            else:
+                # 旧格式: (rect_norm)
+                self.context.update_active_crop(crop_id_or_rect)
+        except Exception as e:
+            print(f"更新裁剪失败: {e}")
 
-    def _on_request_focus_crop(self):
+    def _on_request_focus_crop(self, crop_id=None):
+        """处理聚焦裁剪请求"""
         try:
+            if crop_id:
+                # 一次性切到指定裁剪并聚焦，避免先显示原图再聚焦的闪烁
+                self.context.switch_to_crop_focused(crop_id)
+            else:
+                self.context.focus_on_active_crop()
+            # 刷新UI
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            self.preview_widget.refresh_crop_selector(crops, active_id, is_focused=True)
+            # 进入聚焦后等预览更新完成再适应窗口
             self._fit_after_next_preview = True
-            self.context.focus_on_active_crop()
-        except Exception:
-            pass
+            # 更新工具可用性
+            try:
+                self._update_apply_contactsheet_enabled()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"聚焦裁剪失败: {e}")
 
     def _on_request_restore_crop(self):
         try:
             self.context.restore_crop_preview()
+            # 恢复到原图模式后，刷新选择条与显示状态
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            self.preview_widget.refresh_crop_selector(crops, active_id, is_focused=False)
+            # 恢复到原图需要等预览更新完成再适应窗口
+            self._fit_after_next_preview = True
+            # 更新工具可见性/可用性
+            self._update_apply_contactsheet_enabled()
         except Exception:
             pass
+
+    def _on_request_focus_contactsheet(self):
+        """进入接触印像/单张裁剪聚焦。"""
+        try:
+            # 若 Context 尚未记录 contactsheet 裁剪，但元数据里有 overlay，则先回写一份
+            try:
+                img = self.preview_widget.get_current_image_data()
+                if img and img.metadata:
+                    rect = img.metadata.get('crop_overlay')
+                    if rect and getattr(self.context, '_contactsheet_crop_rect', None) is None:
+                        if hasattr(self.context, 'set_contactsheet_crop'):
+                            self.context.set_contactsheet_crop(tuple(rect))
+            except Exception:
+                pass
+
+            self.context.focus_on_contactsheet_crop()
+            # 刷新UI
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            self.preview_widget.refresh_crop_selector(crops, active_id, is_focused=True)
+            self._fit_after_next_preview = True
+            self._update_apply_contactsheet_enabled()
+        except Exception as e:
+            print(f"接触印像聚焦失败: {e}")
 
     def _on_custom_primaries_changed(self, primaries_xy: dict):
         """当用户在 UCS 三角拖动完成后，基于 primaries_xy 注册并切换到临时输入空间。
@@ -1008,6 +1252,120 @@ class MainWindow(QMainWindow):
             self.context.rotate(int(direction))
         except Exception:
             pass
+    
+    def _on_lut_export_requested(self, lut_type: str, file_path: str, size: int):
+        """处理LUT导出请求"""
+        try:
+            # 获取当前参数
+            current_params = self.context.get_current_params()
+            
+            if lut_type == "input_transform":
+                success = self._export_input_transform_lut(current_params, file_path, size)
+            elif lut_type == "color_correction":
+                success = self._export_color_correction_lut(current_params, file_path, size)
+            elif lut_type == "density_curve":
+                success = self._export_density_curve_lut(current_params, file_path, size)
+            else:
+                success = False
+                
+            if success:
+                self.statusBar().showMessage(f"{lut_type} LUT已导出到: {file_path}")
+            else:
+                self.statusBar().showMessage(f"{lut_type} LUT导出失败")
+                
+        except Exception as e:
+            print(f"LUT导出失败: {e}")
+            self.statusBar().showMessage(f"LUT导出失败: {e}")
+    
+    def _export_input_transform_lut(self, params, file_path: str, size: int) -> bool:
+        """导出输入设备转换LUT (3D)"""
+        try:
+            from divere.utils.lut_generator.interface import DiVERELUTInterface
+            
+            # 创建仅包含输入转换的简化参数
+            input_params = params.copy()
+            # 禁用所有后续处理步骤，只保留输入色彩空间转换
+            input_params.enable_density_inversion = False
+            input_params.enable_density_matrix = False
+            input_params.enable_rgb_gains = False
+            input_params.enable_density_curve = False
+            # 重置所有处理参数为默认值
+            input_params.density_gamma = 1.0
+            input_params.density_dmax = 0.0
+            input_params.rgb_gains = (0.0, 0.0, 0.0)
+            input_params.curve_points = [(0.0, 0.0), (1.0, 1.0)]
+            input_params.curve_points_r = [(0.0, 0.0), (1.0, 1.0)]
+            input_params.curve_points_g = [(0.0, 0.0), (1.0, 1.0)]
+            input_params.curve_points_b = [(0.0, 0.0), (1.0, 1.0)]
+            
+            # 管线配置
+            pipeline_config = {
+                "params": input_params,
+                "context": self.context,
+                "the_enlarger": self.context.the_enlarger
+            }
+            
+            lut_interface = DiVERELUTInterface()
+            return lut_interface.generate_pipeline_lut(
+                pipeline_config, file_path, "3D", size
+            )
+            
+        except Exception as e:
+            print(f"导出输入转换LUT失败: {e}")
+            return False
+    
+    def _export_color_correction_lut(self, params, file_path: str, size: int) -> bool:
+        """导出反相校色LUT (3D, 不含密度曲线)"""
+        try:
+            from divere.utils.lut_generator.interface import DiVERELUTInterface
+            
+            # 创建不含密度曲线的参数副本
+            color_params = params.copy()
+            color_params.enable_density_curve = False
+            color_params.curve_points = [(0.0, 0.0), (1.0, 1.0)]
+            color_params.curve_points_r = [(0.0, 0.0), (1.0, 1.0)]
+            color_params.curve_points_g = [(0.0, 0.0), (1.0, 1.0)]
+            color_params.curve_points_b = [(0.0, 0.0), (1.0, 1.0)]
+            
+            # 管线配置
+            pipeline_config = {
+                "params": color_params,
+                "context": self.context,
+                "the_enlarger": self.context.the_enlarger
+            }
+            
+            lut_interface = DiVERELUTInterface()
+            return lut_interface.generate_pipeline_lut(
+                pipeline_config, file_path, "3D", size
+            )
+            
+        except Exception as e:
+            print(f"导出反相校色LUT失败: {e}")
+            return False
+    
+    def _export_density_curve_lut(self, params, file_path: str, size: int) -> bool:
+        """导出密度曲线LUT (1D)"""
+        try:
+            from divere.utils.lut_generator.interface import DiVERELUTInterface
+            
+            # 提取曲线数据
+            curves = {
+                'R': params.curve_points_r or [(0.0, 0.0), (1.0, 1.0)],
+                'G': params.curve_points_g or [(0.0, 0.0), (1.0, 1.0)],
+                'B': params.curve_points_b or [(0.0, 0.0), (1.0, 1.0)]
+            }
+            
+            # 如果有RGB通用曲线，使用它
+            if params.curve_points and params.curve_points != [(0.0, 0.0), (1.0, 1.0)]:
+                curves['R'] = curves['G'] = curves['B'] = params.curve_points
+            
+            # 直接使用 generate_curve_lut 方法
+            lut_interface = DiVERELUTInterface()
+            return lut_interface.generate_curve_lut(curves, file_path, size)
+            
+        except Exception as e:
+            print(f"导出密度曲线LUT失败: {e}")
+            return False
         
 # 移除 Worker 相关类定义
 # class _PreviewWorkerSignals(QObject): ...

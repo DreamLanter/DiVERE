@@ -136,14 +136,74 @@ class DiVERELUTInterface:
     def _create_transform_from_config(self, config: Dict[str, Any]):
         """
         从配置创建变换函数
-        这个方法是一个占位符，实际的变换逻辑由core提供
         """
-        # 这里返回一个简单的单位变换
-        # 实际的实现应该由core模块提供具体的变换逻辑
         def transform(rgb):
-            # 这里应该根据config中的参数实现具体的变换
-            # 但接口层不关心具体实现
-            return rgb
+            """实际的变换函数"""
+            try:
+                # 获取必要的组件
+                params = config.get('params')
+                context = config.get('context')
+                the_enlarger = config.get('the_enlarger')
+                
+                if not all([params, context, the_enlarger]):
+                    return rgb
+                
+                # 确保输入是numpy数组
+                import numpy as np
+                if not isinstance(rgb, np.ndarray):
+                    rgb = np.array(rgb, dtype=np.float32)
+                
+                # 处理批量RGB值：输入通常是(N, 3)形状
+                original_shape = rgb.shape
+                
+                # 将RGB值重塑为图像格式，处理器期望(H, W, 3)
+                if rgb.ndim == 1:
+                    # 单个颜色值 (3,) -> (1, 1, 3)
+                    fake_array = rgb.reshape(1, 1, 3).astype(np.float32)
+                elif rgb.ndim == 2:
+                    # 批量颜色值 (N, 3) -> (1, N, 3) 作为一行图像
+                    fake_array = rgb.reshape(1, rgb.shape[0], 3).astype(np.float32)
+                else:
+                    fake_array = rgb.astype(np.float32)
+                
+                # 创建ImageData对象
+                from divere.core.data_types import ImageData
+                fake_image = ImageData(
+                    array=fake_array,
+                    file_path="",
+                    metadata={}
+                )
+                
+                # 使用the_enlarger的完整管线处理
+                # include_curve参数根据LUT类型决定
+                include_curve = params.enable_density_curve
+                processed_image = the_enlarger.apply_full_pipeline(
+                    fake_image, params, include_curve=include_curve
+                )
+                
+                if processed_image is None or processed_image.array is None:
+                    return rgb
+                
+                # 提取处理后的数组并恢复原始形状
+                processed_array = processed_image.array
+                
+                # 裁剪到有效范围 [0, 1]
+                processed_array = np.clip(processed_array, 0.0, 1.0)
+                
+                if original_shape == (3,):
+                    # 单个颜色值
+                    return processed_array.flatten()[:3]
+                elif len(original_shape) == 2 and original_shape[1] == 3:
+                    # 批量颜色值：(1, N, 3) -> (N, 3)
+                    return processed_array.reshape(-1, 3)[:original_shape[0]]
+                else:
+                    return processed_array
+                    
+            except Exception as e:
+                print(f"LUT变换失败: {e}")
+                import traceback
+                traceback.print_exc()
+                return rgb
         
         return transform
     

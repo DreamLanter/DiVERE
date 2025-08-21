@@ -37,6 +37,8 @@ class ParameterPanel(QWidget):
     toggle_color_checker_requested = Signal(bool)
     # 新增：基色(primaries)改变（拖动结束时触发，负担轻）
     custom_primaries_changed = Signal(dict)
+    # LUT导出信号
+    lut_export_requested = Signal(str, str, int)  # (lut_type, file_path, size)
     
     def __init__(self, context: ApplicationContext):
         super().__init__()
@@ -212,6 +214,51 @@ class ParameterPanel(QWidget):
         pipeline_layout.addWidget(self.enable_rgb_gains_checkbox)
         pipeline_layout.addWidget(self.enable_density_curve_checkbox)
         layout.addWidget(pipeline_group)
+        
+        # LUT导出组
+        lut_group = QGroupBox("LUT导出")
+        lut_layout = QVBoxLayout(lut_group)
+        
+        # 输入设备转换LUT (3D)
+        input_lut_layout = QHBoxLayout()
+        input_lut_layout.addWidget(QLabel("输入设备转换LUT (3D):"))
+        input_lut_layout.addStretch()
+        self.input_lut_size_combo = QComboBox()
+        self.input_lut_size_combo.addItems(["16", "32", "64", "128"])
+        self.input_lut_size_combo.setCurrentText("64")
+        input_lut_layout.addWidget(self.input_lut_size_combo)
+        self.export_input_lut_btn = QPushButton("导出")
+        self.export_input_lut_btn.clicked.connect(self._on_export_input_lut)
+        input_lut_layout.addWidget(self.export_input_lut_btn)
+        lut_layout.addLayout(input_lut_layout)
+        
+        # 反相校色LUT (3D, 不含密度曲线)
+        color_lut_layout = QHBoxLayout()
+        color_lut_layout.addWidget(QLabel("反相校色LUT (3D):"))
+        color_lut_layout.addStretch()
+        self.color_lut_size_combo = QComboBox()
+        self.color_lut_size_combo.addItems(["16", "32", "64", "128"])
+        self.color_lut_size_combo.setCurrentText("64")
+        color_lut_layout.addWidget(self.color_lut_size_combo)
+        self.export_color_lut_btn = QPushButton("导出")
+        self.export_color_lut_btn.clicked.connect(self._on_export_color_lut)
+        color_lut_layout.addWidget(self.export_color_lut_btn)
+        lut_layout.addLayout(color_lut_layout)
+        
+        # 密度曲线LUT (1D)
+        curve_lut_layout = QHBoxLayout()
+        curve_lut_layout.addWidget(QLabel("密度曲线LUT (1D):"))
+        curve_lut_layout.addStretch()
+        self.curve_lut_size_combo = QComboBox()
+        self.curve_lut_size_combo.addItems(["2048", "4096", "8192", "16384", "32768", "65536"])
+        self.curve_lut_size_combo.setCurrentText("4096")
+        curve_lut_layout.addWidget(self.curve_lut_size_combo)
+        self.export_curve_lut_btn = QPushButton("导出")
+        self.export_curve_lut_btn.clicked.connect(self._on_export_curve_lut)
+        curve_lut_layout.addWidget(self.export_curve_lut_btn)
+        lut_layout.addLayout(curve_lut_layout)
+        
+        layout.addWidget(lut_group)
         layout.addStretch()
         return widget
     
@@ -247,7 +294,7 @@ class ParameterPanel(QWidget):
         
         for checkbox in [self.enable_density_inversion_checkbox, self.enable_density_matrix_checkbox, 
                          self.enable_rgb_gains_checkbox, self.enable_density_curve_checkbox]:
-            checkbox.toggled.connect(lambda *_: self.parameter_changed.emit())
+            checkbox.toggled.connect(self._on_debug_step_changed)
 
         self.auto_color_single_button.clicked.connect(self.auto_color_requested.emit)
         self.auto_color_multi_button.clicked.connect(self.auto_color_iterative_requested.emit)
@@ -265,7 +312,6 @@ class ParameterPanel(QWidget):
         self._is_updating_ui = True
         try:
             params = self.current_params
-            
             self._sync_combo_box(self.input_colorspace_combo, params.input_color_space_name)
             
             self.density_gamma_slider.setValue(int(params.density_gamma * 100))
@@ -287,7 +333,13 @@ class ParameterPanel(QWidget):
             self._sync_combo_box(self.matrix_combo, params.density_matrix_name)
 
             curves = {'RGB': params.curve_points, 'R': params.curve_points_r, 'G': params.curve_points_g, 'B': params.curve_points_b}
-            self.curve_editor.set_all_curves(curves)
+            # 避免在拖动过程中反复重置内部曲线与选择状态：当曲线内容未变化时跳过写回
+            try:
+                current_curves = self.curve_editor.get_all_curves()
+                if not self._curves_equal(current_curves, curves):
+                    self.curve_editor.set_all_curves(curves)
+            except Exception:
+                self.curve_editor.set_all_curves(curves)
             self._sync_combo_box(self.curve_editor.curve_combo, params.density_curve_name)
             
             self.enable_density_inversion_checkbox.setChecked(params.enable_density_inversion)
@@ -296,6 +348,21 @@ class ParameterPanel(QWidget):
             self.enable_density_curve_checkbox.setChecked(params.enable_density_curve)
         finally:
             self._is_updating_ui = False
+
+    def _curves_equal(self, a: dict, b: dict) -> bool:
+        try:
+            keys = ('RGB','R','G','B')
+            for k in keys:
+                pa = a.get(k, []) if isinstance(a, dict) else []
+                pb = b.get(k, []) if isinstance(b, dict) else []
+                if len(pa) != len(pb):
+                    return False
+                for (xa, ya), (xb, yb) in zip(pa, pb):
+                    if abs(float(xa) - float(xb)) > 1e-6 or abs(float(ya) - float(yb)) > 1e-6:
+                        return False
+            return True
+        except Exception:
+            return False
 
     def _sync_combo_box(self, combo: QComboBox, name: str):
         for i in range(combo.count()):
@@ -522,3 +589,39 @@ class ParameterPanel(QWidget):
     def _on_auto_color_correct_clicked(self):
         if self._is_updating_ui: return
         self.auto_color_iterative_requested.emit()
+    
+    def _on_export_input_lut(self):
+        """导出输入设备转换LUT"""
+        from PySide6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出输入设备转换LUT", "", "LUT文件 (*.cube)"
+        )
+        if file_path:
+            if not file_path.endswith('.cube'):
+                file_path += '.cube'
+            size = int(self.input_lut_size_combo.currentText())
+            self.lut_export_requested.emit("input_transform", file_path, size)
+    
+    def _on_export_color_lut(self):
+        """导出反相校色LUT（不含密度曲线）"""
+        from PySide6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出反相校色LUT", "", "LUT文件 (*.cube)"
+        )
+        if file_path:
+            if not file_path.endswith('.cube'):
+                file_path += '.cube'
+            size = int(self.color_lut_size_combo.currentText())
+            self.lut_export_requested.emit("color_correction", file_path, size)
+    
+    def _on_export_curve_lut(self):
+        """导出密度曲线LUT"""
+        from PySide6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出密度曲线LUT", "", "LUT文件 (*.cube)"
+        )
+        if file_path:
+            if not file_path.endswith('.cube'):
+                file_path += '.cube'
+            size = int(self.curve_lut_size_combo.currentText())
+            self.lut_export_requested.emit("density_curve", file_path, size)

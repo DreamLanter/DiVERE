@@ -380,8 +380,12 @@ class ColorSpaceManager:
         """设置图像的色彩空间"""
         if not self.validate_color_space(color_space):
             if self._verbose_logs:
-                print(f"无效的色彩空间: {color_space}，使用默认值Film_KodakRGB_Linear")
-            color_space = "Film_KodakRGB_Linear"
+                print(f"无效的色彩空间: {color_space}，使用默认值")
+            try:
+                from divere.utils.defaults import load_default_preset
+                color_space = load_default_preset().input_transformation.name or "CCFLGeneric_Linear"
+            except Exception:
+                color_space = "CCFLGeneric_Linear"
         
         # 创建新的图像数据对象，更新色彩空间信息
         new_image = ImageData(
@@ -518,8 +522,12 @@ class ColorSpaceManager:
         return self._apply_color_conversion(image_array, matrix, np.array([1.0, 1.0, 1.0]))
     
     def get_default_color_space(self) -> str:
-        """获取默认色彩空间"""
-        return "Film_KodakRGB_Linear"
+        """获取默认色彩空间（集中读取 default preset）"""
+        try:
+            from divere.utils.defaults import load_default_preset
+            return load_default_preset().input_transformation.name or "CCFLGeneric_Linear"
+        except Exception:
+            return "CCFLGeneric_Linear"
     
 
     

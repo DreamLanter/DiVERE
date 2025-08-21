@@ -135,7 +135,7 @@ class ImageManager:
                 # 创建ImageData并返回
                 image_data = ImageData(
                     array=image,
-                    color_space="Film_KodakRGB_Linear",
+                    color_space=None,
                     file_path=str(file_path),
                     is_proxy=False,
                     proxy_scale=1.0
@@ -249,10 +249,10 @@ class ImageManager:
                 raise RuntimeError(f"无法加载图像文件: {e}, {e2}")
         
         # 如果存在Alpha通道，暂不丢弃，但在后续色彩空间转换时会自动忽略
-        # 创建ImageData对象（默认Film_KodakRGB_Linear，色彩空间将由用户手动选择）
+        # 创建ImageData对象（默认不设具体空间，由上层默认预设或用户选择决定）
         image_data = ImageData(
             array=image,
-            color_space="Film_KodakRGB_Linear",  # 默认Film_KodakRGB_Linear
+            color_space=None,
             file_path=str(file_path),
             is_proxy=False,
             proxy_scale=1.0

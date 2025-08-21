@@ -106,6 +106,7 @@ dmypy.json
 *.swo
 *~
 .cursorrules
+.cursorrules_legacy
 
 # OS
 .DS_Store

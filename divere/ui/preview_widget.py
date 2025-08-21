@@ -4,13 +4,28 @@
 """
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple, List, Dict
+from enum import Enum
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton, QCheckBox
-from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QPointF
+from PySide6.QtWidgets import QFrame, QApplication
+from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QPointF, QRect, QEvent
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor, QPolygonF
 
-from divere.core.data_types import ImageData
+from divere.core.data_types import ImageData, CropInstance
+
+
+class CropEditMode(Enum):
+    """裁剪框编辑模式"""
+    NONE = 0
+    DRAG_TOP = 1
+    DRAG_BOTTOM = 2
+    DRAG_LEFT = 3
+    DRAG_RIGHT = 4
+    DRAG_TOP_LEFT = 5
+    DRAG_TOP_RIGHT = 6
+    DRAG_BOTTOM_LEFT = 7
+    DRAG_BOTTOM_RIGHT = 8
 
 
 class PreviewCanvas(QLabel):
@@ -94,6 +109,15 @@ class PreviewWidget(QWidget):
     # 发送图像旋转信号，参数为旋转方向：1=左旋，-1=右旋
     image_rotated = Signal(int)
     
+    # 裁剪相关信号
+    crop_committed = Signal(tuple)  # 新建裁剪
+    single_crop_committed = Signal(tuple)  # 单张裁剪（不创建正式crop项）
+    crop_updated = Signal(str, tuple)    # 更新现有裁剪 (crop_id, rect_norm)
+    request_focus_crop = Signal(str)  # 请求聚焦某个裁剪
+    request_restore_crop = Signal()  # 返回原图模式
+    request_smart_add_crop = Signal()  # 智能添加裁剪
+    request_focus_contactsheet = Signal()  # 单张/接触印像的裁剪聚焦
+    
     def __init__(self):
         super().__init__()
         
@@ -114,8 +138,14 @@ class PreviewWidget(QWidget):
         self.smooth_drag_timer.setInterval(16)  # ~60fps
         
         self._create_ui()
+        self._create_crop_selector()
         self._setup_mouse_controls()
         self._setup_keyboard_controls()
+        # 捕获应用级别的修饰键变化（确保光标能及时更新）
+        try:
+            QApplication.instance().installEventFilter(self)
+        except Exception:
+            pass
 
         # 视图边界（避免留白）的开关（按需限制）。
         # 根据需求改为默认关闭：允许自由拖放，不做边界约束。
@@ -139,16 +169,47 @@ class PreviewWidget(QWidget):
         self.cc_ref_qcolors = None  # 24项，参考色（QColor）
 
         # 裁剪交互与显示
-        self._crop_mode: bool = False
+        self._crop_mode: bool = False  # 是否在框选新裁剪模式
         self._crop_dragging: bool = False
-        self._crop_start_img = None  # (x,y) in image coords
-        self._crop_current_img = None
-        self._crop_overlay_norm = None  # (x,y,w,h) normalized to original image
+        self._crop_start_norm = None  # (x,y) 原图归一化坐标
+        self._crop_current_norm = None  # (x,y) 原图归一化坐标
+        self._crop_overlay_norm = None  # (x,y,w,h) 当前活跃裁剪框
+        
+        # 多裁剪显示
+        self._all_crops: List[Dict] = []  # 所有裁剪 [{id, rect_norm, active}, ...]
+        self._show_all_crops: bool = True  # 是否显示所有裁剪框
+        self._hovering_crop_id: Optional[str] = None  # 悬停的裁剪 ID
+        self._dragging_crop_id: Optional[str] = None  # 正在拖动的裁剪 ID
+        self._drag_offset: Tuple[float, float] = (0, 0)  # 拖动偏移
+        self._double_click_timer = QTimer()
+        self._double_click_timer.setSingleShot(True)
+        self._double_click_timer.setInterval(300)  # 300ms 双击间隔
+        self._pending_click_crop_id: Optional[str] = None
+        
+        # 裁剪框编辑状态
+        self._crop_edit_mode: CropEditMode = CropEditMode.NONE
+        self._crop_edit_start_rect: Optional[Tuple[float, float, float, float]] = None
+        self._crop_edit_hover_mode: CropEditMode = CropEditMode.NONE
+        
         # marching ants 动画
         self._ants_phase: float = 0.0
         self._ants_timer = QTimer()
         self._ants_timer.setInterval(100)
         self._ants_timer.timeout.connect(self._advance_ants)
+
+        # 编辑热键状态（Cmd/Ctrl）
+        self._edit_modifier_down: bool = False
+
+        # 多裁剪编辑：当前正在编辑的裁剪ID（用于边/角编辑）
+        self._active_edit_crop_id: Optional[str] = None
+        # 新建裁剪意图：'add' 来自加号按钮；'single' 来自 Cmd/Ctrl 直接框选
+        self._crop_creation_intent: Optional[str] = None
+        # UI：当仅存在“单张裁剪”时隐藏下方 [1] 按钮（未按加号）
+        self._hide_single_crop_selector: bool = False
+
+        # 聚焦模式：整体移动当前裁剪框
+        self._moving_overlay_active: bool = False
+        self._moving_overlay_offset_norm: Tuple[float, float] = (0.0, 0.0)
 
     # ============ 内部工具 ============
     def _get_viewport_size(self):
@@ -221,29 +282,15 @@ class PreviewWidget(QWidget):
         self.cc_checkbox = QCheckBox("色卡选择器")
         self.cc_checkbox.toggled.connect(self._on_cc_toggled)
         self.cc_checkbox.setVisible(False)
-        # 裁剪按钮组
-        self.crop_btn = QPushButton("裁剪")
-        self.crop_focus_btn = QPushButton("关注")
-        self.crop_restore_btn = QPushButton("恢复")
-        for b in (self.crop_btn, self.crop_focus_btn, self.crop_restore_btn):
-            b.setMaximumWidth(64)
-        self.crop_btn.clicked.connect(self._toggle_crop_mode)
-        self.crop_focus_btn.clicked.connect(self._on_focus_clicked)
-        self.crop_restore_btn.clicked.connect(self._on_restore_clicked)
-        # 初始禁用关注/恢复
-        self.crop_focus_btn.setEnabled(False)
-        self.crop_restore_btn.setEnabled(False)
+        # 裁剪按钮组（已移除，使用底部选择条）
         
         # 添加按钮到布局
         button_layout.addWidget(self.rotate_left_btn)
         button_layout.addWidget(self.rotate_right_btn)
         button_layout.addWidget(self.fit_window_btn)
         button_layout.addWidget(self.center_btn)
-        button_layout.addWidget(self.crop_btn)
-        button_layout.addWidget(self.crop_focus_btn)
-        button_layout.addWidget(self.crop_restore_btn)
         button_layout.addWidget(self.cc_checkbox)
-        button_layout.addStretch()
+        button_layout.addStretch()  # 弹性空间
         layout.addLayout(button_layout)
         
         self.scroll_area = QScrollArea()
@@ -260,6 +307,174 @@ class PreviewWidget(QWidget):
         # 统一overlay绘制器
         self.image_label.overlay_drawer = self._draw_overlays
 
+    # ====== 裁剪选择条 ======
+    def _create_crop_selector(self):
+        """在下方创建简单的裁剪选择条：[原图] [1] [2] ... [+]"""
+        try:
+            # 容器
+            row = QHBoxLayout()
+            row.setContentsMargins(8, 4, 8, 4)
+            row.setSpacing(8)
+            # 左侧：裁剪聚焦开关（默认隐藏）
+            self.btn_focus_toggle = QPushButton("裁剪聚焦")
+            self.btn_focus_toggle.setCheckable(True)
+            self.btn_focus_toggle.setVisible(False)
+            self.btn_focus_toggle.setChecked(False)
+            self.btn_focus_toggle.toggled.connect(self._on_focus_toggle_toggled)
+            row.addWidget(self.btn_focus_toggle)
+
+            # 添加拉伸以居中
+            row.addStretch()
+            
+            # 原图按钮
+            self.btn_contactsheet = QPushButton("原图")
+            self.btn_contactsheet.setMaximumWidth(56)
+            self.btn_contactsheet.setCheckable(True)
+            self.btn_contactsheet.setChecked(True)  # 默认选中原图
+            self.btn_contactsheet.clicked.connect(lambda: self._emit_switch_profile('contactsheet', None))
+            row.addWidget(self.btn_contactsheet)
+            
+            # 占位：动态添加crop按钮
+            self._crop_buttons_container = QHBoxLayout()
+            self._crop_buttons_container.setSpacing(6)
+            row.addLayout(self._crop_buttons_container)
+            
+            # 新增按钮
+            self.btn_add_crop = QPushButton("+")
+            self.btn_add_crop.setMaximumWidth(32)
+            self.btn_add_crop.setToolTip("添加新裁剪")
+            self.btn_add_crop.clicked.connect(self._emit_request_new_crop)
+            row.addWidget(self.btn_add_crop)
+            
+            # 添加拉伸以居中
+            row.addStretch()
+            
+            # 放到底部
+            self.layout().addLayout(row)
+        except Exception as e:
+            print(f"创建裁剪选择条失败: {e}")
+
+    def refresh_crop_selector(self, crops: list, active_crop_id: str | None, is_focused: bool = False):
+        """根据 Context 的裁剪列表刷新按钮。crops: list[CropInstance]"""
+        try:
+            # 清现有
+            while self._crop_buttons_container.count():
+                item = self._crop_buttons_container.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+            
+            # 文案：原图/接触印像
+            has_crops = isinstance(crops, list) and len(crops) > 0
+            try:
+                self.btn_contactsheet.setText("接触印像" if has_crops else "原图")
+            except Exception:
+                pass
+
+            # 是否隐藏“单裁剪”的编号按钮（仅一项，且由 Cmd/Ctrl 框选产生）
+            hide_single = (not is_focused) and self._hide_single_crop_selector and isinstance(crops, list) and (len(crops) == 1)
+
+            # 根据是否有活跃的crop来设置原图按钮状态（单裁剪隐藏时，原图按钮保持选中）
+            if hide_single:
+                self.btn_contactsheet.setChecked(True)
+            else:
+                self.btn_contactsheet.setChecked(active_crop_id is None and not is_focused)
+
+            # 裁剪聚焦开关：仅在“原图/接触印像”模式（active_crop_id 为 None）显示
+            try:
+                show_focus_toggle = (active_crop_id is None)
+                self.btn_focus_toggle.setVisible(bool(show_focus_toggle))
+                # 同步选中态到是否处于聚焦
+                self.btn_focus_toggle.blockSignals(True)
+                self.btn_focus_toggle.setChecked(bool(is_focused))
+                self.btn_focus_toggle.blockSignals(False)
+                # 可用性：当有可聚焦的 overlay（本地或来自 Context）才可用
+                enable_focus = False
+                if show_focus_toggle:
+                    if self._crop_overlay_norm is not None:
+                        enable_focus = True
+                    else:
+                        try:
+                            if self.current_image and self.current_image.metadata:
+                                enable_focus = self.current_image.metadata.get('crop_overlay') is not None
+                        except Exception:
+                            enable_focus = False
+                self.btn_focus_toggle.setEnabled(bool(enable_focus))
+            except Exception:
+                pass
+            
+            # 更新内部裁剪列表
+            self._all_crops = []
+            for idx, crop in enumerate(crops, start=1):
+                cid = getattr(crop, 'id', f'crop_{idx}')
+                rect_norm = getattr(crop, 'rect_norm', (0, 0, 1, 1))
+                self._all_crops.append({
+                    'id': cid,
+                    'index': idx,
+                    'rect_norm': rect_norm,
+                    'active': cid == active_crop_id
+                })
+            
+            # 添加按钮（当只有一个且要求隐藏时，不渲染编号按钮）
+            if not hide_single:
+                for idx, crop in enumerate(crops, start=1):
+                    btn = QPushButton(str(idx))
+                    btn.setMaximumWidth(32)
+                    btn.setCheckable(True)
+                    cid = getattr(crop, 'id', f'crop_{idx}')
+                    btn.setChecked(active_crop_id == cid)
+                    btn.setToolTip(getattr(crop, 'name', f'裁剪 {idx}'))
+                    btn.clicked.connect(lambda checked, c_id=cid: self._emit_switch_profile('crop', c_id))
+                    self._crop_buttons_container.addWidget(btn)
+            
+            # 设置显示模式
+            self._show_all_crops = not is_focused
+            
+            # 刷新显示
+            self.image_label.update()
+            
+        except Exception as e:
+            print(f"刷新裁剪选择条失败: {e}")
+
+    def _on_focus_toggle_toggled(self, checked: bool):
+        """左侧裁剪聚焦开关：仅在原图/接触印像模式出现。"""
+        try:
+            if checked:
+                self.request_focus_contactsheet.emit()
+            else:
+                self.request_restore_crop.emit()
+        except Exception:
+            pass
+
+    # 供 MainWindow 连接到 Context 的信号
+    request_switch_profile = Signal(str, object)  # kind, crop_id
+    request_new_crop = Signal()
+    request_delete_crop = Signal(str)  # 删除指定裁剪
+
+    def _emit_switch_profile(self, kind: str, crop_id: object):
+        # 进入切换时清空交互临时态
+        self._clear_crop_hover_state()
+        self._crop_mode = False
+        self._crop_dragging = False
+        self._crop_start_norm = None
+        self._crop_current_norm = None
+        self.request_switch_profile.emit(kind, crop_id)
+
+    def _emit_request_new_crop(self):
+        # 若已存在至少一个正式裁剪，则交给主窗口执行“智能新增”，不进入手动框选
+        try:
+            if isinstance(self._all_crops, list) and len(self._all_crops) >= 1:
+                self.request_new_crop.emit()
+                return
+        except Exception:
+            pass
+        # 否则进入手动框选模式，让用户画第一张裁剪
+        # 指示为“正式添加”意图
+        self._crop_creation_intent = 'add'
+        # 进入正式多裁剪流程，显示编号按钮
+        self._hide_single_crop_selector = False
+        self._toggle_crop_mode(True)
+
     # ===== 色卡选择器：UI与绘制 =====
     def _on_cc_toggled(self, checked: bool):
         self.cc_enabled = bool(checked)
@@ -267,10 +482,16 @@ class PreviewWidget(QWidget):
             if not self.cc_corners:
                 self._init_default_colorchecker()
             self._ensure_cc_reference_colors()
+        
+        # 切换色卡模式时清理悬停状态
+        if self.cc_enabled:
+            self._clear_crop_hover_state()
+        
         # overlay_drawer 始终使用统一的 _draw_overlays
         self._update_display()
 
     def _init_default_colorchecker(self):
+        # cc_corners 始终存储在“当前显示图像数组”的像素坐标系下
         h, w = self.current_image.array.shape[:2]
         max_w = w * 0.6
         max_h = h * 0.6
@@ -297,6 +518,7 @@ class PreviewWidget(QWidget):
         import numpy as np
         import cv2
         src = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.float32)
+        # cc_corners 始终存储在当前原图坐标系（考虑到旋转已同步）
         dst = np.array(self.cc_corners, dtype=np.float32)
         H = cv2.getPerspectiveTransform(src, dst)
 
@@ -353,6 +575,18 @@ class PreviewWidget(QWidget):
         self.image_label.mousePressEvent = self._mouse_press_event
         self.image_label.mouseMoveEvent = self._mouse_move_event
         self.image_label.mouseReleaseEvent = self._mouse_release_event
+        self.image_label.contextMenuEvent = self._context_menu_event
+    def _context_menu_event(self, event):
+        """右键菜单事件：按住 Cmd/Ctrl 时可删除命中的裁剪（仅原图模式）"""
+        try:
+            if not self._show_all_crops or not self._edit_modifier_down:
+                return
+            cid = self._get_crop_at_position(event.pos())
+            if cid:
+                self.request_delete_crop.emit(cid)
+                event.accept(); return
+        except Exception:
+            pass
         
         # 设置鼠标样式
         self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -360,6 +594,90 @@ class PreviewWidget(QWidget):
     def _setup_keyboard_controls(self):
         """设置键盘控制"""
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def eventFilter(self, obj, event):
+        # 全局监听修饰键变化与鼠标移动，以便更新编辑模式下的光标
+        try:
+            if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                if hasattr(event, 'key'):
+                    key = event.key()
+                else:
+                    key = None
+                if key in (Qt.Key.Key_Control, Qt.Key.Key_Meta):
+                    is_down = (event.type() == QEvent.Type.KeyPress)
+                    if self._edit_modifier_down != is_down:
+                        self._edit_modifier_down = is_down
+                        # 根据是否按下编辑键更新光标形态
+                        self._update_global_edit_cursor()
+            elif event.type() == QEvent.Type.MouseMove:
+                # 鼠标移动时也根据当前编辑键状态调整
+                self._update_global_edit_cursor()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _update_global_edit_cursor(self):
+        # 编辑热键按下时：优先显示边/角缩放光标；否则框内显示抓手；否则十字光标
+        try:
+            if self._edit_modifier_down:
+                pos = self.image_label.mapFromGlobal(QCursor.pos())
+                if self._show_all_crops:
+                    cid, zone = self._get_crop_edit_target_at_position(pos)
+                    if zone != CropEditMode.NONE:
+                        self._update_crop_cursor(zone)
+                        return
+                    # Fallback：当无多裁剪条目但存在 overlay 时，允许对 overlay 进行边/角编辑
+                    if (not self._all_crops) and self._crop_overlay_norm:
+                        zone = self._get_crop_interaction_zone(pos)
+                        if zone != CropEditMode.NONE:
+                            self._update_crop_cursor(zone)
+                            return
+                        # 未命中边/角：若在 overlay 内，显示抓手
+                        orig_point = self._display_to_original_point(pos)
+                        if orig_point and self.current_image and self.current_image.metadata:
+                            source_wh = self.current_image.metadata.get('source_wh')
+                            if source_wh:
+                                src_w, src_h = source_wh
+                                nx = orig_point[0] / src_w
+                                ny = orig_point[1] / src_h
+                                ox, oy, ow, oh = self._crop_overlay_norm
+                                if ox <= nx <= ox + ow and oy <= ny <= oy + oh:
+                                    self.image_label.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                                    return
+                    # 未命中边/角，则如果在某个裁剪框内部，显示抓手
+                    inside_id = self._get_crop_at_position(pos)
+                    if inside_id:
+                        self.image_label.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                        return
+                    # 默认十字
+                    self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+                    return
+                # 聚焦模式
+                zone = self._get_crop_interaction_zone(pos)
+                if zone != CropEditMode.NONE:
+                    self._update_crop_cursor(zone)
+                    return
+                # 判断是否在当前overlay内
+                if self._crop_overlay_norm:
+                    orig_point = self._display_to_original_point(pos)
+                    if orig_point and self.current_image and self.current_image.metadata:
+                        source_wh = self.current_image.metadata.get('source_wh')
+                        if source_wh:
+                            src_w, src_h = source_wh
+                            nx = orig_point[0] / src_w
+                            ny = orig_point[1] / src_h
+                            ox, oy, ow, oh = self._crop_overlay_norm
+                            if ox <= nx <= ox + ow and oy <= ny <= oy + oh:
+                                self.image_label.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                                return
+                # 默认十字
+                self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            else:
+                # 根据悬停状态恢复
+                pos = self.image_label.mapFromGlobal(QCursor.pos())
+                self._handle_crop_hover_detection(pos)
+        except Exception:
+            pass
     
     def toggle_color_checker(self, checked: bool):
         """Public method to toggle the color checker selector"""
@@ -439,7 +757,7 @@ class PreviewWidget(QWidget):
             qimage = QImage(array.data, width, height, width, QImage.Format.Format_Grayscale8)
         
         # 为DisplayP3图像应用Qt内置色彩管理
-        if hasattr(self, 'current_image') and self.current_image and self.current_image.color_space == "Rec2020":
+        if hasattr(self, 'current_image') and self.current_image and self.current_image.color_space == "DisplayP3":
             from PySide6.QtGui import QColorSpace
             # 创建色彩空间（DisplayP3）
             displayp3_space = QColorSpace(QColorSpace.NamedColorSpace.DisplayP3)
@@ -450,41 +768,119 @@ class PreviewWidget(QWidget):
 
     # ===== 裁剪 overlay 与交互 =====
     def _draw_crop_overlay(self, painter: QPainter):
-        rect_norm = self._crop_overlay_norm
-        try:
-            if rect_norm is None and self.current_image and self.current_image.metadata:
-                rect_norm = self.current_image.metadata.get('crop_overlay', None)
-        except Exception:
-            pass
-        if rect_norm is not None:
+        """绘制裁剪框覆盖层"""
+        # 在原图模式下显示所有裁剪框
+        if self._show_all_crops and self._all_crops:
             self._ensure_ants_timer(True)
-            img_rect = self._norm_to_image_rect(rect_norm)
-            if img_rect is not None:
-                pen = QPen(QColor(255, 255, 255, 220), 2)
+            for crop_info in self._all_crops:
+                rect_norm = crop_info['rect_norm']
+                crop_id = crop_info['id']
+                index = crop_info['index']
+                is_active = crop_info['active']
+                is_hovering = crop_id == self._hovering_crop_id
+                
+                # 选择颜色
+                if is_active:
+                    color = QColor(255, 200, 0, 220)  # 活跃裁剪用黄色
+                elif is_hovering:
+                    color = QColor(0, 255, 255, 220)  # 悬停用青色
+                else:
+                    color = QColor(255, 255, 255, 220)  # 普通用白色
+                
+                # 绘制虚线框
+                img_rect = self._norm_to_image_rect(rect_norm)
+                if img_rect:
+                    x, y, w, h = img_rect
+                    pen = QPen(color, 2)
+                    pen.setStyle(Qt.DashLine)
+                    pen.setDashPattern([6, 4])
+                    pen.setDashOffset(self._ants_phase)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(x, y, w, h)
+                    
+                    # 绘制序号标签
+                    self._draw_crop_label(painter, x, y, str(index), color)
+        else:
+            # 聚焦模式或没有裁剪时的逻辑
+            # 需求：在单图聚焦模式下不显示虚线框
+            is_focused = False
+            try:
+                if self.current_image and self.current_image.metadata:
+                    is_focused = bool(self.current_image.metadata.get('crop_focused', False))
+            except Exception:
+                pass
+            if is_focused:
+                # 聚焦：不画overlay，也关闭蚂蚁线动画
+                self._ensure_ants_timer(False)
+            else:
+                rect_norm = self._crop_overlay_norm
+                try:
+                    if rect_norm is None and self.current_image and self.current_image.metadata:
+                        rect_norm = self.current_image.metadata.get('crop_overlay', None)
+                except Exception:
+                    pass
+                if rect_norm is not None:
+                    self._ensure_ants_timer(True)
+                    img_rect = self._norm_to_image_rect(rect_norm)
+                    if img_rect is not None:
+                        pen = QPen(QColor(255, 255, 255, 220), 2)
+                        pen.setStyle(Qt.DashLine)
+                        pen.setDashPattern([6, 4])
+                        pen.setDashOffset(self._ants_phase)
+                        painter.setPen(pen)
+                        painter.setBrush(Qt.NoBrush)
+                        x, y, w, h = img_rect
+                        painter.drawRect(x, y, w, h)
+                else:
+                    self._ensure_ants_timer(False)
+
+        # 绘制临时框选（绿框）
+        if self._crop_mode and self._crop_start_norm and self._crop_current_norm:
+            self._ensure_ants_timer(True)
+            # 绿框：临时框选，直接使用归一化坐标
+            x0, y0 = self._crop_start_norm
+            x1, y1 = self._crop_current_norm
+            temp_norm = (min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            
+            # 直接将归一化坐标转换为显示坐标
+            temp_display = self._norm_to_image_rect(temp_norm)
+            if temp_display is not None:
+                x, y, w, h = temp_display
+                pen = QPen(QColor(0, 255, 0, 220), 2)
                 pen.setStyle(Qt.DashLine)
                 pen.setDashPattern([6, 4])
                 pen.setDashOffset(self._ants_phase)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
-                x, y, w, h = img_rect
                 painter.drawRect(x, y, w, h)
-        else:
-            self._ensure_ants_timer(False)
 
-        if self._crop_mode and self._crop_start_img and self._crop_current_img:
-            self._ensure_ants_timer(True)
-            x0, y0 = self._crop_start_img
-            x1, y1 = self._crop_current_img
-            x = min(x0, x1); y = min(y0, y1)
-            w = abs(x1 - x0); h = abs(y1 - y0)
-            pen = QPen(QColor(0, 255, 0, 220), 1)
-            pen.setStyle(Qt.DashLine)
-            pen.setDashPattern([6, 4])
-            pen.setDashOffset(self._ants_phase)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(x, y, w, h)
-
+    def _draw_crop_label(self, painter: QPainter, x: int, y: int, text: str, color: QColor):
+        """绘制裁剪框的序号标签"""
+        # 背景矩形
+        font = painter.font()
+        font.setPixelSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        
+        metrics = painter.fontMetrics()
+        text_rect = metrics.boundingRect(text)
+        padding = 3
+        
+        label_rect = QRect(
+            x - padding,
+            y - text_rect.height() - padding * 2,
+            text_rect.width() + padding * 2,
+            text_rect.height() + padding * 2
+        )
+        
+        # 绘制背景
+        painter.fillRect(label_rect, QColor(0, 0, 0, 180))
+        
+        # 绘制文字
+        painter.setPen(color)
+        painter.drawText(label_rect, Qt.AlignCenter, text)
+    
     def _draw_overlays(self, painter: QPainter):
         try:
             self._draw_colorchecker_overlay(painter)
@@ -510,8 +906,7 @@ class PreviewWidget(QWidget):
     def set_crop_overlay(self, rect_norm_or_none):
         self._crop_overlay_norm = rect_norm_or_none
         has_crop = rect_norm_or_none is not None
-        self.crop_focus_btn.setEnabled(has_crop)
-        self.crop_restore_btn.setEnabled(has_crop)
+        # 按钮已移除，使用底部选择条
         # 立即启动蚂蚁虚线动画并重绘覆盖层，必要时也刷新底图以确保立刻可见
         self._ensure_ants_timer(bool(has_crop))
         # 刷新显示，确保 paintEvent 立即走一遍
@@ -523,8 +918,14 @@ class PreviewWidget(QWidget):
         # 清理临时交互框（绿色）
         self._crop_mode = False
         self._crop_dragging = False
-        self._crop_start_img = None
-        self._crop_current_img = None
+        self._crop_start_norm = None
+        self._crop_current_norm = None
+        
+        # 清理编辑状态
+        self._crop_edit_mode = CropEditMode.NONE
+        self._crop_edit_start_rect = None
+        self._crop_edit_hover_mode = CropEditMode.NONE
+        
         self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         self.image_label.update()
         # 请求上层执行聚焦（Context 生成新proxy并回传overlay）
@@ -534,18 +935,31 @@ class PreviewWidget(QWidget):
         """点击恢复：清理临时裁剪交互状态，避免叠加绿色框，并请求上层恢复。"""
         self._crop_mode = False
         self._crop_dragging = False
-        self._crop_start_img = None
-        self._crop_current_img = None
+        self._crop_start_norm = None
+        self._crop_current_norm = None
+        
+        # 清理编辑状态
+        self._crop_edit_mode = CropEditMode.NONE
+        self._crop_edit_start_rect = None
+        self._crop_edit_hover_mode = CropEditMode.NONE
+        
         self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         self.image_label.update()
         self.request_restore_crop.emit()
 
-    def _toggle_crop_mode(self):
-        self._crop_mode = not self._crop_mode
+    def _toggle_crop_mode(self, enabled: bool = None):
+        if enabled is not None:
+            self._crop_mode = enabled
+        else:
+            self._crop_mode = not self._crop_mode
         if not self._crop_mode:
             self._crop_dragging = False
-            self._crop_start_img = None
-            self._crop_current_img = None
+            self._crop_start_norm = None
+            self._crop_current_norm = None
+        
+        # 切换模式时清理悬停状态
+        self._clear_crop_hover_state()
+        
         # 进入裁剪模式：立即切换光标样式，给予交互反馈
         if self._crop_mode:
             self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
@@ -554,7 +968,7 @@ class PreviewWidget(QWidget):
         self._update_display()
 
     def _norm_to_image_rect(self, rect_norm):
-        """将归一化坐标转换为图像像素坐标（相对于原始图像，适配painter变换）"""
+        """将原图归一化坐标转换为当前显示图像的像素坐标（UI显示用）"""
         try:
             if not self.current_image or self.current_image.array is None:
                 return None
@@ -562,34 +976,95 @@ class PreviewWidget(QWidget):
             md = self.current_image.metadata or {}
             src_wh = md.get('source_wh', None)
             focused = bool(md.get('crop_focused', False))
-            active = md.get('crop_overlay', None)
-            img_h, img_w = self.current_image.array.shape[:2]
-            if not src_wh:
-                # 元数据缺失时优雅退化：使用当前图像尺寸作为参考，保证虚线框立即显示
-                src_w = float(img_w)
-                src_h = float(img_h)
-            else:
-                src_w = float(src_wh[0]); src_h = float(src_wh[1])
             
-            if not focused or not active:
-                # 普通情况：归一化坐标 → 当前图像像素坐标
-                px = x * img_w
-                py = y * img_h  
-                pw = w * img_w
-                ph = h * img_h
+            if not src_wh:
+                # 元数据缺失时优雅退化
+                return (x * self.current_image.width, y * self.current_image.height, 
+                       w * self.current_image.width, h * self.current_image.height)
+            
+            src_w, src_h = src_wh
+            disp_h, disp_w = self.current_image.array.shape[:2]
+            
+            if focused:
+                # === 聚焦模式：显示crop内的相对位置 ===
+                crop_instance = md.get('crop_instance')
+                if not crop_instance:
+                    return None
+                
+                cx, cy, cw, ch = crop_instance.rect_norm
+                
+                # 将要显示的区域转换为相对于crop的坐标
+                rel_x = (x - cx) / cw if cw > 0 else 0
+                rel_y = (y - cy) / ch if ch > 0 else 0
+                rel_w = w / cw if cw > 0 else 0
+                rel_h = h / ch if ch > 0 else 0
+                
+                # 处理crop的独立orientation
+                if crop_instance.orientation % 360 != 0:
+                    # 应用crop的旋转变换
+                    rel_x, rel_y, rel_w, rel_h = self._apply_orientation_to_rect(
+                        rel_x, rel_y, rel_w, rel_h, crop_instance.orientation
+                    )
+                
+                # 映射到当前显示像素坐标
+                px = rel_x * disp_w
+                py = rel_y * disp_h
+                pw = rel_w * disp_w
+                ph = rel_h * disp_h
+                
                 return (px, py, pw, ph)
             else:
-                # 聚焦情况：需要考虑裁剪区域的映射
-                ax, ay, aw, ah = active
-                scale_x = img_w / aw
-                scale_y = img_h / ah
-                px = (x - ax) * scale_x
-                py = (y - ay) * scale_y
-                pw = w * scale_x
-                ph = h * scale_y
+                # === 非聚焦模式：显示完整图像上的位置 ===
+                global_orientation = md.get('global_orientation', 0)
+                
+                # Step 1: 原图归一化坐标 → 像素坐标
+                orig_px = x * src_w
+                orig_py = y * src_h
+                orig_pw = w * src_w
+                orig_ph = h * src_h
+                
+                # Step 2: 应用全局orientation变换
+                if global_orientation % 360 != 0:
+                    # 应用旋转变换到矩形
+                    disp_x, disp_y, disp_w_rotated, disp_h_rotated = self._apply_orientation_to_rect(
+                        orig_px / src_w, orig_py / src_h, orig_pw / src_w, orig_ph / src_h, global_orientation
+                    )
+                else:
+                    # 无旋转
+                    disp_x = orig_px / src_w
+                    disp_y = orig_py / src_h
+                    disp_w_rotated = orig_pw / src_w
+                    disp_h_rotated = orig_ph / src_h
+                
+                # Step 3: 映射到当前显示像素坐标
+                px = disp_x * disp_w
+                py = disp_y * disp_h
+                pw = disp_w_rotated * disp_w
+                ph = disp_h_rotated * disp_h
+                
                 return (px, py, pw, ph)
+                
         except Exception:
             return None
+    
+    def _apply_orientation_to_rect(self, x, y, w, h, orientation):
+        """应用旋转变换到归一化矩形（0-1坐标系）"""
+        if orientation % 360 == 0:
+            return (x, y, w, h)
+        
+        k = (orientation // 90) % 4
+        # 统一方向与 np.rot90 保持一致：k 表示逆时针 CCW 次数
+        if k == 1:  # 90° 逆时针（CCW）
+            # 变换：(x,y,w,h) → (y, 1-x-w, h, w)
+            return (y, 1.0 - x - w, h, w)
+        elif k == 2:  # 180度
+            # 变换：(x,y,w,h) → (1-x-w, 1-y-h, w, h)
+            return (1.0 - x - w, 1.0 - y - h, w, h)
+        elif k == 3:  # 270° 逆时针（即 90° 顺时针）
+            # 变换：(x,y,w,h) → (1-y-h, x, h, w)
+            return (1.0 - y - h, x, h, w)
+        else:
+            return (x, y, w, h)
     
     def _wheel_event(self, event):
         """鼠标滚轮事件 - 缩放"""
@@ -630,19 +1105,143 @@ class PreviewWidget(QWidget):
         
         event.accept()
     
+    def _get_crop_at_position(self, pos: QPoint) -> Optional[str]:
+        """获取鼠标位置下的裁剪框ID"""
+        if not self._show_all_crops or not self._all_crops:
+            return None
+        
+        # 转换为归一化坐标
+        try:
+            display_point = (pos.x(), pos.y())
+            norm_point = self._display_to_original_point(display_point)
+            if not norm_point:
+                return None
+            
+            # 归一化
+            if self.current_image and self.current_image.metadata:
+                source_wh = self.current_image.metadata.get('source_wh')
+                if source_wh:
+                    src_w, src_h = source_wh
+                    norm_x = norm_point[0] / src_w
+                    norm_y = norm_point[1] / src_h
+                    
+                    # 检查每个裁剪框
+                    for crop_info in self._all_crops:
+                        x, y, w, h = crop_info['rect_norm']
+                        if x <= norm_x <= x + w and y <= norm_y <= y + h:
+                            return crop_info['id']
+        except Exception:
+            pass
+        
+        return None
+    
     def _mouse_press_event(self, event):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # 裁剪模式优先拦截
+            # 记录点击时间，用于双击检测
+            current_time = self._double_click_timer.remainingTime()
+            
+            # 检查是否点击在裁剪框内（原图模式，多裁剪）
+            if self._show_all_crops:
+                clicked_crop_id = self._get_crop_at_position(event.pos())
+                if clicked_crop_id:
+                    # 双击聚焦（仅在未按编辑修饰键时生效）
+                    if (not self._edit_modifier_down and
+                        self._pending_click_crop_id == clicked_crop_id and self._double_click_timer.isActive()):
+                        self._double_click_timer.stop()
+                        self._pending_click_crop_id = None
+                        self.request_focus_crop.emit(clicked_crop_id)
+                        event.accept(); return
+
+            # 原图模式下：若按下编辑修饰键且当前不存在多裁剪列表，但存在 overlay，则允许直接边/角编辑 overlay
+            if self._show_all_crops and self._edit_modifier_down and (not self._all_crops) and self._crop_overlay_norm:
+                zone = self._get_crop_interaction_zone(event.pos())
+                if zone != CropEditMode.NONE:
+                    self._active_edit_crop_id = None
+                    self._crop_edit_start_rect = self._crop_overlay_norm
+                    self._crop_edit_mode = zone
+                    self._update_crop_cursor(zone)
+                    event.accept(); return
+                    # 记录点击，用于后续双击判定
+                    self._pending_click_crop_id = clicked_crop_id
+                    self._double_click_timer.start()
+                    if self._edit_modifier_down:
+                        # 优先边/角编辑
+                        cid, zone = self._get_crop_edit_target_at_position(event.pos())
+                        if zone != CropEditMode.NONE and cid is not None:
+                            self._active_edit_crop_id = cid
+                            for info in self._all_crops:
+                                if info['id'] == cid:
+                                    self._crop_edit_start_rect = info['rect_norm']
+                                    break
+                            self._crop_edit_mode = zone
+                            self._update_crop_cursor(zone)
+                            event.accept(); return
+                        # 否则框内拖动移动该裁剪框
+                        self._dragging_crop_id = clicked_crop_id
+                        # 记录拖动偏移
+                        orig_point = self._display_to_original_point(event.position())
+                        if orig_point and self.current_image and self.current_image.metadata:
+                            source_wh = self.current_image.metadata.get('source_wh')
+                            if source_wh:
+                                src_w, src_h = source_wh
+                                norm_x = orig_point[0] / src_w
+                                norm_y = orig_point[1] / src_h
+                                for crop_info in self._all_crops:
+                                    if crop_info['id'] == clicked_crop_id:
+                                        cx, cy, cw, ch = crop_info['rect_norm']
+                                        self._drag_offset = (norm_x - cx, norm_y - cy)
+                                        break
+                        event.accept(); return
+            
+            # 按住 Cmd/Ctrl 且未命中任何裁剪框时：在原图模式直接进入“新建裁剪”框选
+            if self._show_all_crops and self._edit_modifier_down:
+                try:
+                    # 再次确认当前位置未命中任何现有裁剪（避免与移动/编辑冲突）
+                    if not self._get_crop_at_position(event.pos()):
+                        orig_point = self._display_to_original_point(event.position())
+                        if orig_point is not None and self.current_image and self.current_image.metadata:
+                            source_wh = self.current_image.metadata.get('source_wh')
+                            if source_wh:
+                                src_w, src_h = source_wh
+                                norm_x = orig_point[0] / src_w
+                                norm_y = orig_point[1] / src_h
+                                # 进入框选模式并设定起点
+                                self._crop_creation_intent = 'single'
+                                self._crop_mode = True
+                                self._crop_dragging = True
+                                self._crop_start_norm = (norm_x, norm_y)
+                                self._crop_current_norm = (norm_x, norm_y)
+                                self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+                                event.accept(); return
+                except Exception:
+                    pass
+
+            # 优先级1：裁剪框编辑模式（聚焦模式）
+            if (not self._crop_mode and 
+                self._crop_overlay_norm and 
+                self._crop_edit_mode == CropEditMode.NONE and
+                not self._show_all_crops):
+                # 聚焦模式下禁用裁剪编辑与整体移动
+                pass
+            
+            # 优先级2：裁剪选择模式
             if self._crop_mode:
-                m = event.position()
-                ix = (float(m.x()) - float(self.pan_x)) / float(self.zoom_factor)
-                iy = (float(m.y()) - float(self.pan_y)) / float(self.zoom_factor)
-                self._crop_dragging = True
-                self._crop_start_img = (ix, iy)
-                self._crop_current_img = (ix, iy)
-                self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
-                event.accept(); return
+                # 直接转换为原图归一化坐标，确保与显示逻辑一致
+                orig_point = self._display_to_original_point(event.position())
+                if orig_point is not None:
+                    # 获取原图尺寸进行归一化
+                    md = self.current_image.metadata or {} if self.current_image else {}
+                    src_wh = md.get('source_wh')
+                    if src_wh:
+                        src_w, src_h = src_wh
+                        norm_x = orig_point[0] / src_w
+                        norm_y = orig_point[1] / src_h
+                        self._crop_dragging = True
+                        self._crop_start_norm = (norm_x, norm_y)
+                        self._crop_current_norm = (norm_x, norm_y)
+                        self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+                        event.accept(); return
             # 色卡角点命中测试（优先）
             if self.cc_enabled and self.cc_corners:
                 m = event.position()
@@ -666,30 +1265,95 @@ class PreviewWidget(QWidget):
     
     def _mouse_move_event(self, event):
         """鼠标移动事件"""
-        if self._crop_mode:
-            m = event.position()
-            ix = (float(m.x()) - float(self.pan_x)) / float(self.zoom_factor)
-            iy = (float(m.y()) - float(self.pan_y)) / float(self.zoom_factor)
-            if not self._crop_dragging:
-                self._crop_dragging = True
-                self._crop_start_img = (ix, iy)
-                self._crop_current_img = (ix, iy)
+        # === 优先级0：悬停检测（独立于其他交互） ===
+        self._handle_crop_hover_detection(event.pos())
+        
+        # === 优先级1：拖动裁剪框（原图模式） ===
+        if self._dragging_crop_id and self._show_all_crops:
+            orig_point = self._display_to_original_point(event.position())
+            if orig_point and self.current_image and self.current_image.metadata:
+                source_wh = self.current_image.metadata.get('source_wh')
+                if source_wh:
+                    src_w, src_h = source_wh
+                    norm_x = orig_point[0] / src_w
+                    norm_y = orig_point[1] / src_h
+                    # 计算新位置
+                    new_x = norm_x - self._drag_offset[0]
+                    new_y = norm_y - self._drag_offset[1]
+                    # 更新裁剪框位置
+                    for crop_info in self._all_crops:
+                        if crop_info['id'] == self._dragging_crop_id:
+                            x, y, w, h = crop_info['rect_norm']
+                            # 限制边界
+                            new_x = max(0, min(1 - w, new_x))
+                            new_y = max(0, min(1 - h, new_y))
+                            crop_info['rect_norm'] = (new_x, new_y, w, h)
+                            # 发出更新信号
+                            self.crop_updated.emit(self._dragging_crop_id, (new_x, new_y, w, h))
+                            self.image_label.update()
+                            break
+            event.accept()
+            return
+        
+        # === 优先级2：正在进行的交互 ===
+        if self._crop_edit_mode != CropEditMode.NONE:
+            if self._active_edit_crop_id is not None:
+                self._apply_crop_edit_multi(event.pos())
             else:
-                # 支持 Shift 限定为正方形选区（直接按位检查修饰键）
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                    sx, sy = self._crop_start_img
-                    dx = ix - sx; dy = iy - sy
-                    side = max(abs(dx), abs(dy))
-                    ix = sx + (side if dx >= 0 else -side)
-                    iy = sy + (side if dy >= 0 else -side)
-                self._crop_current_img = (ix, iy)
-            self._update_display(); event.accept(); return
+                self._apply_crop_edit(event.pos())
+            event.accept()
+            return
+            
+        # === 优先级2：裁剪选择模式 ===  
+        if self._crop_mode:
+            # 转换为原图归一化坐标
+            orig_point = self._display_to_original_point(event.position())
+            if orig_point is not None:
+                md = self.current_image.metadata or {} if self.current_image else {}
+                src_wh = md.get('source_wh')
+                if src_wh:
+                    src_w, src_h = src_wh
+                    norm_x = orig_point[0] / src_w
+                    norm_y = orig_point[1] / src_h
+                    
+                    if not self._crop_dragging:
+                        self._crop_dragging = True
+                        self._crop_start_norm = (norm_x, norm_y)
+                        self._crop_current_norm = (norm_x, norm_y)
+                    else:
+                        # 支持 Shift 限定为正方形选区
+                        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                            sx, sy = self._crop_start_norm
+                            dx = norm_x - sx; dy = norm_y - sy
+                            side = max(abs(dx), abs(dy))
+                            norm_x = sx + (side if dx >= 0 else -side)
+                            norm_y = sy + (side if dy >= 0 else -side)
+                        self._crop_current_norm = (norm_x, norm_y)
+                    self._update_display(); event.accept(); return
         if self.cc_enabled and self.cc_drag_idx is not None:
             m = event.position()
             ix = (float(m.x()) - float(self.pan_x)) / float(self.zoom_factor)
             iy = (float(m.y()) - float(self.pan_y)) / float(self.zoom_factor)
             self.cc_corners[self.cc_drag_idx] = (ix, iy)
             self._update_display(); event.accept(); return
+        # 聚焦模式：整体移动裁剪框（禁用；仅在原图多裁剪下允许）
+        if self._moving_overlay_active and self._crop_overlay_norm and self._show_all_crops:
+            orig_point = self._display_to_original_point(event.position())
+            if orig_point and self.current_image and self.current_image.metadata:
+                source_wh = self.current_image.metadata.get('source_wh')
+                if source_wh:
+                    src_w, src_h = source_wh
+                    norm_x = orig_point[0] / src_w
+                    norm_y = orig_point[1] / src_h
+                    off_x, off_y = self._moving_overlay_offset_norm
+                    _, _, w, h = self._crop_overlay_norm
+                    new_x = norm_x - off_x
+                    new_y = norm_y - off_y
+                    new_x = max(0.0, min(1.0 - w, new_x))
+                    new_y = max(0.0, min(1.0 - h, new_y))
+                    self._crop_overlay_norm = (new_x, new_y, w, h)
+                    self.image_label.update()
+            event.accept(); return
         if self.dragging and self.last_mouse_pos:
             delta = event.pos() - self.last_mouse_pos
             
@@ -711,33 +1375,104 @@ class PreviewWidget(QWidget):
     def _mouse_release_event(self, event):
         """鼠标释放事件"""
         if event.button() == Qt.MouseButton.LeftButton:
+            # 优先级1：结束裁剪框拖动
+            if self._dragging_crop_id:
+                self._dragging_crop_id = None
+                self._drag_offset = (0, 0)
+                event.accept()
+                return
+            
+            # 优先级2：裁剪框编辑结束
+            if self._crop_edit_mode != CropEditMode.NONE:
+                try:
+                    if self._active_edit_crop_id is not None:
+                        # 多裁剪：边/角编辑结束，按当前rect_norm发送更新
+                        for info in self._all_crops:
+                            if info['id'] == self._active_edit_crop_id:
+                                self.crop_updated.emit(self._active_edit_crop_id, info['rect_norm'])
+                                break
+                    else:
+                        # 聚焦模式：按overlay发送更新
+                        if self._crop_overlay_norm:
+                            active_id = None
+                            for crop_info in self._all_crops:
+                                if crop_info['active']:
+                                    active_id = crop_info['id']
+                                    break
+                            if active_id:
+                                self.crop_updated.emit(active_id, self._crop_overlay_norm)
+                except Exception:
+                    pass
+
+                # 重置编辑状态
+                self._crop_edit_mode = CropEditMode.NONE
+                self._crop_edit_start_rect = None
+                self._active_edit_crop_id = None
+
+                # 检查当前悬停状态并更新光标
+                hover_mode = self._get_crop_interaction_zone(event.pos()) if self._edit_modifier_down else CropEditMode.NONE
+                self._crop_edit_hover_mode = hover_mode
+                self._update_crop_cursor(hover_mode)
+
+                event.accept()
+                return
+
+            # 聚焦模式：结束整体移动裁剪框（禁用；仅在原图多裁剪下允许）
+            if self._moving_overlay_active and self._show_all_crops:
+                self._moving_overlay_active = False
+                try:
+                    if self._crop_overlay_norm:
+                        active_id = None
+                        for crop_info in self._all_crops:
+                            if crop_info['active']:
+                                active_id = crop_info['id']
+                                break
+                        if active_id:
+                            self.crop_updated.emit(active_id, self._crop_overlay_norm)
+                except Exception:
+                    pass
+                event.accept()
+                return
+            
             self.cc_drag_idx = None
             self.dragging = False
             self.last_mouse_pos = None
             self.drag_start_pos = None
             self.original_pan_pos = None
             
-            # 提交裁剪
-            if self._crop_mode and self._crop_dragging and self._crop_start_img and self._crop_current_img:
-                x0, y0 = self._crop_start_img
-                x1, y1 = self._crop_current_img
+            # 优先级2：提交新裁剪
+            if self._crop_mode and self._crop_dragging and self._crop_start_norm and self._crop_current_norm:
+                # 直接使用归一化坐标，无需转换
+                x0, y0 = self._crop_start_norm
+                x1, y1 = self._crop_current_norm
                 x = min(x0, x1); y = min(y0, y1)
                 w = abs(x1 - x0); h = abs(y1 - y0)
-                # 最小尺寸与边界约束（以图像像素为单位）
-                clamped = self._clamp_img_rect((x, y, w, h))
-                rect_norm = self._image_rect_to_norm(clamped) if clamped is not None else None
-                if rect_norm is not None:
-                    try:
-                        # 先在本地创建/更新虚线框（立即可见）
-                        self._crop_overlay_norm = tuple(float(v) for v in rect_norm)
-                        self._ensure_ants_timer(True)
-                        self.image_label.update()
-                        # 再发信号交由上层持久化与刷新代理
+                
+                # 边界约束（归一化坐标）
+                x = max(0.0, min(1.0, x))
+                y = max(0.0, min(1.0, y))
+                w = max(0.01, min(1.0 - x, w))  # 最小宽度1%
+                h = max(0.01, min(1.0 - y, h))  # 最小高度1%
+                
+                rect_norm = (x, y, w, h)
+                try:
+                    # 先在本地创建/更新虚线框（立即可见）
+                    self._crop_overlay_norm = rect_norm
+                    self._ensure_ants_timer(True)
+                    self.image_label.update()
+                    # 再发信号交由上层持久化与刷新代理
+                    if self._crop_creation_intent == 'add':
+                        # 正式新增 crop
                         self.crop_committed.emit(rect_norm)
-                    except Exception:
-                        pass
+                    else:
+                        # 单张裁剪（不新增正式 crop）
+                        self.single_crop_committed.emit(rect_norm)
+                except Exception:
+                    pass
                 self._crop_dragging = False
                 self._crop_mode = False
+                # 重置意图
+                self._crop_creation_intent = None
 
             # 恢复鼠标样式
             self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -764,7 +1499,14 @@ class PreviewWidget(QWidget):
         image_size = self.current_image.array.shape[:2][::-1]
         scale_x = widget_size.width() / image_size[0]
         scale_y = widget_size.height() / image_size[1]
-        self.zoom_factor = min(scale_x, scale_y, 1.0)
+        # 聚焦裁剪时允许放大以填满窗口；非聚焦时不放大
+        focused = False
+        try:
+            if self.current_image and self.current_image.metadata:
+                focused = bool(self.current_image.metadata.get('crop_focused', False))
+        except Exception:
+            focused = False
+        self.zoom_factor = min(scale_x, scale_y) if focused else min(scale_x, scale_y, 1.0)
 
         # 居中平移
         Wi, Hi = self._get_scaled_image_size()
@@ -881,6 +1623,21 @@ class PreviewWidget(QWidget):
                 ppy = px
             else:
                 ppx, ppy = px, py
+            # 同步更新色卡角点坐标到旋转后的显示图像坐标系（仅当存在色卡时）
+            try:
+                if self.cc_corners and isinstance(self.cc_corners, (list, tuple)):
+                    new_corners = []
+                    if direction == 1:  # 左旋 CCW: (x', y') = (y, W_old - 1 - x)
+                        for (ix, iy) in self.cc_corners:
+                            new_corners.append((float(iy), float(W_old - 1.0 - ix)))
+                    elif direction == -1:  # 右旋 CW: (x', y') = (H_old - 1 - y, x)
+                        for (ix, iy) in self.cc_corners:
+                            new_corners.append((float(H_old - 1.0 - iy), float(ix)))
+                    else:
+                        new_corners = list(self.cc_corners)
+                    self.cc_corners = new_corners
+            except Exception:
+                pass
             # 以当前视口中心求新的平移
             Wv = self._get_viewport_size().width()
             Hv = self._get_viewport_size().height()
@@ -914,7 +1671,16 @@ class PreviewWidget(QWidget):
             
     def keyPressEvent(self, event):
         """键盘事件处理"""
-        if event.key() == Qt.Key.Key_Left:
+        if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Meta):
+            if not self._edit_modifier_down:
+                self._edit_modifier_down = True
+                # 立即刷新光标/悬停
+                try:
+                    pos = self.image_label.mapFromGlobal(QCursor.pos())
+                    self._handle_crop_hover_detection(pos)
+                except Exception:
+                    pass
+        elif event.key() == Qt.Key.Key_Left:
             self.rotate_left()
         elif event.key() == Qt.Key.Key_Right:
             self.rotate_right()
@@ -929,49 +1695,86 @@ class PreviewWidget(QWidget):
             if self._crop_mode or self._crop_dragging:
                 self._crop_mode = False
                 self._crop_dragging = False
-                self._crop_start_img = None
-                self._crop_current_img = None
+                self._crop_start_norm = None
+                self._crop_current_norm = None
                 self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 self._update_display()
         else:
             super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event):
+        try:
+            if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Meta):
+                if self._edit_modifier_down:
+                    self._edit_modifier_down = False
+                    # 退出编辑修饰键，复位相关状态
+                    self._active_edit_crop_id = None
+                    if self._moving_overlay_active:
+                        # 松开修饰键也结束移动
+                        self._moving_overlay_active = False
+                    self._clear_crop_hover_state()
+                    try:
+                        pos = self.image_label.mapFromGlobal(QCursor.pos())
+                        self._handle_crop_hover_detection(pos)
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            pass
+        super().keyReleaseEvent(event)
+
     # ===== 信号：裁剪交互 =====
-    crop_committed = Signal(tuple)
-    request_focus_crop = Signal()
-    request_restore_crop = Signal()
+
 
     def _image_rect_to_norm(self, img_rect):
-        """将当前图像像素矩形映射为基于原图的归一化矩形。"""
+        """将显示图像矩形转换为原图归一化坐标（基于原图逻辑坐标系）"""
         try:
             if not self.current_image or self.current_image.array is None:
                 return None
             x, y, w, h = img_rect
             if w <= 0 or h <= 0:
                 return None
+            
+            # 关键思想：通过鼠标坐标直接获取原图归一化坐标
+            # 将矩形的四个角点转换为原图坐标，然后计算边界框
+            
+            # 矩形的四个角点（显示坐标）
+            points = [
+                QPoint(int(x), int(y)),           # 左上
+                QPoint(int(x + w), int(y)),       # 右上  
+                QPoint(int(x), int(y + h)),       # 左下
+                QPoint(int(x + w), int(y + h))    # 右下
+            ]
+            
+            # 转换到原图坐标
+            orig_points = []
+            for pt in points:
+                orig_pt = self._display_to_original_point(pt)
+                if orig_pt is None:
+                    return None
+                orig_points.append(orig_pt)
+            
+            # 计算原图坐标系下的边界框
+            xs = [pt[0] for pt in orig_points]
+            ys = [pt[1] for pt in orig_points]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            
+            # 获取原图尺寸进行归一化
             md = self.current_image.metadata or {}
             src_wh = md.get('source_wh', None)
-            focused = bool(md.get('crop_focused', False))
-            active = md.get('crop_overlay', None)
-            img_h, img_w = self.current_image.array.shape[:2]
             if not src_wh:
                 return None
-            src_w = float(src_wh[0]); src_h = float(src_wh[1])
-            if not focused or not active:
-                nx = x * src_w / img_w
-                ny = y * src_h / img_h
-                nw = w * src_w / img_w
-                nh = h * src_h / img_h
-                return (nx / src_w, ny / src_h, nw / src_w, nh / src_h)
-            else:
-                ax, ay, aw, ah = active
-                ox = ax * src_w; oy = ay * src_h
-                sub_w = aw * src_w; sub_h = ah * src_h
-                nx = ox + x * (sub_w / img_w)
-                ny = oy + y * (sub_h / img_h)
-                nw = w * (sub_w / img_w)
-                nh = h * (sub_h / img_h)
-                return (nx / src_w, ny / src_h, nw / src_w, nh / src_h)
+            src_w, src_h = src_wh
+            
+            # 归一化到[0,1]
+            norm_x = min_x / src_w
+            norm_y = min_y / src_h
+            norm_w = (max_x - min_x) / src_w
+            norm_h = (max_y - min_y) / src_h
+            
+            return (norm_x, norm_y, norm_w, norm_h)
+            
         except Exception:
             return None
 
@@ -994,3 +1797,523 @@ class PreviewWidget(QWidget):
             return (x, y, w, h)
         except Exception:
             return None
+
+    # ===== 裁剪框编辑功能 =====
+    def _get_crop_interaction_zone(self, mouse_pos: QPoint, rect_norm_override: Optional[Tuple[float, float, float, float]] = None) -> CropEditMode:
+        """检测鼠标位置对应的裁剪交互区域。可选传入指定裁剪框rect进行检测。"""
+        if not self.current_image:
+            return CropEditMode.NONE
+            
+        # 获取裁剪框在图像像素坐标系中的位置
+        target_rect_norm = rect_norm_override if rect_norm_override is not None else self._crop_overlay_norm
+        if not target_rect_norm:
+            return CropEditMode.NONE
+        img_rect = self._norm_to_image_rect(target_rect_norm)
+        if not img_rect:
+            return CropEditMode.NONE
+            
+        x, y, w, h = img_rect
+        
+        # 转换鼠标坐标到图像坐标系（考虑zoom和pan）
+        try:
+            # 鼠标在canvas上的位置
+            mx, my = mouse_pos.x(), mouse_pos.y()
+            
+            # 反向变换：从canvas坐标到图像坐标
+            # canvas坐标 = (图像坐标 * zoom) + pan
+            # 图像坐标 = (canvas坐标 - pan) / zoom
+            img_x = (mx - self.pan_x) / self.zoom_factor
+            img_y = (my - self.pan_y) / self.zoom_factor
+            
+            # 检测容差（在图像坐标系中，考虑缩放）
+            EDGE_TOLERANCE = 8.0 / self.zoom_factor  # 边缘检测容差
+            CORNER_TOLERANCE = 12.0 / self.zoom_factor  # 角点检测容差
+            
+            # 判断是否在裁剪框附近
+            left, right = x, x + w
+            top, bottom = y, y + h
+            
+            # 先检测角点（优先级最高）
+            if (abs(img_x - left) <= CORNER_TOLERANCE and 
+                abs(img_y - top) <= CORNER_TOLERANCE):
+                return CropEditMode.DRAG_TOP_LEFT
+            elif (abs(img_x - right) <= CORNER_TOLERANCE and 
+                  abs(img_y - top) <= CORNER_TOLERANCE):
+                return CropEditMode.DRAG_TOP_RIGHT
+            elif (abs(img_x - left) <= CORNER_TOLERANCE and 
+                  abs(img_y - bottom) <= CORNER_TOLERANCE):
+                return CropEditMode.DRAG_BOTTOM_LEFT
+            elif (abs(img_x - right) <= CORNER_TOLERANCE and 
+                  abs(img_y - bottom) <= CORNER_TOLERANCE):
+                return CropEditMode.DRAG_BOTTOM_RIGHT
+            
+            # 再检测边缘
+            elif (left <= img_x <= right and 
+                  abs(img_y - top) <= EDGE_TOLERANCE):
+                return CropEditMode.DRAG_TOP
+            elif (left <= img_x <= right and 
+                  abs(img_y - bottom) <= EDGE_TOLERANCE):
+                return CropEditMode.DRAG_BOTTOM
+            elif (top <= img_y <= bottom and 
+                  abs(img_x - left) <= EDGE_TOLERANCE):
+                return CropEditMode.DRAG_LEFT
+            elif (top <= img_y <= bottom and 
+                  abs(img_x - right) <= EDGE_TOLERANCE):
+                return CropEditMode.DRAG_RIGHT
+                
+            return CropEditMode.NONE
+            
+        except Exception:
+            return CropEditMode.NONE
+
+    def _handle_crop_hover_detection(self, mouse_pos: QPoint):
+        """独立的裁剪框悬停检测，不受其他交互状态影响"""
+        # 原图模式下的多裁剪悬停
+        if self._show_all_crops:
+            old_hovering = self._hovering_crop_id
+            if self._edit_modifier_down:
+                # 编辑修饰键按下：优先检测边/角
+                cid, zone = self._get_crop_edit_target_at_position(mouse_pos)
+                if zone != CropEditMode.NONE and cid is not None:
+                    self._hovering_crop_id = cid
+                    if zone != self._crop_edit_hover_mode:
+                        self._crop_edit_hover_mode = zone
+                        self._update_crop_cursor(zone)
+                    return
+                # 未命中边/角：检测是否在某个裁剪框内部
+                self._crop_edit_hover_mode = CropEditMode.NONE
+                self._hovering_crop_id = self._get_crop_at_position(mouse_pos)
+                if self._hovering_crop_id:
+                    self.image_label.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                else:
+                    # 编辑态的默认光标
+                    self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+                return
+            # 未按编辑键：更新悬停与光标（悬停框显示抓手）
+            self._crop_edit_hover_mode = CropEditMode.NONE
+            self._hovering_crop_id = self._get_crop_at_position(mouse_pos)
+            if old_hovering != self._hovering_crop_id:
+                self.image_label.update()
+            if not (self._crop_mode or self.dragging):
+                if self._hovering_crop_id:
+                    self.image_label.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                else:
+                    self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        # 聚焦模式：不显示虚线框也不响应边缘编辑
+        elif (not self._show_all_crops):
+            if not (self._crop_mode or self.dragging or self.cc_enabled):
+                self._update_crop_cursor(CropEditMode.NONE)
+        else:
+            # 没有裁剪框或正在编辑时，确保光标为默认状态
+            if self._crop_edit_hover_mode != CropEditMode.NONE:
+                self._crop_edit_hover_mode = CropEditMode.NONE
+                # 只有在非交互状态下才重置光标
+                if not (self._crop_mode or self.dragging or self.cc_enabled):
+                    self._update_crop_cursor(CropEditMode.NONE)
+
+    def _update_crop_cursor(self, edit_mode: CropEditMode):
+        """根据编辑模式更新光标样式，考虑优先级"""
+        
+        # 如果正在其他交互中，不改变光标
+        if self._crop_mode:
+            return  # 保持裁剪模式的十字光标
+        
+        if self.dragging:
+            return  # 保持拖拽时的光标
+            
+        if self.cc_enabled and self.cc_drag_idx is not None:
+            return  # 保持色卡拖拽时的光标
+        
+        # 应用裁剪编辑的光标
+        cursor_map = {
+            CropEditMode.NONE: Qt.CursorShape.ArrowCursor,
+            CropEditMode.DRAG_TOP: Qt.CursorShape.SizeVerCursor,
+            CropEditMode.DRAG_BOTTOM: Qt.CursorShape.SizeVerCursor,
+            CropEditMode.DRAG_LEFT: Qt.CursorShape.SizeHorCursor,
+            CropEditMode.DRAG_RIGHT: Qt.CursorShape.SizeHorCursor,
+            CropEditMode.DRAG_TOP_LEFT: Qt.CursorShape.SizeFDiagCursor,
+            CropEditMode.DRAG_BOTTOM_RIGHT: Qt.CursorShape.SizeFDiagCursor,
+            CropEditMode.DRAG_TOP_RIGHT: Qt.CursorShape.SizeBDiagCursor,
+            CropEditMode.DRAG_BOTTOM_LEFT: Qt.CursorShape.SizeBDiagCursor,
+        }
+        
+        cursor = cursor_map.get(edit_mode, Qt.CursorShape.ArrowCursor)
+        self.image_label.setCursor(QCursor(cursor))
+
+    def _clear_crop_hover_state(self):
+        """清理裁剪悬停状态，在适当时机调用"""
+        if self._crop_edit_hover_mode != CropEditMode.NONE:
+            self._crop_edit_hover_mode = CropEditMode.NONE
+            # 仅在非交互状态下重置光标
+            if not (self._crop_mode or self.dragging or self.cc_enabled):
+                self.image_label.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+
+    # ===== 多裁剪：边/角命中检测 =====
+    def _get_crop_edit_target_at_position(self, mouse_pos: QPoint) -> Tuple[Optional[str], CropEditMode]:
+        """返回鼠标位置命中的裁剪及边/角编辑模式。(crop_id, mode)"""
+        if not (self._show_all_crops and self._all_crops):
+            return (None, CropEditMode.NONE)
+        try:
+            # 优先检测当前悬停框，提高连贯性
+            candidate_ids: List[str] = []
+            if self._hovering_crop_id:
+                candidate_ids.append(self._hovering_crop_id)
+            for info in self._all_crops:
+                cid = info['id']
+                if cid not in candidate_ids:
+                    candidate_ids.append(cid)
+            for cid in candidate_ids:
+                rect_norm = None
+                for info in self._all_crops:
+                    if info['id'] == cid:
+                        rect_norm = info['rect_norm']
+                        break
+                if rect_norm is None:
+                    continue
+                zone = self._get_crop_interaction_zone(mouse_pos, rect_norm)
+                if zone != CropEditMode.NONE:
+                    return (cid, zone)
+        except Exception:
+            pass
+        return (None, CropEditMode.NONE)
+
+    # ===== 标准坐标转换函数（支持CropInstance模型） =====
+    def _get_current_crop_context(self) -> Optional[CropInstance]:
+        """获取当前crop上下文"""
+        if self.current_image and self.current_image.metadata:
+            return self.current_image.metadata.get('crop_instance')
+        return None
+
+    def _display_to_original_point(self, display_point: QPoint) -> Optional[Tuple[float, float]]:
+        """显示坐标 → 原图像素坐标（纯净的坐标转换，无变换概念）"""
+        if not self.current_image:
+            return None
+            
+        try:
+            # Step 1: Canvas坐标 → 当前显示图像像素坐标
+            # 兼容 QPoint/QPointF/tuple
+            try:
+                mx, my = float(display_point.x()), float(display_point.y())
+            except Exception:
+                try:
+                    mx, my = float(display_point[0]), float(display_point[1])
+                except Exception:
+                    return None
+            img_x = (mx - self.pan_x) / self.zoom_factor
+            img_y = (my - self.pan_y) / self.zoom_factor
+            
+            # Step 2: 获取metadata
+            md = self.current_image.metadata or {}
+            source_wh = md.get('source_wh')
+            if not source_wh:
+                # 无原图信息，直接返回当前坐标（假设就是原图）
+                return (img_x, img_y)
+            
+            src_w, src_h = source_wh
+            focused = md.get('crop_focused', False)
+            
+            if focused:
+                # === 聚焦状态：当前显示的是某个crop区域 ===
+                crop_instance = md.get('crop_instance')
+                if not crop_instance:
+                    return (img_x, img_y)
+                
+                # 获取crop区域在原图中的像素范围
+                x, y, w, h = crop_instance.rect_norm
+                crop_left = x * src_w
+                crop_top = y * src_h
+                crop_width = w * src_w
+                crop_height = h * src_h
+                
+                # 当前显示图像的尺寸
+                disp_h, disp_w = self.current_image.array.shape[:2]
+                
+                # 处理crop的独立orientation
+                if crop_instance.orientation % 360 != 0:
+                    # 将显示坐标映射到crop前的坐标（逆旋转）
+                    crop_x, crop_y = self._reverse_rotate_point(
+                        img_x, img_y, disp_w, disp_h, crop_instance.orientation
+                    )
+                    # 映射回原图：crop坐标 → 原图坐标
+                    orig_x = crop_left + (crop_x * crop_width / disp_w)
+                    orig_y = crop_top + (crop_y * crop_height / disp_h)
+                else:
+                    # 无旋转：直接映射
+                    orig_x = crop_left + (img_x * crop_width / disp_w)
+                    orig_y = crop_top + (img_y * crop_height / disp_h)
+                
+                return (orig_x, orig_y)
+            else:
+                # === 非聚焦状态：当前显示的是完整图像（可能旋转） ===
+                global_orientation = md.get('global_orientation', 0)
+                disp_h, disp_w = self.current_image.array.shape[:2]
+                
+                if global_orientation % 360 != 0:
+                    # 逆旋转到原图坐标
+                    orig_x, orig_y = self._reverse_rotate_point(
+                        img_x, img_y, disp_w, disp_h, global_orientation
+                    )
+                    # 缩放到原图尺寸
+                    if global_orientation % 180 == 0:  # 0°或180°
+                        orig_x = orig_x * src_w / disp_w
+                        orig_y = orig_y * src_h / disp_h
+                    else:  # 90°或270°（宽高交换）
+                        orig_x = orig_x * src_w / disp_h
+                        orig_y = orig_y * src_h / disp_w
+                    return (orig_x, orig_y)
+                else:
+                    # 无旋转：直接缩放
+                    orig_x = img_x * src_w / disp_w
+                    orig_y = img_y * src_h / disp_h
+                    return (orig_x, orig_y)
+                
+        except Exception:
+            pass
+        return None
+
+    def _reverse_rotate_point(self, x: float, y: float, img_w: int, img_h: int, orientation: int) -> Tuple[float, float]:
+        """逆向旋转点坐标"""
+        if orientation % 360 == 0:
+            return (x, y)
+            
+        # 标准化旋转角度
+        k = (orientation // 90) % 4
+        if k == 0:
+            return (x, y)
+        elif k == 1:  # 逆向90°旋转
+            return (y, img_w - 1 - x)
+        elif k == 2:  # 逆向180°旋转  
+            return (img_w - 1 - x, img_h - 1 - y)
+        elif k == 3:  # 逆向270°旋转
+            return (img_h - 1 - y, x)
+        else:
+            return (x, y)
+
+    def _original_to_norm_rect(self, pixel_rect: Tuple[float, float, float, float]) -> Optional[Tuple[float, float, float, float]]:
+        """原始图像像素坐标 → 归一化坐标"""
+        if not self.current_image:
+            return None
+            
+        try:
+            md = self.current_image.metadata or {}
+            source_wh = md.get('source_wh')
+            if source_wh:
+                src_w, src_h = source_wh
+                x, y, w, h = pixel_rect
+                return (x / src_w, y / src_h, w / src_w, h / src_h)
+        except Exception:
+            pass
+        return None
+
+    def _apply_crop_edit(self, mouse_pos: QPoint):
+        """根据鼠标位置和当前编辑模式，实时更新裁剪框（支持CropInstance模型）"""
+        if (self._crop_edit_mode == CropEditMode.NONE or 
+            not self._crop_edit_start_rect or 
+            not self.current_image):
+            return
+            
+        try:
+            # 检查是否在crop focused模式下，如果是则使用特殊处理
+            md = self.current_image.metadata or {}
+            if md.get('crop_focused', False):
+                self._apply_crop_edit_focused(mouse_pos)
+                return
+            # 使用新的坐标转换：鼠标 → 原始图像坐标
+            original_point = self._display_to_original_point(mouse_pos)
+            if not original_point:
+                return
+            
+            orig_x, orig_y = original_point
+            
+            # 获取原始图像尺寸
+            md = self.current_image.metadata or {}
+            source_wh = md.get('source_wh')
+            if not source_wh:
+                return
+            src_w, src_h = source_wh
+            
+            # 获取初始裁剪框（归一化坐标）
+            start_x, start_y, start_w, start_h = self._crop_edit_start_rect
+            
+            # 转换为原始图像像素坐标
+            start_px = start_x * src_w
+            start_py = start_y * src_h  
+            start_pw = start_w * src_w
+            start_ph = start_h * src_h
+            
+            # 根据编辑模式计算新的裁剪框（在原始图像坐标系中）
+            new_px, new_py, new_pw, new_ph = start_px, start_py, start_pw, start_ph
+            
+            # 最小尺寸约束（原始图像像素）
+            MIN_SIZE = 20.0
+            
+            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            
+            # 转换回归一化坐标（相对于原始图像）
+            new_rect_norm = self._original_to_norm_rect((new_px, new_py, new_pw, new_ph))
+            if new_rect_norm:
+                self._crop_overlay_norm = new_rect_norm
+                # 立即重绘以显示变化
+                self.image_label.update()
+                
+        except Exception as e:
+            print(f"裁剪编辑计算错误: {e}")
+
+    def _apply_crop_edit_multi(self, mouse_pos: QPoint):
+        """原图模式下：对多裁剪中的某个框进行边/角编辑，直接修改 self._all_crops 对应项。"""
+        if (self._crop_edit_mode == CropEditMode.NONE or 
+            not self._crop_edit_start_rect or 
+            not self.current_image or 
+            self._active_edit_crop_id is None):
+            return
+        try:
+            # 鼠标 → 原图像素坐标
+            original_point = self._display_to_original_point(mouse_pos)
+            if not original_point:
+                return
+            orig_x, orig_y = original_point
+            md = self.current_image.metadata or {}
+            source_wh = md.get('source_wh')
+            if not source_wh:
+                return
+            src_w, src_h = source_wh
+            sx, sy, sw, sh = self._crop_edit_start_rect
+            start_px = sx * src_w
+            start_py = sy * src_h
+            start_pw = sw * src_w
+            start_ph = sh * src_h
+            new_px, new_py, new_pw, new_ph = start_px, start_py, start_pw, start_ph
+            MIN_SIZE = 20.0
+            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
+                new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+                new_ph = start_py + start_ph - new_py
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
+                new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
+                new_pw = start_px + start_pw - new_px
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
+                new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
+                new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
+            # 回写到目标crop
+            new_rect_norm = self._original_to_norm_rect((new_px, new_py, new_pw, new_ph))
+            if new_rect_norm:
+                for i, info in enumerate(self._all_crops):
+                    if info['id'] == self._active_edit_crop_id:
+                        self._all_crops[i]['rect_norm'] = new_rect_norm
+                        break
+                # 即时刷新
+                self.image_label.update()
+        except Exception as e:
+            print(f"多裁剪编辑计算错误: {e}")
+    
+    def _apply_crop_edit_focused(self, mouse_pos: QPoint):
+        """Crop focused模式下的编辑：在crop的局部坐标系中操作"""
+        try:
+            # Step 1: 鼠标 → 当前显示图像坐标
+            mx, my = mouse_pos.x(), mouse_pos.y()
+            img_x = (mx - self.pan_x) / self.zoom_factor
+            img_y = (my - self.pan_y) / self.zoom_factor
+            
+            # Step 2: 当前显示图像的尺寸
+            disp_h, disp_w = self.current_image.array.shape[:2]
+            
+            # Step 3: 转换为crop内的归一化坐标(0-1)
+            local_x = img_x / disp_w
+            local_y = img_y / disp_h
+            
+            # Step 4: 获取原始图像和crop信息
+            md = self.current_image.metadata or {}
+            crop_instance = md.get('crop_instance')
+            source_wh = md.get('source_wh')
+            if not crop_instance or not source_wh:
+                return
+                
+            src_w, src_h = source_wh
+            original_crop_rect = crop_instance.rect_norm  # 原始crop位置
+            
+            # Step 5: 获取编辑前的crop区域（这是我们要修改的）
+            start_x, start_y, start_w, start_h = self._crop_edit_start_rect
+            
+            # Step 6: 在crop局部坐标系中计算新边界
+            new_x, new_y, new_w, new_h = start_x, start_y, start_w, start_h
+            
+            # 最小尺寸约束（归一化）
+            MIN_SIZE_NORM = 0.01  # 1%
+            
+            # 关键：根据用户拖动的视觉边缘来调整crop区域
+            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+                # 用户拖动视觉上的"上边缘"
+                # 在crop坐标系中，这对应调整crop的上边界
+                delta_y = (local_y - 0.5) * start_h  # 相对于crop中心的偏移
+                new_top = start_y + delta_y
+                new_bottom = start_y + start_h
+                new_y = max(0, min(new_top, new_bottom - MIN_SIZE_NORM))
+                new_h = new_bottom - new_y
+                
+            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+                delta_y = (local_y - 0.5) * start_h
+                new_bottom = start_y + start_h + delta_y
+                new_h = max(MIN_SIZE_NORM, min(1.0 - start_y, new_bottom - start_y))
+                
+            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+                delta_x = (local_x - 0.5) * start_w
+                new_left = start_x + delta_x
+                new_right = start_x + start_w
+                new_x = max(0, min(new_left, new_right - MIN_SIZE_NORM))
+                new_w = new_right - new_x
+                
+            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+                delta_x = (local_x - 0.5) * start_w
+                new_right = start_x + start_w + delta_x
+                new_w = max(MIN_SIZE_NORM, min(1.0 - start_x, new_right - start_x))
+                
+            # 简化：暂时只支持边缘编辑，角点编辑逻辑类似但更复杂
+            
+            # Step 7: 更新crop overlay
+            self._crop_overlay_norm = (new_x, new_y, new_w, new_h)
+            # 立即重绘
+            self.image_label.update()
+            
+        except Exception as e:
+            print(f"Focused模式裁剪编辑错误: {e}")

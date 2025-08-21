@@ -403,19 +403,42 @@ class ColorSpaceManager:
             print(f"设置图像色彩空间: {image.color_space} -> {color_space}")
         return new_image
     
-    def convert_to_working_space(self, image: ImageData, source_profile: str = None) -> ImageData:
-        """转换到工作色彩空间（ACEScg Linear）"""
+    def convert_to_working_space(self, image: ImageData, source_profile: str = None,
+                                 skip_gamma_inverse: bool = False) -> ImageData:
+        """转换到工作色彩空间（ACEScg Linear）
+        Args:
+            image: 输入图像
+            source_profile: 源空间名（默认使用 image.color_space）
+            skip_gamma_inverse: 为 True 时跳过逆伽马线性化，仅做矩阵与白点变换
+        """
         if image.color_space == "ACEScg":
             return image
         
         # 如果指定了source_profile参数，使用它；否则使用图像的color_space
         source_space = source_profile if source_profile else image.color_space
         
-        # 先转换到线性空间
         import time
         t0 = time.time()
-        linear_image = self._convert_to_linear(image, source_space)
-        t1 = time.time()
+        if skip_gamma_inverse:
+            # 跳过逆伽马：直接使用原图作为“线性”输入（假定上游已前置幂次）
+            linear_image = ImageData(
+                array=image.array.copy(),
+                width=image.width,
+                height=image.height,
+                channels=image.channels,
+                dtype=image.dtype,
+                color_space=image.color_space,
+                icc_profile=image.icc_profile,
+                metadata=image.metadata,
+                file_path=image.file_path,
+                is_proxy=image.is_proxy,
+                proxy_scale=image.proxy_scale
+            )
+            t1 = time.time()
+        else:
+            # 先转换到线性空间（通过逆伽马）
+            linear_image = self._convert_to_linear(image, source_space)
+            t1 = time.time()
         
         # 然后转换到ACEScg
         if source_space != "ACEScg":
@@ -426,9 +449,11 @@ class ColorSpaceManager:
             linear_image.array = self._apply_color_conversion(linear_image.array, conversion_matrix, gain_vector)
             t4 = time.time()
             if self._profiling_enabled:
-                print(
-                    f"到工作空间Profiling: gamma逆变换={(t1 - t0)*1000:.1f}ms, 计算矩阵={(t3 - t2)*1000:.1f}ms, 应用矩阵={(t4 - t3)*1000:.1f}ms"
+                msg = (
+                    f"到工作空间Profiling: "
+                    f"gamma逆变换={(t1 - t0)*1000:.1f}ms, 计算矩阵={(t3 - t2)*1000:.1f}ms, 应用矩阵={(t4 - t3)*1000:.1f}ms"
                 )
+                print(msg)
         
         linear_image.color_space = "ACEScg"
         return linear_image
@@ -576,3 +601,16 @@ class ColorSpaceManager:
             image.array = self._apply_color_matrix(image.array, matrix)
         
         return image 
+
+    # --- 颜色空间属性更新 ---
+    def update_color_space_gamma(self, space_name: str, gamma: float) -> None:
+        """更新内存中的色彩空间gamma参数（不持久化）。"""
+        space = self._color_spaces.get(space_name)
+        if space is None:
+            return
+        try:
+            space["gamma"] = float(gamma)
+            # 失效相关转换缓存
+            self._invalidate_convert_cache_for(space_name)
+        except Exception:
+            pass

@@ -88,11 +88,18 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(widget)
         colorspace_group = QGroupBox("输入色彩变换")
         colorspace_layout = QGridLayout(colorspace_group)
+        # IDT Gamma（在下拉菜单上方）
+        self.idt_gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.idt_gamma_spinbox = QDoubleSpinBox()
+        self._setup_slider_spinbox(self.idt_gamma_slider, self.idt_gamma_spinbox, 50, 280, 0.5, 2.8, 0.01)
+        colorspace_layout.addWidget(QLabel("IDT Gamma:"), 0, 0)
+        colorspace_layout.addWidget(self.idt_gamma_slider, 0, 1)
+        colorspace_layout.addWidget(self.idt_gamma_spinbox, 0, 2)
         self.input_colorspace_combo = QComboBox()
         spaces = self.context.color_space_manager.get_available_color_spaces()
         self.input_colorspace_combo.addItems(spaces)
-        colorspace_layout.addWidget(QLabel("色彩空间:"), 0, 0)
-        colorspace_layout.addWidget(self.input_colorspace_combo, 0, 1)
+        colorspace_layout.addWidget(QLabel("色彩空间:"), 1, 0)
+        colorspace_layout.addWidget(self.input_colorspace_combo, 1, 1, 1, 2)
         layout.addWidget(colorspace_group)
         
         # --- Spectral Sharpening Section ---
@@ -270,6 +277,9 @@ class ParameterPanel(QWidget):
 
     def _connect_signals(self):
         self.input_colorspace_combo.currentIndexChanged.connect(self._on_input_colorspace_changed)
+        # IDT Gamma联动
+        self.idt_gamma_slider.valueChanged.connect(self._on_idt_gamma_slider_changed)
+        self.idt_gamma_spinbox.valueChanged.connect(self._on_idt_gamma_spinbox_changed)
         
         self.density_gamma_slider.valueChanged.connect(self._on_gamma_slider_changed)
         self.density_gamma_spinbox.valueChanged.connect(self._on_gamma_spinbox_changed)
@@ -313,6 +323,14 @@ class ParameterPanel(QWidget):
         try:
             params = self.current_params
             self._sync_combo_box(self.input_colorspace_combo, params.input_color_space_name)
+            # 读取当前输入空间的gamma
+            try:
+                info = self.context.color_space_manager.get_color_space_info(params.input_color_space_name) or {}
+                g = float(info.get('gamma', 1.0))
+            except Exception:
+                g = 1.0
+            self.idt_gamma_slider.setValue(int(g * 100))
+            self.idt_gamma_spinbox.setValue(g)
             
             self.density_gamma_slider.setValue(int(params.density_gamma * 100))
             self.density_gamma_spinbox.setValue(params.density_gamma)
@@ -489,6 +507,15 @@ class ParameterPanel(QWidget):
                 }
                 # set_uv_coordinates 会发出 coordinatesChanged，但不会触发参数写回
                 self.ucs_widget.set_uv_coordinates(coords)
+            # 同步IDT Gamma显示
+            try:
+                g = float((info or {}).get('gamma', 1.0))
+            except Exception:
+                g = 1.0
+            self._is_updating_ui = True
+            self.idt_gamma_slider.setValue(int(g * 100))
+            self.idt_gamma_spinbox.setValue(g)
+            self._is_updating_ui = False
         except Exception:
             pass
 
@@ -508,6 +535,33 @@ class ParameterPanel(QWidget):
                 finally:
                     self._is_updating_ui = False
         self.parameter_changed.emit()
+
+    # --- IDT Gamma slots ---
+    def _on_idt_gamma_slider_changed(self, value: int):
+        if self._is_updating_ui: return
+        self.idt_gamma_spinbox.blockSignals(True)
+        self.idt_gamma_spinbox.setValue(value / 100.0)
+        self.idt_gamma_spinbox.blockSignals(False)
+        self._apply_idt_gamma_to_colorspace()
+
+    def _on_idt_gamma_spinbox_changed(self, value: float):
+        if self._is_updating_ui: return
+        self.idt_gamma_slider.blockSignals(True)
+        self.idt_gamma_slider.setValue(int(value * 100))
+        self.idt_gamma_slider.blockSignals(False)
+        self._apply_idt_gamma_to_colorspace()
+
+    def _apply_idt_gamma_to_colorspace(self):
+        """将UI中的IDT Gamma写入当前输入色彩空间的内存定义，并重建代理。"""
+        try:
+            g = float(self.idt_gamma_spinbox.value())
+            g = max(0.5, min(2.8, g))
+            space_name = self.input_colorspace_combo.currentData() or self.input_colorspace_combo.currentText().strip('*')
+            self.context.color_space_manager.update_color_space_gamma(space_name, g)
+            # 触发Context按当前色彩空间重建proxy（内部会skip逆伽马，并应用前置幂次）
+            self.context._prepare_proxy(); self.context._trigger_preview_update()
+        except Exception:
+            pass
     
     def _on_scanner_spectral_toggled(self, checked: bool):
         self.ucs_widget.setVisible(checked)

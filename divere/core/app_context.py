@@ -585,7 +585,15 @@ class ApplicationContext(QObject):
         # 2/3. 合并更新参数：先从 grading_params 构造，再应用 input_transformation（若有）
         new_params = ColorGradingParams.from_dict(preset.grading_params or {})
         if preset.input_transformation and preset.input_transformation.name:
+            # 同步输入色彩空间名称
             new_params.input_color_space_name = preset.input_transformation.name
+            # 将预设中的 idt.gamma 写入 ColorSpaceManager（内存覆盖，不持久化）
+            try:
+                cs_def = preset.input_transformation.definition or {}
+                if 'gamma' in cs_def:
+                    self.color_space_manager.update_color_space_gamma(preset.input_transformation.name, float(cs_def['gamma']))
+            except Exception:
+                pass
         
         # 兼容处理矩阵和曲线
         if preset.density_matrix:
@@ -689,6 +697,13 @@ class ApplicationContext(QObject):
                 # 同步 input colorspace 与显式矩阵等
                 if entry.preset.input_transformation and entry.preset.input_transformation.name:
                     params.input_color_space_name = entry.preset.input_transformation.name
+                    # 将 per-crop 预设中的 idt.gamma 写入 ColorSpaceManager（内存覆盖）
+                    try:
+                        cs_def = entry.preset.input_transformation.definition or {}
+                        if 'gamma' in cs_def:
+                            self.color_space_manager.update_color_space_gamma(entry.preset.input_transformation.name, float(cs_def['gamma']))
+                    except Exception:
+                        pass
                 if entry.preset.density_matrix:
                     params.density_matrix_name = entry.preset.density_matrix.name
                     if entry.preset.density_matrix.values:
@@ -948,12 +963,33 @@ class ApplicationContext(QObject):
             src_image,
             self.the_enlarger.preview_config.get_proxy_size_tuple()
         )
+        # 在设置输入色彩空间之前，应用前置IDT Gamma（幂次变换）
+        idt_gamma = self.get_current_idt_gamma()
+
+        if abs(idt_gamma - 1.0) > 1e-6 and proxy.array is not None:
+            try:
+                proxy_array = self.the_enlarger.pipeline_processor.math_ops.apply_power(
+                    proxy.array, idt_gamma, use_optimization=True
+                )
+                proxy = proxy.copy_with_new_array(proxy_array)
+            except Exception:
+                pass
+
         proxy = self.color_space_manager.set_image_color_space(
             proxy, self._current_params.input_color_space_name
         )
         self._current_proxy = self.color_space_manager.convert_to_working_space(
-            proxy
+            proxy, skip_gamma_inverse=True
         )
+
+    def get_current_idt_gamma(self) -> float:
+        """读取当前输入色彩空间的IDT Gamma（无则返回1.0）。"""
+        try:
+            cs_name = self._current_params.input_color_space_name
+            cs_info = self.color_space_manager.get_color_space_info(cs_name) or {}
+            return float(cs_info.get("gamma", 1.0))
+        except Exception:
+            return 1.0
         
         # === 标准变换链：Step 2 - 旋转 ===
         # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用全局orientation

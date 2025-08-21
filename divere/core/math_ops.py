@@ -98,6 +98,59 @@ class FilmMathOps:
         cache.move_to_end(key)
         if len(cache) > self._max_cache_size:
             cache.popitem(last=False)
+
+    # =======================
+    # 0. 前置幂次变换（IDT Gamma）
+    # =======================
+    def apply_power(self, image_array: np.ndarray, exponent: float,
+                    use_optimization: bool = True,
+                    use_parallel: bool = True) -> np.ndarray:
+        """
+        对输入图像前3通道应用逐像素幂次变换（保护Alpha）。
+        I_out = clip(I_in,0,1) ** exponent
+        
+        Args:
+            image_array: 输入数组 [H,W,C]
+            exponent: 幂次（idt.gamma）
+            use_optimization: 是否使用1D LUT查表优化
+            use_parallel: 是否并行（大图有效）
+        """
+        if image_array is None or image_array.size == 0:
+            return image_array
+        exp_f = float(exponent)
+        if abs(exp_f - 1.0) < 1e-6:
+            return image_array
+
+        has_alpha = (image_array.ndim == 3 and image_array.shape[2] >= 4)
+        if use_optimization:
+            # LUT路径（32K级别足以用于预览，导出可选择关闭优化以走高精度pow）
+            lut_size = 32768
+            lut = self._get_power_lut(exp_f, lut_size)
+            # 按通道处理，仅前3通道
+            h, w = image_array.shape[:2]
+            result = image_array.copy()
+            rgb = result[:, :, :3]
+            rgb = np.clip(rgb, 0.0, 1.0)
+            indices = np.round(rgb * (lut_size - 1)).astype(np.uint16)
+            rgb_out = np.take(lut, indices)
+            result[:, :, :3] = rgb_out.astype(result.dtype)
+            return result
+        else:
+            # 直接pow路径（导出建议走此路径）
+            result = image_array.copy()
+            rgb = np.clip(result[:, :, :3], 0.0, 1.0)
+            rgb_out = np.power(rgb, exp_f, dtype=np.float32)
+            result[:, :, :3] = rgb_out.astype(result.dtype)
+            return result
+
+    def _get_power_lut(self, exponent: float, size: int = 32768) -> np.ndarray:
+        key = ("pow", round(float(exponent), 6), int(size))
+        lut = self._lut1d_cache.get(key)
+        if lut is None:
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
+            lut = np.power(xs, float(exponent)).astype(np.float32)
+            self._cache_put(self._lut1d_cache, key, lut)
+        return lut
     
     # =======================
     # 1. 密度反相操作

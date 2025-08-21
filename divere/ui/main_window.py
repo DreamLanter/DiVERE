@@ -1027,9 +1027,21 @@ class MainWindow(QMainWindow):
             working_image = self.context.color_space_manager.set_image_color_space(
                 final_image, self.context.get_input_color_space()
             )
-            # 转换到工作色彩空间（ACEScg）
+            # 前置IDT Gamma（导出走高精度pow）
+            try:
+                cs_name = self.context.get_input_color_space()
+                cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+                idt_gamma = float(cs_info.get("gamma", 1.0))
+            except Exception:
+                idt_gamma = 1.0
+            if abs(idt_gamma - 1.0) > 1e-6 and working_image.array is not None:
+                arr = self.context.the_enlarger.pipeline_processor.math_ops.apply_power(
+                    working_image.array, idt_gamma, use_optimization=False
+                )
+                working_image = working_image.copy_with_new_array(arr)
+            # 转到工作色彩空间（ACEScg），跳过逆伽马
             working_image = self.context.color_space_manager.convert_to_working_space(
-                working_image
+                working_image, skip_gamma_inverse=True
             )
             print(f"  转换后工作色彩空间: {working_image.color_space}")
             
@@ -1101,8 +1113,20 @@ class MainWindow(QMainWindow):
                     working_image = self.context.color_space_manager.set_image_color_space(
                         final_image, self.context.get_input_color_space()
                     )
+                    # 前置IDT Gamma
+                    try:
+                        cs_name = self.context.get_input_color_space()
+                        cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+                        idt_gamma = float(cs_info.get("gamma", 1.0))
+                    except Exception:
+                        idt_gamma = 1.0
+                    if abs(idt_gamma - 1.0) > 1e-6 and working_image.array is not None:
+                        arr = self.context.the_enlarger.pipeline_processor.math_ops.apply_power(
+                            working_image.array, idt_gamma, use_optimization=False
+                        )
+                        working_image = working_image.copy_with_new_array(arr)
                     working_image = self.context.color_space_manager.convert_to_working_space(
-                        working_image
+                        working_image, skip_gamma_inverse=True
                     )
                     result_image = self.context.the_enlarger.apply_full_pipeline(
                         working_image,
@@ -1146,8 +1170,20 @@ class MainWindow(QMainWindow):
                     working_image = self.context.color_space_manager.set_image_color_space(
                         final_image, self.context.get_input_color_space()
                     )
+                    # 前置IDT Gamma
+                    try:
+                        cs_name = self.context.get_input_color_space()
+                        cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+                        idt_gamma = float(cs_info.get("gamma", 1.0))
+                    except Exception:
+                        idt_gamma = 1.0
+                    if abs(idt_gamma - 1.0) > 1e-6 and working_image.array is not None:
+                        arr = self.context.the_enlarger.pipeline_processor.math_ops.apply_power(
+                            working_image.array, idt_gamma, use_optimization=False
+                        )
+                        working_image = working_image.copy_with_new_array(arr)
                     working_image = self.context.color_space_manager.convert_to_working_space(
-                        working_image
+                        working_image, skip_gamma_inverse=True
                     )
                     result_image = self.context.the_enlarger.apply_full_pipeline(
                         working_image,

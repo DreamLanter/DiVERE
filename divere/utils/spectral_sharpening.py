@@ -79,6 +79,7 @@ def run(
     if not is_valid:
         raise ValueError(f"色卡提取前置条件不满足: {msg}")
 
+    # 与主管线一致：这里的 input_space_gamma 作为“前置 IDT Gamma”
     linear_img = _to_linear_image_array(image_array, input_space_gamma)
 
     input_patches = extract_colorchecker_patches(linear_img, cc_corners)

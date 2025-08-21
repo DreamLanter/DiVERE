@@ -129,14 +129,33 @@ class DiVEREPipelineSimulator:
         
         # 组合转换矩阵：输入空间 -> XYZ -> ACEScg
         input_to_acescg = xyz_to_acescg @ input_to_xyz
+
+        # 与主管线一致：白点适应增益（简化版，匹配 ColorSpaceManager 的实现）
+        def _xy_to_XYZ_normalized(xy):
+            x, y = float(xy[0]), float(xy[1])
+            if abs(y) < 1e-10:
+                y = 1e-10
+            X = x / y
+            Y = 1.0
+            Z = (1.0 - x - y) / y
+            return np.array([X, Y, Z], dtype=float)
+
+        src_white = np.array(white_point_xy if white_point_xy is not None else [0.3127, 0.3290], dtype=float)
+        dst_white = acescg_white_point
+        src_white_XYZ = _xy_to_XYZ_normalized(src_white)
+        dst_white_XYZ = _xy_to_XYZ_normalized(dst_white)
+        # 简化增益：分量比值并裁剪
+        with np.errstate(divide='ignore', invalid='ignore'):
+            gain_vector = np.divide(dst_white_XYZ, src_white_XYZ)
+        gain_vector = np.clip(gain_vector, 0.1, 10.0)
         
-        # 转换到工作空间 (ACEScg)
+        # 转换到工作空间 (ACEScg) 并应用白点增益（与主管线一致在矩阵转换阶段进行）
         working_space_patches = {}
         for patch_id, (r, g, b) in input_rgb_patches.items():
-            # 直接矩阵转换
             input_rgb = np.array([r, g, b])
             acescg_rgb = input_to_acescg @ input_rgb
-            
+            # 应用白点适应增益（逐分量）
+            acescg_rgb = acescg_rgb * gain_vector
             working_space_patches[patch_id] = tuple(acescg_rgb.tolist())
         
         # ===== 步骤2-6: 核心密度处理 =====

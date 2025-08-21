@@ -34,13 +34,32 @@ def load_default_preset() -> Preset:
         pass
 
     # 2) 回退到内置默认（集中唯一硬编码），避免散落默认值
-    # 默认输入空间 CCFLGeneric_Linear；无矩阵；Endura纸曲线（名称示例，可为空）
+    # v3: 填充 raw_file、IDT 的 white/primitives，占位 gamma=1.0
     p = Preset(
         name="default",
-        input_transformation=InputTransformationDefinition(name="CCFLGeneric_Linear", definition={}),
-        grading_params=ColorGradingParams().to_dict(),
-        density_matrix=MatrixDefinition(name="", values=None),
-        density_curve=CurveDefinition(name="Kodak_Endura_Paper", points=[]),
+        raw_file="default.tif",
+        input_transformation=InputTransformationDefinition(
+            name="CCFLGeneric_Linear",
+            definition={
+                "gamma": 1.0,
+                "white": {"x": 0.3127, "y": 0.3290},
+                "primitives": {
+                    "r": {"x": 0.6400, "y": 0.3300},
+                    "g": {"x": 0.2100, "y": 0.7100},
+                    "b": {"x": 0.1500, "y": 0.0600},
+                },
+            },
+        ),
+        grading_params=ColorGradingParams(
+            density_gamma=1.0,
+            density_dmax=2.5,
+            rgb_gains=(0.65, 0.0, 0.0),
+            density_matrix_name="Cineon_States_M_to_Print_Density",
+            density_curve_name="Kodak Endura Premier",
+            curve_points=[(0.0, 0.0), (1.0, 1.0)],
+        ).to_dict(),
+        density_matrix=MatrixDefinition(name="Cineon_States_M_to_Print_Density", values=None),
+        density_curve=CurveDefinition(name="Kodak Endura Premier", points=[(0.0, 0.0), (1.0, 1.0)]),
         orientation=0,
     )
     _DEFAULT_PRESET_CACHE = p

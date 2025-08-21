@@ -230,6 +230,8 @@ class ApplicationContext(QObject):
         self._contactsheet_crop_rect = None
         self.crop_changed.emit(None)
         self._autosave_timer.start()
+        # 若无任何裁剪，回到 contactsheet（single 语义）
+        self._current_profile_kind = 'contactsheet'
 
     def focus_on_active_crop(self) -> None:
         if self.get_active_crop() is None or not self._current_image:
@@ -457,6 +459,12 @@ class ApplicationContext(QObject):
         # 1) contactsheet preset
         cs_preset = self._create_preset_from_params(self._contactsheet_params, name="contactsheet")
         cs_preset.orientation = self._contactsheet_orientation  # 保存原图的 orientation
+        # 写入原图文件名，满足 v3 metadata.raw_file 必填
+        try:
+            if self._current_image and getattr(self._current_image, 'file_path', ''):
+                cs_preset.raw_file = Path(self._current_image.file_path).name
+        except Exception:
+            pass
         # 写入 contactsheet 裁剪（旧字段，用于兼容）
         if self._contactsheet_crop_rect is not None:
             cs_preset.crop = tuple(self._contactsheet_crop_rect)
@@ -471,11 +479,38 @@ class ApplicationContext(QObject):
         active_id = self._active_crop_id if self._active_crop_id in [c.id for c in self._crops] else None
         return PresetBundle(contactsheet=cs_preset, crops=entries, active_crop_id=active_id)
 
+    def export_single_preset(self) -> Preset:
+        """导出当前图像的单预设（single）。
+        使用 contactsheet 参数作为单预设的基础；包含 raw_file、orientation 与可选的 contactsheet 裁剪。
+        """
+        try:
+            preset = self._create_preset_from_params(self._contactsheet_params, name="single")
+            # orientation 与裁剪（若存在）
+            preset.orientation = self._contactsheet_orientation
+            if self._contactsheet_crop_rect is not None:
+                preset.crop = tuple(self._contactsheet_crop_rect)
+            # 写入文件名（v3 必填）
+            if self._current_image and getattr(self._current_image, 'file_path', ''):
+                preset.raw_file = Path(self._current_image.file_path).name
+            return preset
+        except Exception:
+            # 回退：最小可用结构
+            preset = Preset(name="single")
+            if self._current_image and getattr(self._current_image, 'file_path', ''):
+                preset.raw_file = Path(self._current_image.file_path).name
+            preset.grading_params = self._contactsheet_params.to_dict()
+            return preset
+
     def _create_preset_from_params(self, params: ColorGradingParams, name: str = "Preset") -> Preset:
         """将当前参数打包为 Preset（用于 Bundle 导出）。"""
         preset = Preset(name=name)
-        # input transformation
-        preset.input_transformation = InputTransformationDefinition(name=params.input_color_space_name, definition={})
+        # input transformation（保存名称与参数：gamma/white/primaries）
+        cs_name = params.input_color_space_name
+        cs_def = self.color_space_manager.get_color_space_definition(cs_name)
+        if cs_def:
+            preset.input_transformation = InputTransformationDefinition(name=cs_name, definition=cs_def)
+        else:
+            preset.input_transformation = InputTransformationDefinition(name=cs_name, definition={})
         # grading params（从 params.to_dict 获取 UI 相关字段）
         preset.grading_params = params.to_dict()
         # density matrix（镜像冗余）
@@ -568,10 +603,23 @@ class ApplicationContext(QObject):
 
         if preset.density_curve:
             new_params.density_curve_name = preset.density_curve.name
-            if preset.density_curve.points:
+            # 若预设自带点，但为单位曲线 [(0,0),(1,1)]，按“无点”处理并尝试按名称加载
+            def _is_identity_curve(points):
+                try:
+                    return (
+                        isinstance(points, (list, tuple)) and len(points) == 2 and
+                        float(points[0][0]) == 0.0 and float(points[0][1]) == 0.0 and
+                        float(points[1][0]) == 1.0 and float(points[1][1]) == 1.0
+                    )
+                except Exception:
+                    return False
+
+            has_points = bool(preset.density_curve.points)
+            if has_points and not _is_identity_curve(preset.density_curve.points):
                 new_params.curve_points = preset.density_curve.points
+                new_params.enable_density_curve = True
             else:
-                # 仅提供曲线名称时，尝试从配置中加载对应曲线点
+                # 无点或单位曲线：尝试根据名称加载实际曲线
                 try:
                     loaded = self._load_density_curve_points_by_name(preset.density_curve.name)
                     if loaded:
@@ -583,7 +631,6 @@ class ApplicationContext(QObject):
                             new_params.curve_points_g = loaded['G']
                         if 'B' in loaded and loaded['B']:
                             new_params.curve_points_b = loaded['B']
-                        # 解析到有效曲线则保持启用
                         new_params.enable_density_curve = True
                 except Exception:
                     pass
@@ -654,8 +701,19 @@ class ApplicationContext(QObject):
                             params.enable_density_matrix = True
                 if entry.preset.density_curve:
                     params.density_curve_name = entry.preset.density_curve.name
-                    if entry.preset.density_curve.points:
+                    def _is_identity_curve(points):
+                        try:
+                            return (
+                                isinstance(points, (list, tuple)) and len(points) == 2 and
+                                float(points[0][0]) == 0.0 and float(points[0][1]) == 0.0 and
+                                float(points[1][0]) == 1.0 and float(points[1][1]) == 1.0
+                            )
+                        except Exception:
+                            return False
+                    has_points = bool(entry.preset.density_curve.points)
+                    if has_points and not _is_identity_curve(entry.preset.density_curve.points):
                         params.curve_points = entry.preset.density_curve.points
+                        params.enable_density_curve = True
                     else:
                         try:
                             loaded = self._load_density_curve_points_by_name(entry.preset.density_curve.name)

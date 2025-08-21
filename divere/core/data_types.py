@@ -69,7 +69,7 @@ class Preset:
     预设文件的数据结构。
     """
     name: str = "未命名预设"
-    version: int = 2
+    version: int = 3
 
     # Metadata
     raw_file: Optional[str] = None
@@ -88,79 +88,160 @@ class Preset:
     density_curve: Optional[CurveDefinition] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """将预设对象序列化为字典。"""
-        data = {
-            "name": self.name,
-            "version": self.version,
+        """将预设对象序列化为 v3 单预设（single）。"""
+        # 顶层
+        data: Dict[str, Any] = {
+            "version": 3,
+            "type": "single",
         }
-        # Metadata
-        if self.raw_file:
-            data["raw_file"] = self.raw_file
-        data["orientation"] = self.orientation
+        # metadata（raw_file 必填；orientation/crop 可选）
+        metadata: Dict[str, Any] = {}
+        metadata["raw_file"] = self.raw_file if self.raw_file is not None else ""
+        metadata["orientation"] = int(self.orientation)
         if self.crop:
-            data["crop"] = self.crop
+            metadata["crop"] = list(self.crop)
+        data["metadata"] = metadata
 
-        # Input Transformation
+        # idt（从 input_transformation 写出）
         if self.input_transformation:
-            data["input_transformation"] = self.input_transformation.__dict__
+            idt_def = self.input_transformation.definition or {}
+            # 规范字段名：name/gamma/white/primitives
+            idt: Dict[str, Any] = {
+                "name": self.input_transformation.name,
+                "gamma": idt_def.get("gamma", 1.0),
+            }
+            # 兼容内部定义键：white_point_xy / primaries_xy → white/primitives
+            if "white" in idt_def:
+                idt["white"] = idt_def["white"]
+            elif "white_point_xy" in idt_def and isinstance(idt_def["white_point_xy"], (list, tuple)) and len(idt_def["white_point_xy"]) >= 2:
+                idt["white"] = {"x": idt_def["white_point_xy"][0], "y": idt_def["white_point_xy"][1]}
 
-        # Grading Parameters
-        data["grading_params"] = self.grading_params
-        if self.density_matrix:
-            data["density_matrix"] = self.density_matrix.__dict__
-        if self.density_curve:
-            data["density_curve"] = self.density_curve.__dict__
+            if "primitives" in idt_def:
+                idt["primitives"] = idt_def["primitives"]
+            elif "primaries_xy" in idt_def and isinstance(idt_def["primaries_xy"], (list, tuple)) and len(idt_def["primaries_xy"]) >= 3:
+                prim = idt_def["primaries_xy"]
+                try:
+                    idt["primitives"] = {
+                        "r": {"x": prim[0][0], "y": prim[0][1]},
+                        "g": {"x": prim[1][0], "y": prim[1][1]},
+                        "b": {"x": prim[2][0], "y": prim[2][1]},
+                    }
+                except Exception:
+                    pass
+            data["idt"] = idt
 
-        # 裁剪（多裁剪优先，镜像写单裁剪以兼容老版本）
-        if self.crops:
-            data["crops"] = self.crops
-            # 如果只有一个裁剪，镜像写入旧字段
-            try:
-                if len(self.crops) == 1 and "rect_norm" in self.crops[0]:
-                    data["crop"] = self.crops[0]["rect_norm"]
-            except Exception:
-                pass
-        if self.active_crop_id:
-            data["active_crop_id"] = self.active_crop_id
-        # 若无多裁剪，仅保留旧字段
+        # cc_params
+        cc: Dict[str, Any] = {}
+        gp = self.grading_params or {}
+        if "density_gamma" in gp:
+            cc["density_gamma"] = gp["density_gamma"]
+        if "density_dmax" in gp:
+            cc["density_dmax"] = gp["density_dmax"]
+        if "rgb_gains" in gp:
+            cc["rgb_gains"] = list(gp["rgb_gains"]) if isinstance(gp["rgb_gains"], tuple) else gp["rgb_gains"]
+
+        # density_matrix 优先写对象；若仅有 name 则写 name
+        if self.density_matrix is not None:
+            cc["density_matrix"] = {
+                "name": self.density_matrix.name,
+                "values": self.density_matrix.values,
+            }
+        else:
+            dm_name = gp.get("density_matrix_name")
+            if dm_name:
+                cc["density_matrix"] = {"name": dm_name, "values": None}
+
+        # density_curve
+        curve_obj: Dict[str, Any] = {}
+        curve_name = (self.density_curve.name if self.density_curve else gp.get("density_curve_name"))
+        if curve_name:
+            curve_obj["name"] = curve_name
+        if self.density_curve and self.density_curve.points:
+            curve_obj.setdefault("points", {})
+            curve_obj["points"]["rgb"] = self.density_curve.points
+        elif "curve_points" in gp:
+            curve_obj.setdefault("points", {})
+            curve_obj["points"]["rgb"] = gp["curve_points"]
+        # per-channel points
+        for key_src, key_dst in [("curve_points_r", "r"), ("curve_points_g", "g"), ("curve_points_b", "b")]:
+            if key_src in gp and gp[key_src]:
+                curve_obj.setdefault("points", {})
+                curve_obj["points"][key_dst] = gp[key_src]
+        if curve_obj:
+            cc["density_curve"] = curve_obj
+
+        data["cc_params"] = cc
         return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Preset":
-        """从字典反序列化为预设对象。"""
+        """从 v3 单预设结构反序列化为 Preset。"""
+        if not isinstance(data, dict):
+            raise ValueError("Preset.from_dict 需要 dict 类型输入")
+        if data.get("type") not in (None, "single"):
+            raise ValueError("Preset.from_dict 仅支持 type=single 的 v3 结构")
+
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("v3 预设缺少 metadata 对象")
+        raw_file = metadata.get("raw_file")
+        if raw_file is None:
+            raise ValueError("v3 预设 metadata.raw_file 为必填")
+        orientation = int(metadata.get("orientation", 0))
+        crop = tuple(metadata["crop"]) if isinstance(metadata.get("crop"), list) else None
+
         preset = cls(
             name=data.get("name", "未命名预设"),
-            version=data.get("version", 2),
-            # Metadata
-            raw_file=data.get("raw_file"),
-            orientation=data.get("orientation", 0),
-            crop=tuple(data["crop"]) if data.get("crop") else None,
-            crops=data.get("crops"),
-            active_crop_id=data.get("active_crop_id"),
-            # Grading Parameters
-            grading_params=data.get("grading_params", {}),
+            version=int(data.get("version", 3)),
+            raw_file=raw_file,
+            orientation=orientation,
+            crop=crop,
         )
 
-        # Input Transformation (with backward compatibility)
-        if "input_transformation" in data and data["input_transformation"]:
-            preset.input_transformation = InputTransformationDefinition(**data["input_transformation"])
-        elif "input_color_space" in data and data["input_color_space"]:
-            # 旧格式兼容
-            preset.input_transformation = InputTransformationDefinition(**data["input_color_space"])
+        # idt → input_transformation
+        idt = data.get("idt") or {}
+        if isinstance(idt, dict) and idt.get("name"):
+            definition: Dict[str, Any] = {
+                "gamma": idt.get("gamma", 1.0),
+            }
+            if "white" in idt:
+                definition["white"] = idt["white"]
+            if "primitives" in idt:
+                definition["primitives"] = idt["primitives"]
+            preset.input_transformation = InputTransformationDefinition(name=idt["name"], definition=definition)
 
-        # Grading Parameters
-        if "density_matrix" in data and data["density_matrix"]:
-            preset.density_matrix = MatrixDefinition(**data["density_matrix"])
-        elif "correction_matrix" in data and data["correction_matrix"]:
-            preset.density_matrix = MatrixDefinition(**data["correction_matrix"])
-        # Backward compatibility for file-based matrix
-        elif "grading_params" in data and "density_matrix_file" in data["grading_params"]:
-            preset.density_matrix = MatrixDefinition(name=data["grading_params"]["density_matrix_file"], values=None)
-        elif "grading_params" in data and "correction_matrix_file" in data["grading_params"]:
-            preset.density_matrix = MatrixDefinition(name=data["grading_params"]["correction_matrix_file"], values=None)
+        # cc_params → grading_params/density_matrix/density_curve
+        cc = data.get("cc_params") or {}
+        gp: Dict[str, Any] = {}
+        if "density_gamma" in cc:
+            gp["density_gamma"] = cc["density_gamma"]
+        if "density_dmax" in cc:
+            gp["density_dmax"] = cc["density_dmax"]
+        if "rgb_gains" in cc:
+            rg = cc["rgb_gains"]
+            gp["rgb_gains"] = tuple(rg) if isinstance(rg, list) else rg
 
-        if "density_curve" in data and data["density_curve"]:
-            preset.density_curve = CurveDefinition(**data["density_curve"])
+        dm = cc.get("density_matrix")
+        if isinstance(dm, dict) and dm.get("name") is not None:
+            preset.density_matrix = MatrixDefinition(name=dm.get("name", ""), values=dm.get("values"))
+            gp["density_matrix_name"] = dm.get("name", "")
+
+        curve = cc.get("density_curve")
+        if isinstance(curve, dict):
+            cname = curve.get("name")
+            points = []
+            points_obj = curve.get("points") or {}
+            if isinstance(points_obj, dict) and "rgb" in points_obj:
+                points = points_obj.get("rgb", [])
+            preset.density_curve = CurveDefinition(name=cname, points=points)
+            if cname:
+                gp["density_curve_name"] = cname
+            # per-channel points 存入 gp 以便 UI/管线使用
+            for key_src, key_dst in [("r", "curve_points_r"), ("g", "curve_points_g"), ("b", "curve_points_b")]:
+                if key_src in points_obj:
+                    gp[key_dst] = points_obj[key_src]
+
+        preset.grading_params = gp
         return preset
     
     # === 新的crop管理方法（面向未来扩展） ===
@@ -169,6 +250,13 @@ class Preset:
         if not self.crops:
             # 向后兼容：从旧字段创建CropInstance
             if self.crop:
+                # 若为整幅图 (0,0,1,1)，视为“无正式裁剪”，避免误生成默认裁剪
+                try:
+                    x, y, w, h = tuple(self.crop)
+                    if float(x) == 0.0 and float(y) == 0.0 and float(w) == 1.0 and float(h) == 1.0:
+                        return []
+                except Exception:
+                    pass
                 return [CropInstance(
                     id="default",
                     name="默认裁剪", 
@@ -267,24 +355,113 @@ class PresetBundle:
     active_crop_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "type": "bundle",
-            "contactsheet": self.contactsheet.to_dict(),
-            "crops": [entry.to_dict() for entry in self.crops],
-            "active_crop_id": self.active_crop_id,
+        """序列化为 v3 contactsheet 结构。"""
+        data: Dict[str, Any] = {
+            "version": 3,
+            "type": "contactsheet",
         }
+        # 顶层 metadata/idt/cc_params 来自 contactsheet 预设
+        cs_dict = self.contactsheet.to_dict()
+        # 取出 contactsheet 的 metadata/idt/cc_params
+        data["metadata"] = cs_dict.get("metadata", {})
+        if "idt" in cs_dict:
+            data["idt"] = cs_dict["idt"]
+        if "cc_params" in cs_dict:
+            data["cc_params"] = cs_dict["cc_params"]
+
+        # crops 数组
+        crops_list: List[Dict[str, Any]] = []
+        for entry in self.crops:
+            crop_meta = {
+                "id": entry.crop.id,
+                "name": entry.crop.name,
+                "orientation": entry.crop.orientation,
+                "crop": list(entry.crop.rect_norm),
+            }
+            p_dict = entry.preset.to_dict()
+            item: Dict[str, Any] = {
+                "metadata": crop_meta,
+            }
+            if "idt" in p_dict:
+                item["idt"] = p_dict["idt"]
+            if "cc_params" in p_dict:
+                item["cc_params"] = p_dict["cc_params"]
+            crops_list.append(item)
+        data["crops"] = crops_list
+        if self.active_crop_id:
+            data["active_crop_id"] = self.active_crop_id
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PresetBundle":
-        # 兼容：若缺少 type 但具备 bundle 结构，也允许解析
-        contactsheet_data = data.get("contactsheet", {})
-        crops_data = data.get("crops", [])
+        """从 v3 contactsheet 结构反序列化为 PresetBundle。"""
+        if not isinstance(data, dict):
+            raise ValueError("PresetBundle.from_dict 需要 dict 类型输入")
+        if data.get("type") != "contactsheet":
+            raise ValueError("PresetBundle.from_dict 仅支持 type=contactsheet 的 v3 结构")
+
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, dict) or metadata.get("raw_file") is None:
+            raise ValueError("v3 contactsheet 缺少必填 metadata.raw_file")
+
+        # 构造 contactsheet 预设（使用顶层 idt/cc_params + metadata）
+        cs_preset_data: Dict[str, Any] = {
+            "version": 3,
+            "type": "single",
+            "metadata": metadata,
+            "idt": data.get("idt", {}),
+            "cc_params": data.get("cc_params", {}),
+        }
+        contactsheet_preset = Preset.from_dict(cs_preset_data)
+
+        # 解析 crops
+        crops_entries: List[CropPresetEntry] = []
+        seen_ids: set = set()
+        for item in data.get("crops", []) or []:
+            meta = item.get("metadata", {})
+            if not isinstance(meta, dict) or not meta.get("id"):
+                raise ValueError("每个裁剪项必须包含 metadata.id")
+            crop_id = meta["id"]
+            if crop_id in seen_ids:
+                raise ValueError(f"重复的裁剪 id: {crop_id}")
+            seen_ids.add(crop_id)
+
+            # 构造 CropInstance
+            rect = tuple(meta.get("crop", [0.0, 0.0, 1.0, 1.0]))
+            crop_instance = CropInstance(
+                id=crop_id,
+                name=meta.get("name", f"裁剪 {crop_id}"),
+                rect_norm=rect,
+                orientation=int(meta.get("orientation", 0)),
+            )
+
+            # 构造每裁剪的 Preset（继承顶层 idt/cc_params，裁剪级可覆盖）
+            per_preset_dict: Dict[str, Any] = {
+                "version": 3,
+                "type": "single",
+                "metadata": {
+                    "raw_file": metadata.get("raw_file"),
+                    "orientation": crop_instance.orientation,
+                    "crop": list(crop_instance.rect_norm),
+                },
+                "idt": data.get("idt", {}),
+                "cc_params": data.get("cc_params", {}),
+            }
+            # 裁剪级覆盖
+            if "idt" in item and isinstance(item["idt"], dict):
+                per_preset_dict["idt"] = item["idt"]
+            if "cc_params" in item and isinstance(item["cc_params"], dict):
+                per_preset_dict["cc_params"] = item["cc_params"]
+            per_preset = Preset.from_dict(per_preset_dict)
+
+            crops_entries.append(CropPresetEntry(crop=crop_instance, preset=per_preset))
+
+        # 校验 active_crop_id（如果提供）
         active_id = data.get("active_crop_id")
-        return cls(
-            contactsheet=Preset.from_dict(contactsheet_data) if isinstance(contactsheet_data, dict) else Preset(),
-            crops=[CropPresetEntry.from_dict(d) for d in crops_data if isinstance(d, dict)],
-            active_crop_id=active_id,
-        )
+        if active_id is not None and active_id not in {e.crop.id for e in crops_entries}:
+            raise ValueError("active_crop_id 未匹配任何裁剪 id")
+
+        return cls(contactsheet=contactsheet_preset, crops=crops_entries, active_crop_id=active_id)
 
 @dataclass 
 class PreviewConfig:

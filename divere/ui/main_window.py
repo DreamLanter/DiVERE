@@ -388,9 +388,16 @@ class MainWindow(QMainWindow):
         if not current_image or not current_image.file_path:
             return
 
-        # 保存为 Bundle（优先新格式）
-        bundle = self.context.export_preset_bundle()
-        self.context.auto_preset_manager.save_bundle_for_image(current_image.file_path, bundle)
+        # 根据是否存在裁剪，决定保存 single 还是 contactsheet
+        crops = self.context.get_all_crops()
+        if not crops:
+            # 无裁剪：保存为 v3 single
+            preset = self.context.export_single_preset()
+            self.context.auto_preset_manager.save_preset_for_image(current_image.file_path, preset)
+        else:
+            # 有裁剪：保存为 v3 contactsheet
+            bundle = self.context.export_preset_bundle()
+            self.context.auto_preset_manager.save_bundle_for_image(current_image.file_path, bundle)
         
         preset_file_path = self.context.auto_preset_manager.get_current_preset_file_path()
         if preset_file_path:
@@ -535,12 +542,7 @@ class MainWindow(QMainWindow):
         cs_def = None
         definition = self.context.color_space_manager.get_color_space_definition(cs_name)
         if definition:
-            # 对于自定义或预设加载的名称，保存其根名称
-            base_name = cs_name.replace("_custom", "").replace("_preset", "")
-            cs_def = InputTransformationDefinition(
-                name=base_name,
-                definition=definition
-            )
+            cs_def = InputTransformationDefinition(name=cs_name, definition=definition)
         
         # 构造 MatrixDefinition
         matrix_display_name = self.parameter_panel.matrix_combo.currentText()

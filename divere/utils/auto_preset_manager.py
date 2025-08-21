@@ -33,16 +33,18 @@ class AutoPresetManager:
                 with open(self._preset_file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     for filename, payload in data.items():
-                        # 新格式：bundle
-                        if isinstance(payload, dict) and payload.get("type") == "bundle":
-                            try:
-                                self._bundles[filename] = PresetBundle.from_dict(payload)
-                            except Exception:
-                                # 回退：尝试按单 preset 解析
-                                self._presets[filename] = Preset.from_dict(payload)
-                        else:
-                            # 旧格式：单 preset
+                        if not isinstance(payload, dict):
+                            continue
+                        payload_type = payload.get("type")
+                        if payload_type == "contactsheet":
+                            # v3 contactsheet
+                            self._bundles[filename] = PresetBundle.from_dict(payload)
+                        elif payload_type == "single" or payload_type is None:
+                            # v3 single（或未标明但结构为 single）
                             self._presets[filename] = Preset.from_dict(payload)
+                        else:
+                            # 不支持旧格式，显式忽略或抛错均可；此处忽略
+                            continue
             except (IOError, json.JSONDecodeError):
                 # 如果文件损坏或无法读取，则视为空文件
                 pass

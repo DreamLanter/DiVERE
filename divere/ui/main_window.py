@@ -96,6 +96,29 @@ class MainWindow(QMainWindow):
         # 自动加载测试图像（可选）
         # self._load_demo_image()
         
+    def _apply_crop_and_rotation_for_export(self, src_image: ImageData, rect_norm: Optional[tuple], orientation_deg: int) -> ImageData:
+        """按导出标准链路应用裁剪与旋转：先裁剪再旋转。"""
+        try:
+            out = src_image
+            # 裁剪
+            if rect_norm and out and out.array is not None:
+                x, y, w, h = rect_norm
+                H, W = out.height, out.width
+                x0 = int(round(x * W)); y0 = int(round(y * H))
+                x1 = int(round((x + w) * W)); y1 = int(round((y + h) * H))
+                x0 = max(0, min(W - 1, x0)); x1 = max(x0 + 1, min(W, x1))
+                y0 = max(0, min(H - 1, y0)); y1 = max(y0 + 1, min(H, y1))
+                cropped = out.array[y0:y1, x0:x1, :].copy()
+                out = out.copy_with_new_array(cropped)
+            # 旋转（逆时针）
+            deg = int(orientation_deg) % 360
+            if deg != 0 and out and out.array is not None:
+                k = (deg // 90) % 4
+                if k:
+                    out = out.copy_with_new_array(np.rot90(out.array, k=int(k)))
+            return out
+        except Exception:
+            return src_image
     def _connect_context_signals(self):
         """连接 ApplicationContext 的信号到UI槽函数"""
         self.context.preview_updated.connect(self._on_preview_updated)
@@ -368,7 +391,7 @@ class MainWindow(QMainWindow):
         )
         
         if file_path:
-            # 保存当前目录
+            # 保存当前目录（写入父目录）
             enhanced_config_manager.set_directory("open_image", file_path)
             self.context.load_image(file_path)
 
@@ -629,7 +652,7 @@ class MainWindow(QMainWindow):
 
             # 保存预设
             PresetManager.save_preset(preset, file_path)
-            self.context.statusBar().showMessage(f"预设已保存: {preset.name}")
+            self.statusBar().showMessage(f"预设已保存: {preset.name}")
 
         except (IOError, KeyError) as e:
             QMessageBox.critical(self, "保存预设失败", str(e))
@@ -647,23 +670,18 @@ class MainWindow(QMainWindow):
             "选择输入色彩变换", 
             "请选择图像的输入色彩变换:", 
             available_spaces, 
-            available_spaces.index(self.context.input_color_space) if self.context.input_color_space in available_spaces else 0, 
+            available_spaces.index(self.context.get_input_color_space()) if self.context.get_input_color_space() in available_spaces else 0, 
             False
         )
         
         if ok and color_space:
             try:
-                self.context.input_color_space = color_space
-                
-
-                
+                self.context.set_input_color_space(color_space)
                 # 更新状态栏
-                self.context.statusBar().showMessage(f"已设置输入色彩变换: {color_space}")
-                
+                self.statusBar().showMessage(f"已设置输入色彩变换: {color_space}")
                 # 如果已经有图像，重新处理
                 if self.context.get_current_image():
                     self.context._reload_with_color_space()
-                    
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"设置色彩空间失败: {str(e)}")
     
@@ -719,7 +737,7 @@ class MainWindow(QMainWindow):
             
             # 设置新的色彩空间
             self.context.current_proxy = self.context.color_space_manager.set_image_color_space(
-                self.context.current_proxy, self.context.input_color_space
+                self.context.current_proxy, self.context.get_input_color_space()
             )
             
             # 转换到工作色彩空间
@@ -870,14 +888,14 @@ class MainWindow(QMainWindow):
         """初始化色彩空间信息"""
         try:
             # 验证默认色彩空间
-            if self.context.color_space_manager.validate_color_space(self.context.input_color_space):
-                self.context.statusBar().showMessage(f"已设置默认输入色彩变换: {self.context.input_color_space}")
+            if self.context.color_space_manager.validate_color_space(self.context.get_input_color_space()):
+                self.statusBar().showMessage(f"已设置默认输入色彩变换: {self.context.get_input_color_space()}")
             else:
                 # 如果默认色彩空间无效，使用第一个可用的
                 available_spaces = self.context.color_space_manager.get_available_color_spaces()
                 if available_spaces:
-                    self.context.input_color_space = available_spaces[0]
-                    self.context.statusBar().showMessage(f"默认色彩空间无效，使用: {self.context.input_color_space}")
+                    self.context.set_input_color_space(available_spaces[0])
+                    self.statusBar().showMessage(f"默认色彩空间无效，使用: {self.context.get_input_color_space()}")
                 else:
                     print("错误: 没有可用的色彩空间")
         except Exception as e:
@@ -925,12 +943,59 @@ class MainWindow(QMainWindow):
             extension = ".tiff" if settings["format"] == "tiff" else ".jpg"
             filter_str = "TIFF文件 (*.tiff *.tif)" if settings["format"] == "tiff" else "JPEG文件 (*.jpg *.jpeg)"
             original_filename = Path(current_image.file_path).stem if current_image and current_image.file_path else "untitled"
-            default_filename = f"{original_filename}_CC_{settings['color_space']}{extension}"
-            
-            last_directory = enhanced_config_manager.get_directory("save_image")
-            default_path = str(Path(last_directory) / default_filename) if last_directory else default_filename
-            
-            file_path, _ = QFileDialog.getSaveFileName(self, "保存图像", default_path, filter_str)
+
+            # 模式判断：single / contactsheet(single crop) / contactsheet(all)
+            save_mode = settings.get("save_mode", "single")
+            base_dir = str(Path(current_image.file_path).parent) if current_image and current_image.file_path else ""
+
+            # 计算编号/命名
+            crops = self.context.get_all_crops()
+            active_id = self.context.get_active_crop_id()
+            has_contactsheet_single = (self.context.get_contactsheet_crop_rect() is not None and (not crops or active_id is None))
+
+            def _default_name_single():
+                # single 模式：CC-原文件名
+                return f"CC-{original_filename}{extension}"
+
+            def _default_name_contactsheet_all():
+                # contactsheet“保存所有”：基名（没有编号），后续批量时加 -[两位数]
+                return f"CC-{original_filename}{extension}"
+
+            def _default_name_contactsheet_single():
+                # contactsheet 的接触印像：固定中文后缀
+                if active_id and crops:
+                    # 若为正式裁剪聚焦，仍按编号命名
+                    for i, c in enumerate(crops, start=1):
+                        if getattr(c, 'id', None) == active_id:
+                            return f"CC-{original_filename}-{i:02d}{extension}"
+                # 非正式单裁剪：接触印像
+                return f"CC-{original_filename}-接触印像{extension}"
+
+            if save_mode == 'all':
+                # 仅选择“目录”和“基名”，不真正返回 file_path（批量保存时逐个拼接）
+                base_choice = QFileDialog.getExistingDirectory(self, "选择保存目录", base_dir)
+                if not base_choice:
+                    return
+                # 询问基名（可选），默认 CC-原文件名
+                default_basename = f"CC-{original_filename}"
+                from PySide6.QtWidgets import QInputDialog
+                basename, ok = QInputDialog.getText(self, "保存所有", "文件基名（将自动加 -[编号] 与扩展名）:", text=default_basename)
+                if not ok or not basename:
+                    basename = default_basename
+                # 执行批量保存
+                self._execute_batch_save(settings, base_choice, basename, extension)
+                return
+            else:
+                # 保存单张
+                if crops and active_id:
+                    default_filename = _default_name_contactsheet_single()
+                elif has_contactsheet_single:
+                    default_filename = _default_name_contactsheet_single()
+                else:
+                    default_filename = _default_name_single()
+
+                default_path = str(Path(base_dir) / default_filename) if base_dir else default_filename
+                file_path, _ = QFileDialog.getSaveFileName(self, "保存图像", default_path, filter_str)
         
         if not file_path:
             return
@@ -938,21 +1003,29 @@ class MainWindow(QMainWindow):
         enhanced_config_manager.set_directory("save_image", str(Path(file_path).parent))
             
         try:
-            # 应用旋转到原始图像副本
-            final_image = current_image.copy()
-            if self.context._current_orientation != 0:
-                # np.rot90的k: 1=90, 2=180, 3=270. k>0为逆时针
-                k = self.context._current_orientation // 90
-                final_image.array = np.rot90(final_image.array, k=k)
+            # 根据保存模式确定裁剪与方向
+            save_mode = settings.get("save_mode", "single")
+            crop_instance = self.context.get_active_crop_instance()
+            rect_norm = None
+            orientation = self.context.get_current_orientation()
+            if save_mode == 'single':
+                if crop_instance is not None:
+                    rect_norm = crop_instance.rect_norm
+                    orientation = crop_instance.orientation
+                elif self.context.get_contactsheet_crop_rect() is not None:
+                    rect_norm = self.context.get_contactsheet_crop_rect()
+                    orientation = self.context.get_current_orientation()
+            # 应用裁剪与旋转
+            final_image = self._apply_crop_and_rotation_for_export(current_image, rect_norm, orientation)
 
             # 重要：将原图转换到工作色彩空间，保持与预览一致
             print(f"导出前的色彩空间转换:")
             print(f"  原始图像色彩空间: {final_image.color_space}")
-            print(f"  输入色彩变换设置: {self.context.input_color_space}")
+            print(f"  输入色彩变换设置: {self.context.get_input_color_space()}")
             
             # 先设置输入色彩变换
             working_image = self.context.color_space_manager.set_image_color_space(
-                final_image, self.context.input_color_space
+                final_image, self.context.get_input_color_space()
             )
             # 转换到工作色彩空间（ACEScg）
             working_image = self.context.color_space_manager.convert_to_working_space(
@@ -964,7 +1037,7 @@ class MainWindow(QMainWindow):
             # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
             result_image = self.context.the_enlarger.apply_full_pipeline(
                 working_image,
-                self.context.current_params,
+                self.context.get_current_params(),
                 include_curve=settings["include_curve"],
                 for_export=True
             )
@@ -974,21 +1047,139 @@ class MainWindow(QMainWindow):
                 result_image, settings["color_space"]
             )
             
+            # 根据扩展名与设置计算“有效位深”
+            ext = str(Path(file_path).suffix).lower()
+            requested_bit_depth = int(settings.get("bit_depth", 8))
+            if ext in [".jpg", ".jpeg"]:
+                effective_bit_depth = 8
+            elif ext in [".png", ".tif", ".tiff"]:
+                effective_bit_depth = 16 if requested_bit_depth == 16 else 8
+            else:
+                effective_bit_depth = requested_bit_depth
+
             # 保存图像
             self.context.image_manager.save_image(
-                result_image, 
-                file_path, 
-                bit_depth=settings["bit_depth"],
-                quality=95
+                result_image,
+                file_path,
+                bit_depth=effective_bit_depth,
+                quality=95,
+                export_color_space=settings.get("color_space")
             )
             
-            self.context.statusBar().showMessage(
+            self.statusBar().showMessage(
                 f"图像已保存: {Path(file_path).name} "
-                f"({settings['bit_depth']}bit, {settings['color_space']})"
+                f"({effective_bit_depth}bit, {settings['color_space']})"
             )
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存图像失败: {str(e)}")
+
+    def _execute_batch_save(self, settings: dict, target_dir: str, basename: str, extension: str):
+        """执行批量保存（保存所有裁剪）
+        - 命名：{basename}-[两位编号]{extension}
+        - 顺序：按当前 crops 列表顺序
+        - 若没有任何裁剪但存在 contactsheet 单裁剪，视为一张（编号01）
+        """
+        try:
+            crops = self.context.get_all_crops()
+            if crops:
+                for i, crop in enumerate(crops, start=1):
+                    # 切到该裁剪 Profile（不聚焦，避免视图闪烁），并以该裁剪的 orientation 导出
+                    self.context.switch_to_crop(crop.id)
+                    # 处理图像（复用 _execute_save 的核心管道，但不弹对话框）
+                    filename = f"{basename}-{i:02d}{extension}"
+                    file_path = str(Path(target_dir) / filename)
+                    # 复用单张保存流程：构造一个“强制路径”，跳过另存弹窗
+                    tmp_settings = dict(settings)
+                    # 临时将 force_dialog 置 False 并直接走保存
+                    # 下面直接复制 _execute_save 后半段的处理流程：
+                    current_image = self.context.get_current_image()
+                    crop_instance = self.context.get_active_crop_instance()
+                    rect_norm = crop_instance.rect_norm if crop_instance is not None else None
+                    orientation = crop_instance.orientation if crop_instance is not None else self.context.get_current_orientation()
+                    final_image = self._apply_crop_and_rotation_for_export(current_image, rect_norm, orientation)
+                    working_image = self.context.color_space_manager.set_image_color_space(
+                        final_image, self.context.get_input_color_space()
+                    )
+                    working_image = self.context.color_space_manager.convert_to_working_space(
+                        working_image
+                    )
+                    result_image = self.context.the_enlarger.apply_full_pipeline(
+                        working_image,
+                        self.context.get_current_params(),
+                        include_curve=settings["include_curve"],
+                        for_export=True
+                    )
+                    result_image = self.context.color_space_manager.convert_to_display_space(
+                        result_image, settings["color_space"]
+                    )
+                    # 有效位深
+                    ext = extension.lower()
+                    requested_bit_depth = int(settings.get("bit_depth", 8))
+                    if ext in [".jpg", ".jpeg"]:
+                        effective_bit_depth = 8
+                    elif ext in [".png", ".tif", ".tiff"]:
+                        effective_bit_depth = 16 if requested_bit_depth == 16 else 8
+                    else:
+                        effective_bit_depth = requested_bit_depth
+                    # 保存
+                    self.context.image_manager.save_image(
+                        result_image,
+                        file_path,
+                        bit_depth=effective_bit_depth,
+                        quality=95,
+                        export_color_space=settings.get("color_space")
+                    )
+                self.statusBar().showMessage(f"已保存所有裁剪到: {target_dir}")
+            else:
+                # 无正式裁剪：若存在 contactsheet 单裁剪，视为一张（编号01）
+                if self.context.get_contactsheet_crop_rect() is not None:
+                    filename = f"{basename}-01{extension}"
+                    file_path = str(Path(target_dir) / filename)
+                    # 直接复用 _execute_save：构造一次弹窗路径
+                    # 为保持简单，这里复用保存单张路径
+                    # 保存图像（复制单张保存处理）：
+                    current_image = self.context.get_current_image()
+                    rect_norm = self.context.get_contactsheet_crop_rect()
+                    orientation = self.context.get_current_orientation()
+                    final_image = self._apply_crop_and_rotation_for_export(current_image, rect_norm, orientation)
+                    working_image = self.context.color_space_manager.set_image_color_space(
+                        final_image, self.context.get_input_color_space()
+                    )
+                    working_image = self.context.color_space_manager.convert_to_working_space(
+                        working_image
+                    )
+                    result_image = self.context.the_enlarger.apply_full_pipeline(
+                        working_image,
+                        self.context.get_current_params(),
+                        include_curve=settings["include_curve"],
+                        for_export=True
+                    )
+                    result_image = self.context.color_space_manager.convert_to_display_space(
+                        result_image, settings["color_space"]
+                    )
+                    # 有效位深
+                    ext = extension.lower()
+                    requested_bit_depth = int(settings.get("bit_depth", 8))
+                    if ext in [".jpg", ".jpeg"]:
+                        effective_bit_depth = 8
+                    elif ext in [".png", ".tif", ".tiff"]:
+                        effective_bit_depth = 16 if requested_bit_depth == 16 else 8
+                    else:
+                        effective_bit_depth = requested_bit_depth
+                    # 保存
+                    self.context.image_manager.save_image(
+                        result_image,
+                        file_path,
+                        bit_depth=effective_bit_depth,
+                        quality=95,
+                        export_color_space=settings.get("color_space")
+                    )
+                    self.statusBar().showMessage(f"已保存: {Path(file_path).name}")
+                else:
+                    self.statusBar().showMessage("没有需要保存的裁剪")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存所有失败: {e}")
     
     def _reset_parameters(self):
         """重置调色参数"""
@@ -1014,7 +1205,7 @@ class MainWindow(QMainWindow):
     def _reset_view(self):
         """重置预览视图"""
         self.preview_widget.reset_view()
-        self.context.statusBar().showMessage("视图已重置")
+        self.statusBar().showMessage("视图已重置")
     
 
     
@@ -1233,7 +1424,7 @@ class MainWindow(QMainWindow):
         """切换预览Profiling"""
         self.context.the_enlarger.set_profiling_enabled(enabled)
         self.context.color_space_manager.set_profiling_enabled(enabled)
-        self.context.statusBar().showMessage("预览Profiling已开启" if enabled else "预览Profiling已关闭")
+        self.statusBar().showMessage("预览Profiling已开启" if enabled else "预览Profiling已关闭")
     
     def on_parameter_changed(self):
         """参数改变时的回调"""

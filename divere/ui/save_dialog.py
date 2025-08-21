@@ -19,6 +19,7 @@ class SaveImageDialog(QDialog):
         self.setWindowTitle("保存图像设置")
         self.setModal(True)
         self.setMinimumWidth(400)
+        self._save_mode = 'single'  # 'single' | 'all'
         
         # 可用的色彩空间
         self.color_spaces = color_spaces or ["sRGB", "AdobeRGB", "ProPhotoRGB"]
@@ -67,12 +68,27 @@ class SaveImageDialog(QDialog):
         layout.addWidget(options_group)
         
         # 按钮
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | 
-            QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
+        button_box = QDialogButtonBox()
+        # 标准“保存单张”按钮
+        ok_btn = button_box.addButton(QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("保存单张")
+        # 自定义“保存所有”按钮
+        save_all_btn = QPushButton("保存所有")
+        button_box.addButton(save_all_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+        # 取消
+        cancel_btn = button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
+        
+        def _on_ok():
+            self._save_mode = 'single'
+            self.accept()
+        def _on_save_all():
+            self._save_mode = 'all'
+            self.accept()
+        def _on_cancel():
+            self.reject()
+        ok_btn.clicked.connect(_on_ok)
+        save_all_btn.clicked.connect(_on_save_all)
+        cancel_btn.clicked.connect(_on_cancel)
         
         layout.addWidget(button_box)
         
@@ -88,15 +104,19 @@ class SaveImageDialog(QDialog):
     def _on_format_changed(self):
         """格式选择改变时更新默认色彩空间"""
         if self.tiff_16bit_radio.isChecked():
-            # 16-bit TIFF 默认使用 DisplayP3
-            if "DisplayP3" in self.color_spaces:
-                self.colorspace_combo.setCurrentText("DisplayP3")
-            elif "AdobeRGB" in self.color_spaces:
-                self.colorspace_combo.setCurrentText("AdobeRGB")
+            # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
+            preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
+            for name in preferred:
+                if name in self.color_spaces:
+                    self.colorspace_combo.setCurrentText(name)
+                    break
         else:
-            # 8-bit JPEG 默认使用 sRGB
-            if "sRGB" in self.color_spaces:
-                self.colorspace_combo.setCurrentText("sRGB")
+            # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
+            preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
+            for name in preferred:
+                if name in self.color_spaces:
+                    self.colorspace_combo.setCurrentText(name)
+                    break
     
     def get_settings(self):
         """获取保存设置"""
@@ -104,5 +124,6 @@ class SaveImageDialog(QDialog):
             "format": "tiff" if self.tiff_16bit_radio.isChecked() else "jpeg",
             "bit_depth": 16 if self.tiff_16bit_radio.isChecked() else 8,
             "color_space": self.colorspace_combo.currentText(),
-            "include_curve": self.include_curve_checkbox.isChecked()
+            "include_curve": self.include_curve_checkbox.isChecked(),
+            "save_mode": self._save_mode
         }

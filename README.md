@@ -104,6 +104,31 @@ onnxruntime>=1.15.0     # ONNX 推理（自动校色）
 
 - 可选（GPU 加速）
 ```
+### ICC 内嵌与 16-bit TIFF 支持
+
+自 v0.1.10 起，导出 JPEG/TIFF 支持自动嵌入 ICC（位于 `config/colorspace/icc/`）。
+
+- JPEG：使用 Pillow 保存并嵌入 ICC。
+- TIFF：使用 `tifffile` 写入 16-bit/多通道，并通过 tag 34675 写入 ICC（默认 LZW 压缩）。
+
+注：LZW 压缩依赖 `imagecodecs`，已在 requirements.txt 中包含；若遇到报错提示需要安装 `imagecodecs`，请执行：
+```bash
+pip install -r requirements.txt
+```
+
+安装 `tifffile`：
+
+```bash
+pip install -r requirements.txt  # 已包含 tifffile 依赖
+```
+
+ICC 存放位置：`divere/config/colorspace/icc/`
+
+默认映射：
+- sRGB → `sRGB Profile.icc`
+- Display P3 → `Display P3.icc`
+- ACEScg_Linear/ACEScg → `ACESCG Linear.icc`
+（若需 Adobe RGB，请将 `Adobe RGB (1998).icc` 放入上述目录）
 # macOS Metal
 pyobjc-framework-Metal
 pyobjc-framework-MetalPerformanceShaders

@@ -13,6 +13,7 @@ from PIL import Image
 import imageio
 
 from .data_types import ImageData
+from ..utils.app_paths import get_data_dir
 
 
 class ImageManager:
@@ -327,8 +328,12 @@ class ImageManager:
         content = f"{file_path}_{stat.st_mtime}_{stat.st_size}"
         return hashlib.md5(content.encode()).hexdigest()
     
-    def save_image(self, image_data: ImageData, output_path: str, quality: int = 95, bit_depth: int = 8):
-        """保存图像"""
+    def save_image(self, image_data: ImageData, output_path: str, quality: int = 95, bit_depth: int = 8, export_color_space: str = None):
+        """保存图像
+        - 统一归一化通道形状（灰度 squeeze，JPEG 限制为3通道）
+        - 检查 imwrite 返回值，失败抛出异常
+        - 根据 bit_depth 决定 8/16 位量化
+        """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -347,36 +352,149 @@ class ImageManager:
         
         # 根据文件扩展名选择保存格式
         ext = output_path.suffix.lower()
-        
-        if ext in ['.jpg', '.jpeg']:
-            # JPEG格式
-            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                # 转换为BGR用于OpenCV
-                bgr_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(str(output_path), bgr_image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+
+        # 若需要嵌入 ICC，优先使用 Pillow 保存（仅限 JPEG/TIFF），否则走 OpenCV
+        def _read_bytes(path: Path) -> Optional[bytes]:
+            try:
+                with open(path, 'rb') as f:
+                    return f.read()
+            except Exception:
+                return None
+
+        def _resolve_icc_path(color_space_name: str) -> Optional[Path]:
+            if not color_space_name:
+                return None
+            # 建立输出色彩空间到ICC文件名的映射（按优先名）
+            name = str(color_space_name).strip().lower()
+            candidates: list[str] = []
+            if name in {"srgb"}:
+                candidates = ["sRGB Profile.icc"]
+            elif name in {"displayp3", "display p3"}:
+                candidates = ["Display P3.icc"]
+            elif name in {"acescg_linear", "acescg", "acescg linear"}:
+                candidates = ["ACESCG Linear.icc"]
+            elif name in {"adobergb", "adobe rgb", "adobe rgb (1998)"}:
+                candidates = ["Adobe RGB (1998).icc", "AdobeRGB1998.icc"]
             else:
-                cv2.imwrite(str(output_path), image_array, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                # 兜底：尝试直接用传入名称加 .icc
+                candidates = [f"{color_space_name}.icc"]
+            try:
+                icc_dir = get_data_dir("config").joinpath("colorspace", "icc")
+            except Exception:
+                icc_dir = Path("config").joinpath("colorspace", "icc")
+            for fname in candidates:
+                p = icc_dir / fname
+                if p.exists():
+                    return p
+            return None
+
+        def _get_icc_bytes_for_export(image: ImageData, export_cs_name: Optional[str]) -> Optional[bytes]:
+            try:
+                if image and getattr(image, 'icc_profile', None):
+                    return image.icc_profile
+            except Exception:
+                pass
+            icc_path = _resolve_icc_path(export_cs_name) if export_cs_name else None
+            return _read_bytes(icc_path) if icc_path else None
+
+        # 归一化形状：灰度 squeeze 到 (H,W)，JPEG 只允许 3 通道
+        def _normalize_shape_for_saving(arr: np.ndarray, expect_rgb: bool) -> np.ndarray:
+            if arr.ndim == 3 and arr.shape[2] == 1:
+                arr = arr[:, :, 0]
+            if expect_rgb:
+                # 若不是3通道，尝试从灰度扩展到3通道；若是4通道仅取前3通道
+                if arr.ndim == 2:
+                    arr = np.stack([arr, arr, arr], axis=2)
+                elif arr.ndim == 3 and arr.shape[2] >= 3:
+                    arr = arr[:, :, :3]
+                elif arr.ndim != 3 or arr.shape[2] != 3:
+                    raise ValueError("JPEG 保存需要3通道或灰度图像")
+            else:
+                # 非JPEG格式允许 1,3,4 通道
+                if arr.ndim == 3 and arr.shape[2] not in (1, 3, 4):
+                    # 其他通道数不支持，取前三通道作为回退
+                    arr = arr[:, :, :3]
+            return arr
+
+        if ext in ['.jpg', '.jpeg']:
+            # JPEG格式：限制为3通道，使用BGR
+            image_jpeg = _normalize_shape_for_saving(image_array, expect_rgb=True)
+            icc_bytes = _get_icc_bytes_for_export(image_data, export_color_space)
+            if icc_bytes is not None:
+                # 使用 Pillow 保存并嵌入 ICC
+                pil_img = Image.fromarray(image_jpeg)
+                try:
+                    pil_img.save(str(output_path), format='JPEG', quality=int(quality), subsampling=0, optimize=True, icc_profile=icc_bytes)
+                except Exception as e:
+                    raise RuntimeError(f"保存JPEG失败(ICC): {e}")
+            else:
+                bgr_image = cv2.cvtColor(image_jpeg, cv2.COLOR_RGB2BGR)
+                ok = cv2.imwrite(str(output_path), bgr_image, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+                if not ok:
+                    raise RuntimeError(f"保存JPEG失败: {output_path}")
         
         elif ext in ['.png']:
-            # PNG格式
-            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                bgr_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(str(output_path), bgr_image)
+            image_png = _normalize_shape_for_saving(image_array, expect_rgb=False)
+            if image_png.ndim == 3 and image_png.shape[2] in (3, 4):
+                # OpenCV 期望BGR(A)
+                code = cv2.COLOR_RGB2BGR if image_png.shape[2] == 3 else cv2.COLOR_RGBA2BGRA
+                bgr_or_bgra = cv2.cvtColor(image_png, code)
+                ok = cv2.imwrite(str(output_path), bgr_or_bgra)
             else:
-                cv2.imwrite(str(output_path), image_array)
+                ok = cv2.imwrite(str(output_path), image_png)
+            if not ok:
+                raise RuntimeError(f"保存PNG失败: {output_path}")
         
         elif ext in ['.tiff', '.tif']:
-            # TIFF格式
-            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                bgr_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(str(output_path), bgr_image)
+            image_tif = _normalize_shape_for_saving(image_array, expect_rgb=False)
+            icc_bytes = _get_icc_bytes_for_export(image_data, export_color_space)
+            if icc_bytes is not None:
+                # 强制使用 tifffile 写入 16-bit/多通道 TIFF 并附带 ICC（无回退）
+                try:
+                    import tifffile as tiff
+                except Exception as e:
+                    raise RuntimeError("需要安装 'tifffile' 以在 TIFF 中嵌入 ICC")
+
+                try:
+                    arr = image_tif
+                    # 仅保留最多3通道
+                    if arr.ndim == 3 and arr.shape[2] > 3:
+                        arr = arr[:, :, :3]
+                    # photometric
+                    if arr.ndim == 2:
+                        photometric = 'minisblack'
+                    elif arr.ndim == 3 and arr.shape[2] == 3:
+                        photometric = 'rgb'
+                    else:
+                        photometric = 'minisblack'
+                    extratags = [(34675, 'B', len(icc_bytes), icc_bytes, True)]
+                    # 使用 LZW 压缩以减小体积
+                    tiff.imwrite(
+                        str(output_path),
+                        arr,
+                        photometric=photometric,
+                        extratags=extratags,
+                        compression='lzw'
+                    )
+                except Exception as e:
+                    raise RuntimeError(f"保存TIFF失败(ICC): {e}")
             else:
-                cv2.imwrite(str(output_path), image_array)
+                if image_tif.ndim == 3 and image_tif.shape[2] in (3, 4):
+                    code = cv2.COLOR_RGB2BGR if image_tif.shape[2] == 3 else cv2.COLOR_RGBA2BGRA
+                    bgr_or_bgra = cv2.cvtColor(image_tif, code)
+                    ok = cv2.imwrite(str(output_path), bgr_or_bgra)
+                else:
+                    ok = cv2.imwrite(str(output_path), image_tif)
+                if not ok:
+                    raise RuntimeError(f"保存TIFF失败: {output_path}")
         
         else:
-            # 默认使用PIL保存
-            pil_image = Image.fromarray(image_array)
-            pil_image.save(output_path, quality=quality)
+            # 默认使用PIL保存（尽量兼容）
+            pil_image = Image.fromarray(image_array if image_array.ndim != 3 or image_array.shape[2] != 1 else image_array[:, :, 0])
+            pil_kwargs = {}
+            if ext in ['.jpg', '.jpeg']:
+                pil_kwargs['quality'] = int(quality)
+            pil_image.save(output_path, **pil_kwargs)
     
     def get_supported_formats(self) -> list:
         """获取支持的图像格式"""

@@ -7,6 +7,8 @@ scipy>=1.11.0
 imageio>=2.31.0
 colour-science>=0.4.2
 pyopencl>=2024.1
+tifffile>=2024.2.12
+imagecodecs>=2024.1.1
 
 # CMA-ES 优化器
 cma>=3.3.0

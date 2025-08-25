@@ -9,6 +9,18 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 import json
 
+# Import debug logger
+try:
+    from .debug_logger import debug, info, warning, error, log_path_search, log_file_operation
+except ImportError:
+    # Fallback if debug logger is not available
+    def debug(msg, module=None): pass
+    def info(msg, module=None): pass
+    def warning(msg, module=None): pass
+    def error(msg, module=None): pass
+    def log_path_search(desc, paths, found=None, module=None): pass
+    def log_file_operation(op, path, success=True, err=None, module=None): pass
+
 class PathManager:
     """路径管理器，使用addpath方式管理各种路径"""
     
@@ -31,23 +43,30 @@ class PathManager:
         if self._initialized:
             return
             
+        info("Initializing PathManager paths", "PathManager")
+        
         # 获取项目根目录
         project_root = self._get_project_root()
+        info(f"Using project root: {project_root}", "PathManager")
         
         # 配置路径
-        self._paths["config"].extend([
+        config_paths = [
             os.path.join(project_root, "divere", "config"),
             os.path.join(project_root, "divere", "config", "defaults"),
             os.path.join(project_root, "divere", "config", "colorchecker"),
             os.path.join(project_root, "divere", "config", "colorspace"),
             os.path.join(project_root, "divere", "config", "curves"),
             os.path.join(project_root, "divere", "config", "matrices")
-        ])
+        ]
+        self._paths["config"].extend(config_paths)
+        debug(f"Config paths: {config_paths}", "PathManager")
         
         # 默认预设路径
-        self._paths["defaults"].extend([
+        defaults_paths = [
             os.path.join(project_root, "divere", "config", "defaults")
-        ])
+        ]
+        self._paths["defaults"].extend(defaults_paths)
+        debug(f"Defaults paths: {defaults_paths}", "PathManager")
         
         # 色彩空间路径
         self._paths["colorspace"].extend([
@@ -88,18 +107,33 @@ class PathManager:
     
     def _get_project_root(self) -> str:
         """获取项目根目录"""
+        info("Starting project root detection", "PathManager")
+        
         # 尝试多种方式获取项目根目录
         current_file = os.path.abspath(__file__)
+        debug(f"Current file: {current_file}", "PathManager")
         
         # 从当前文件向上查找，直到找到包含pyproject.toml的目录
         current_dir = os.path.dirname(current_file)
+        searched_dirs = []
+        
         while current_dir != os.path.dirname(current_dir):
-            if os.path.exists(os.path.join(current_dir, "pyproject.toml")):
+            searched_dirs.append(current_dir)
+            pyproject_path = os.path.join(current_dir, "pyproject.toml")
+            debug(f"Checking for pyproject.toml at: {pyproject_path}", "PathManager")
+            
+            if os.path.exists(pyproject_path):
+                info(f"Found pyproject.toml at: {current_dir}", "PathManager")
+                log_path_search("pyproject.toml search", searched_dirs, current_dir, "PathManager")
                 return current_dir
             current_dir = os.path.dirname(current_dir)
         
         # 如果找不到，使用当前工作目录
-        return os.getcwd()
+        fallback = os.getcwd()
+        warning(f"pyproject.toml not found, using fallback: {fallback}", "PathManager")
+        log_path_search("pyproject.toml search (not found)", searched_dirs, fallback, "PathManager")
+        
+        return fallback
     
     def _add_all_paths(self):
         """将所有路径添加到Python路径"""
@@ -168,25 +202,41 @@ class PathManager:
     
     def resolve_path(self, relative_path: str, category: str = None) -> Optional[str]:
         """解析相对路径为绝对路径"""
+        info(f"Resolving path: '{relative_path}' in category: {category}", "PathManager")
+        
+        candidate_paths = []
+        
         if category:
             # 在指定类别中查找
             for path in self._paths.get(category, []):
                 full_path = os.path.join(path, relative_path)
+                candidate_paths.append(full_path)
                 if os.path.exists(full_path):
+                    log_path_search(f"resolve_path('{relative_path}', '{category}')", candidate_paths, full_path, "PathManager")
                     return full_path
         else:
             # 在所有类别中查找
             for path_list in self._paths.values():
                 for path in path_list:
                     full_path = os.path.join(path, relative_path)
+                    candidate_paths.append(full_path)
                     if os.path.exists(full_path):
+                        log_path_search(f"resolve_path('{relative_path}', all categories)", candidate_paths, full_path, "PathManager")
                         return full_path
         
+        # Log failed search
+        log_path_search(f"resolve_path('{relative_path}', {category}) - FAILED", candidate_paths, None, "PathManager")
         return None
     
     def get_default_preset_path(self, preset_name: str) -> Optional[str]:
         """获取默认预设文件的完整路径"""
-        return self.find_file(preset_name, "defaults")
+        info(f"Looking for default preset: '{preset_name}'", "PathManager")
+        result = self.find_file(preset_name, "defaults")
+        if result:
+            info(f"Found default preset: {result}", "PathManager")
+        else:
+            warning(f"Default preset not found: '{preset_name}'", "PathManager")
+        return result
     
     def get_config_path(self, config_name: str) -> Optional[str]:
         """获取配置文件的完整路径"""

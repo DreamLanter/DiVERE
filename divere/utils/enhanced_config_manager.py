@@ -12,6 +12,18 @@ from typing import Optional, Dict, List, Any
 import platform
 import time
 
+# Import debug logger
+try:
+    from .debug_logger import debug, info, warning, error, log_path_search, log_file_operation
+except ImportError:
+    # Fallback if debug logger is not available
+    def debug(msg, module=None): pass
+    def info(msg, module=None): pass
+    def warning(msg, module=None): pass
+    def error(msg, module=None): pass
+    def log_path_search(desc, paths, found=None, module=None): pass
+    def log_file_operation(op, path, success=True, err=None, module=None): pass
+
 
 class EnhancedConfigManager:
     """增强配置管理器"""
@@ -37,11 +49,16 @@ class EnhancedConfigManager:
             dir_path.mkdir(parents=True, exist_ok=True)
         
         # 应用内置配置目录（统一入口）：优先二进制旁顶层 config，回退到包内 divere/config
+        info("Resolving app config directory", "EnhancedConfigManager")
         try:
             from .app_paths import get_data_dir
             self.app_config_dir = get_data_dir("config")
-        except Exception:
+            info(f"Using app_paths.get_data_dir() -> {self.app_config_dir}", "EnhancedConfigManager")
+        except Exception as e:
             self.app_config_dir = Path("config")
+            warning(f"app_paths.get_data_dir() failed: {e}, using fallback: {self.app_config_dir}", "EnhancedConfigManager")
+        
+        debug(f"app_config_dir exists: {self.app_config_dir.exists()}", "EnhancedConfigManager")
         
         # 应用设置文件
         self.app_settings_file = self.user_config_dir / "config" / "app_settings.json"
@@ -130,22 +147,38 @@ class EnhancedConfigManager:
         Returns:
             配置文件路径列表，用户配置在前
         """
+        info(f"Getting config files for type: {config_type}", "EnhancedConfigManager")
+        
         user_dir = getattr(self, f"user_{config_type}_dir")
         app_dir = self.app_config_dir / config_type
         
+        debug(f"User dir: {user_dir} (exists: {user_dir.exists()})", "EnhancedConfigManager")
+        debug(f"App dir: {app_dir} (exists: {app_dir.exists()})", "EnhancedConfigManager")
+        
         config_files = []
+        search_paths = [str(user_dir), str(app_dir)]
         
         # 首先添加用户配置文件
         if user_dir.exists():
-            for json_file in user_dir.glob("*.json"):
+            user_files = list(user_dir.glob("*.json"))
+            debug(f"Found {len(user_files)} user config files", "EnhancedConfigManager")
+            for json_file in user_files:
                 config_files.append(json_file)
+                debug(f"Added user config: {json_file}", "EnhancedConfigManager")
         
         # 然后添加应用内置配置文件（如果用户没有同名文件）
         if app_dir.exists():
-            for json_file in app_dir.glob("*.json"):
+            app_files = list(app_dir.glob("*.json"))
+            debug(f"Found {len(app_files)} app config files", "EnhancedConfigManager")
+            for json_file in app_files:
                 user_file = user_dir / json_file.name
                 if not user_file.exists():  # 用户没有同名文件时才添加
                     config_files.append(json_file)
+                    debug(f"Added app config: {json_file}", "EnhancedConfigManager")
+                else:
+                    debug(f"Skipped app config (user override exists): {json_file}", "EnhancedConfigManager")
+        
+        log_path_search(f"get_config_files({config_type})", search_paths, f"{len(config_files)} files found", "EnhancedConfigManager")
         
         return config_files
     

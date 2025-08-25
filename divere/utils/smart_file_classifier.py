@@ -5,6 +5,17 @@ import re
 import json
 import os
 
+# Import debug logger
+try:
+    from .debug_logger import debug, info, warning, error, log_file_operation
+except ImportError:
+    # Fallback if debug logger is not available
+    def debug(msg, module=None): pass
+    def info(msg, module=None): pass
+    def warning(msg, module=None): pass
+    def error(msg, module=None): pass
+    def log_file_operation(op, path, success=True, err=None, module=None): pass
+
 @dataclass
 class ClassificationRule:
     name: str
@@ -29,44 +40,64 @@ class SmartFileClassifier:
     
     def classify_file(self, file_path: str) -> str:
         """根据文件特征智能分类，返回对应的默认预设文件名"""
+        info(f"Classifying file: {file_path}", "SmartFileClassifier")
+        
         file_info = self._extract_file_info(file_path)
+        debug(f"File info: {file_info}", "SmartFileClassifier")
+        debug(f"Available rules: {len(self._rules)}", "SmartFileClassifier")
         
         # 按rules.json中的顺序依次匹配，找到第一个匹配的规则
-        for rule in self._rules:
+        for i, rule in enumerate(self._rules):
+            debug(f"Evaluating rule {i+1}: {rule.name}", "SmartFileClassifier")
             if self._evaluate_rule_conditions(file_info, rule.conditions):
+                info(f"Rule matched: {rule.name} -> {rule.default_preset}", "SmartFileClassifier")
                 return rule.default_preset
         
         # 没有匹配的规则，返回fallback
+        info(f"No rules matched, using fallback: {self._fallback_preset}", "SmartFileClassifier")
         return self._fallback_preset
     
     def _load_classification_rules(self):
         """加载分类规则配置"""
+        info("Loading file classification rules", "SmartFileClassifier")
+        
         try:
             from divere.utils.path_manager import find_file
             rules_path = find_file("file_classification_rules.json", "config")
             if not rules_path:
+                error("file_classification_rules.json not found", "SmartFileClassifier")
                 raise FileNotFoundError("找不到文件分类规则配置文件")
+            
+            info(f"Found classification rules at: {rules_path}", "SmartFileClassifier")
+            log_file_operation("Load classification rules", rules_path, True, None, "SmartFileClassifier")
                 
             with open(rules_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             
             # 解析规则
             self._rules = []
-            for rule_data in config.get("classification_rules", []):
+            rules_data = config.get("classification_rules", [])
+            debug(f"Found {len(rules_data)} classification rules", "SmartFileClassifier")
+            
+            for rule_data in rules_data:
                 rule = ClassificationRule(
                     name=rule_data.get("name", ""),
                     conditions=rule_data.get("conditions", []),
                     default_preset=rule_data.get("default_preset", "")
                 )
                 self._rules.append(rule)
+                debug(f"Loaded rule: {rule.name} -> {rule.default_preset}", "SmartFileClassifier")
             
             self._fallback_preset = config.get("fallback", "defaults/default.json")
+            info(f"Fallback preset: {self._fallback_preset}", "SmartFileClassifier")
             
         except Exception as e:
-            print(f"加载文件分类规则失败: {e}")
+            error_msg = str(e)
+            error(f"Failed to load classification rules: {error_msg}", "SmartFileClassifier")
             # 使用内置默认规则
             self._rules = []
             self._fallback_preset = "defaults/default.json"
+            warning(f"Using fallback preset: {self._fallback_preset}", "SmartFileClassifier")
     
     def _extract_file_info(self, file_path: str) -> FileInfo:
         """提取文件的详细信息"""

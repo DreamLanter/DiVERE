@@ -93,7 +93,7 @@ class ApplicationContext(QObject):
         self._autosave_timer.setInterval(500) # 500ms delay for autosave
         self._autosave_timer.timeout.connect(self.autosave_requested.emit)
 
-        # 应用集中式“默认预设”（config/default.json 或内置回退）
+        # 应用集中式"默认预设"（config/defaults/default.json 或内置回退）
         try:
             from divere.utils.defaults import load_default_preset
             default_preset = load_default_preset()

@@ -1,6 +1,6 @@
 """
 默认预设加载器
-集中式默认值入口：优先从 config/default.json 读取；若不存在，回退到内置 Preset。
+集中式默认值入口：优先从 config/defaults/default.json 读取；若不存在，回退到内置 Preset。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def load_default_preset() -> Preset:
     # 1) 尝试加载项目内默认文件（统一路径解析：可兼容源码与打包环境）
     try:
         from divere.utils.app_paths import resolve_data_path
-        default_path = resolve_data_path("config", "default.json")
+        default_path = resolve_data_path("config", "defaults", "default.json")
         with open(default_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         _DEFAULT_PRESET_CACHE = Preset.from_dict(data)

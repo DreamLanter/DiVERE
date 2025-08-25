@@ -21,16 +21,27 @@ def load_default_preset() -> Preset:
     if _DEFAULT_PRESET_CACHE is not None:
         return _DEFAULT_PRESET_CACHE
 
-    # 1) 尝试加载项目内默认文件（统一路径解析：可兼容源码与打包环境）
+    # 1) 尝试加载项目内默认文件（使用与 enhanced_config_manager 相同的路径解析方法）
     try:
-        from divere.utils.app_paths import resolve_data_path
-        default_path = resolve_data_path("config", "defaults", "default.json")
-        with open(default_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        _DEFAULT_PRESET_CACHE = Preset.from_dict(data)
-        return _DEFAULT_PRESET_CACHE
-    except Exception:
-        # 解析失败或路径失败，走回退
+        from divere.utils.app_paths import get_data_dir
+        config_dir = get_data_dir("config")
+        default_path = config_dir / "defaults" / "default.json"
+        
+        if default_path.exists():
+            with open(default_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _DEFAULT_PRESET_CACHE = Preset.from_dict(data)
+            return _DEFAULT_PRESET_CACHE
+        else:
+            # 如果文件不存在，记录日志（可选）
+            if not _DEFAULT_PRESET_LOGGED:
+                print(f"默认配置文件不存在: {default_path}")
+                _DEFAULT_PRESET_LOGGED = True
+    except Exception as e:
+        # 解析失败或路径失败，记录错误并走回退
+        if not _DEFAULT_PRESET_LOGGED:
+            print(f"加载默认配置文件失败: {e}")
+            _DEFAULT_PRESET_LOGGED = True
         pass
 
     # 2) 回退到内置默认（集中唯一硬编码），避免散落默认值

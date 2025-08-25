@@ -213,7 +213,7 @@ jobs:
         $exe = Join-Path $appDir "DiVERE.exe"
         if (!(Test-Path $exe)) { Write-Error "Executable not found: $exe"; exit 1 }
         
-        echo "--- Verifying directory structure in bundle ---"
+        Write-Host "--- Verifying directory structure in bundle ---"
         $requiredDirs = @(
           "config",
           "config/colorspace",
@@ -239,7 +239,7 @@ jobs:
           Write-Error "Required directories missing in app bundle"; exit 1
         }
         
-        echo "--- Verifying file types and counts ---"
+        Write-Host "--- Verifying file types and counts ---"
         # 验证关键文件类型存在（不指定具体文件名）
         $fileChecks = @(
           @{Dir="config"; Pattern="*.json"; MinCount=1},
@@ -269,10 +269,10 @@ jobs:
         
         Write-Host "✅ Directory structure and file types verification passed."
         
-        echo "--- Listing actual files for reference ---"
+        Write-Host "--- Listing actual files for reference ---"
         foreach ($dir in $requiredDirs) {
           $fullPath = Join-Path $appDir $dir
-          Write-Host "Files in $dir:"
+          Write-Host "Files in $($dir):"
           Get-ChildItem -Path $fullPath -File | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
           Write-Host ""
         }

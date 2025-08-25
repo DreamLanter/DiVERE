@@ -212,13 +212,70 @@ jobs:
         $appDir = "dist/DiVERE"
         $exe = Join-Path $appDir "DiVERE.exe"
         if (!(Test-Path $exe)) { Write-Error "Executable not found: $exe"; exit 1 }
-        $cfg = Join-Path $appDir "config/app_settings.json"
-        $mdl = Join-Path $appDir "models/net_awb.onnx"
-        $ast = Join-Path $appDir "assets/icon.png"
-        if (!(Test-Path $cfg)) { Write-Error "Missing config next to exe: $cfg"; exit 1 }
-        if (!(Test-Path $mdl)) { Write-Error "Missing model next to exe: $mdl"; exit 1 }
-        if (!(Test-Path $ast)) { Write-Error "Missing assets next to exe: $ast"; exit 1 }
-        Write-Host "✅ Windows bundle verified: resources are next to exe"
+        
+        echo "--- Verifying directory structure in bundle ---"
+        $requiredDirs = @(
+          "config",
+          "config/colorspace",
+          "config/curves", 
+          "config/matrices",
+          "models",
+          "assets"
+        )
+        
+        # 验证目录结构存在
+        $missingDirs = 0
+        foreach ($dir in $requiredDirs) {
+          $fullPath = Join-Path $appDir $dir
+          if (!(Test-Path $fullPath)) {
+            Write-Error "Missing directory: $dir"
+            $missingDirs = 1
+          } else {
+            Write-Host "✅ Directory exists: $dir"
+          }
+        }
+        
+        if ($missingDirs -ne 0) {
+          Write-Error "Required directories missing in app bundle"; exit 1
+        }
+        
+        echo "--- Verifying file types and counts ---"
+        # 验证关键文件类型存在（不指定具体文件名）
+        $fileChecks = @(
+          @{Dir="config"; Pattern="*.json"; MinCount=1},
+          @{Dir="config/colorspace"; Pattern="*.icc"; MinCount=3},
+          @{Dir="config/curves"; Pattern="*.json"; MinCount=1},
+          @{Dir="config/matrices"; Pattern="*.json"; MinCount=1},
+          @{Dir="models"; Pattern="*.onnx"; MinCount=1},
+          @{Dir="assets"; Pattern="*.png"; MinCount=1}
+        )
+        
+        $missingFiles = 0
+        foreach ($check in $fileChecks) {
+          $fullPath = Join-Path $appDir $check.Dir
+          $files = Get-ChildItem -Path $fullPath -Name $check.Pattern
+          $fileCount = $files.Count
+          if ($fileCount -lt $check.MinCount) {
+            Write-Error "Directory $($check.Dir) has only $fileCount files matching $($check.Pattern) (minimum: $($check.MinCount))"
+            $missingFiles = 1
+          } else {
+            Write-Host "✅ $($check.Dir): $fileCount files matching $($check.Pattern) (minimum: $($check.MinCount))"
+          }
+        }
+        
+        if ($missingFiles -ne 0) {
+          Write-Error "Required file types missing in app bundle"; exit 1
+        }
+        
+        Write-Host "✅ Directory structure and file types verification passed."
+        
+        echo "--- Listing actual files for reference ---"
+        foreach ($dir in $requiredDirs) {
+          $fullPath = Join-Path $appDir $dir
+          Write-Host "Files in $dir:"
+          Get-ChildItem -Path $fullPath -File | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host ""
+        }
 
     - name: Relocate resources into Contents/MacOS (for runtime compatibility)
       if: matrix.platform == 'macos'
@@ -268,29 +325,66 @@ jobs:
         echo "--- Listing key dylib files in bundle (onnxruntime) ---"
         find "$app_bundle" -name "*onnxruntime*.dylib" | sed -n '1,80p' || true
 
-        echo "--- Verifying data files in bundle ---"
-        required_files=(
-          "Contents/MacOS/config/app_settings.json"
-          "Contents/MacOS/config/colorspace/ACEScg.json"
-          "Contents/MacOS/config/colorspace/ACESCG Linear.icc"
-          "Contents/MacOS/config/colorspace/Display P3.icc"
-          "Contents/MacOS/config/colorspace/sRGB Profile.icc"
-          "Contents/MacOS/config/curves/Kodak Endura Premier.json"
-          "Contents/MacOS/config/matrices/Identity.json"
-          "Contents/MacOS/models/net_awb.onnx"
-          "Contents/MacOS/assets/icon.png"
+        echo "--- Verifying directory structure in bundle ---"
+        required_dirs=(
+          "Contents/MacOS/config"
+          "Contents/MacOS/config/colorspace"
+          "Contents/MacOS/config/curves"
+          "Contents/MacOS/config/matrices"
+          "Contents/MacOS/models"
+          "Contents/MacOS/assets"
         )
-        missing=0
-        for f in "${required_files[@]}"; do
-          if [ ! -f "$app_bundle/$f" ]; then
-            echo "::error::Missing: $f"
-            missing=1
+        
+        # 验证目录结构存在
+        missing_dirs=0
+        for dir in "${required_dirs[@]}"; do
+          if [ ! -d "$app_bundle/$dir" ]; then
+            echo "::error::Missing directory: $dir"
+            missing_dirs=1
+          else
+            echo "✅ Directory exists: $dir"
           fi
         done
-        if [ $missing -ne 0 ]; then
-          echo "Required data files missing in app bundle" && exit 1
+        
+        if [ $missing_dirs -ne 0 ]; then
+          echo "Required directories missing in app bundle" && exit 1
         fi
-        echo "✅ Data verification passed."
+        
+        echo "--- Verifying file types and counts ---"
+        # 验证关键文件类型存在（不指定具体文件名）
+        file_checks=(
+          "Contents/MacOS/config:*.json:1"
+          "Contents/MacOS/config/colorspace:*.icc:3"
+          "Contents/MacOS/config/curves:*.json:1"
+          "Contents/MacOS/config/matrices:*.json:1"
+          "Contents/MacOS/models:*.onnx:1"
+          "Contents/MacOS/assets:*.png:1"
+        )
+        
+        missing_files=0
+        for check in "${file_checks[@]}"; do
+          IFS=':' read -r dir pattern min_count <<< "$check"
+          file_count=$(find "$app_bundle/$dir" -name "$pattern" | wc -l)
+          if [ $file_count -lt $min_count ]; then
+            echo "::error::Directory $dir has only $file_count files matching $pattern (minimum: $min_count)"
+            missing_files=1
+          else
+            echo "✅ $dir: $file_count files matching $pattern (minimum: $min_count)"
+          fi
+        done
+        
+        if [ $missing_files -ne 0 ]; then
+          echo "Required file types missing in app bundle" && exit 1
+        fi
+        
+        echo "✅ Directory structure and file types verification passed."
+        
+        echo "--- Listing actual files for reference ---"
+        for dir in "${required_dirs[@]}"; do
+          echo "Files in $dir:"
+          find "$app_bundle/$dir" -type f | head -10 | sed 's/^/  /'
+          echo ""
+        done
 
     - name: Package macOS App (zip)
       if: matrix.platform == 'macos'

@@ -1,0 +1,82 @@
+{
+  "bundle_verification": {
+    "required_directories": [
+      "config",
+      "config/colorspace",
+      "config/curves",
+      "config/matrices",
+      "models",
+      "assets"
+    ],
+    "file_type_checks": [
+      {
+        "directory": "config",
+        "pattern": "*.json",
+        "min_count": 1,
+        "description": "主配置文件"
+      },
+      {
+        "directory": "config/colorspace",
+        "pattern": "*.icc",
+        "min_count": 3,
+        "description": "ICC色彩配置文件"
+      },
+      {
+        "directory": "config/colorspace",
+        "pattern": "*.json",
+        "min_count": 1,
+        "description": "色彩空间定义文件"
+      },
+      {
+        "directory": "config/curves",
+        "pattern": "*.json",
+        "min_count": 1,
+        "description": "预设曲线文件"
+      },
+      {
+        "directory": "config/matrices",
+        "pattern": "*.json",
+        "min_count": 1,
+        "description": "校正矩阵文件"
+      },
+      {
+        "directory": "models",
+        "pattern": "*.onnx",
+        "min_count": 1,
+        "description": "AI模型文件"
+      },
+      {
+        "directory": "assets",
+        "pattern": "*.png",
+        "min_count": 1,
+        "description": "图标和资源文件"
+      }
+    ],
+    "platform_specific": {
+      "macos": {
+        "base_path": "Contents/MacOS",
+        "icon_format": "icns"
+      },
+      "windows": {
+        "base_path": "",
+        "icon_format": "ico"
+      }
+    }
+  },
+  "dependencies": {
+    "required_packages": [
+      "PySide6",
+      "numpy",
+      "cv2",
+      "PIL",
+      "scipy",
+      "imageio",
+      "colour",
+      "onnxruntime",
+      "pyopencl",
+      "tifffile",
+      "imagecodecs",
+      "cma"
+    ]
+  }
+}

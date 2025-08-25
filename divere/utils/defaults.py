@@ -23,20 +23,46 @@ def load_default_preset() -> Preset:
 
     # 1) 尝试加载项目内默认文件（使用与 enhanced_config_manager 相同的路径解析方法）
     try:
-        from divere.utils.app_paths import get_data_dir
-        config_dir = get_data_dir("config")
-        default_path = config_dir / "defaults" / "default.json"
+        # 使用与其他配置文件相同的加载机制，支持用户配置和多路径回退
+        from divere.utils.enhanced_config_manager import enhanced_config_manager
         
-        if default_path.exists():
-            with open(default_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            _DEFAULT_PRESET_CACHE = Preset.from_dict(data)
-            return _DEFAULT_PRESET_CACHE
-        else:
-            # 如果文件不存在，记录日志（可选）
-            if not _DEFAULT_PRESET_LOGGED:
-                print(f"默认配置文件不存在: {default_path}")
-                _DEFAULT_PRESET_LOGGED = True
+        # 候选路径列表，优先级从高到低：
+        # 1. 用户配置目录中的 defaults
+        # 2. enhanced_config_manager 的 app_config_dir
+        # 3. 原始 get_data_dir 方法
+        candidate_paths = []
+        
+        # 用户配置目录中的 defaults（最高优先级）
+        user_defaults_dir = enhanced_config_manager.user_config_dir / "config" / "defaults"
+        user_default_path = user_defaults_dir / "default.json"
+        candidate_paths.append(user_default_path)
+        
+        # enhanced_config_manager 的 app_config_dir
+        app_defaults_dir = enhanced_config_manager.app_config_dir / "defaults"
+        app_default_path = app_defaults_dir / "default.json"
+        candidate_paths.append(app_default_path)
+        
+        # 原始方法作为回退
+        try:
+            from divere.utils.app_paths import get_data_dir
+            config_dir = get_data_dir("config")
+            fallback_path = config_dir / "defaults" / "default.json"
+            candidate_paths.append(fallback_path)
+        except Exception:
+            pass
+        
+        # 尝试每个候选路径
+        for default_path in candidate_paths:
+            if default_path.exists():
+                with open(default_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                _DEFAULT_PRESET_CACHE = Preset.from_dict(data)
+                return _DEFAULT_PRESET_CACHE
+        
+        # 如果没有找到任何文件，记录日志
+        if not _DEFAULT_PRESET_LOGGED:
+            print(f"默认配置文件不存在，尝试的路径: {[str(p) for p in candidate_paths]}")
+            _DEFAULT_PRESET_LOGGED = True
     except Exception as e:
         # 解析失败或路径失败，记录错误并走回退
         if not _DEFAULT_PRESET_LOGGED:

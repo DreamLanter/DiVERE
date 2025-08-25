@@ -4,17 +4,41 @@
     "type": "single",
     "metadata": {
       "raw_file": "Portra400鲜艳街头.tif",
-      "orientation": 0
+      "orientation": 0,
+      "crop": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ]
     },
     "idt": {
-      "name": "",
-      "gamma": 1.0
+      "name": "CCFLGeneric_Linear",
+      "gamma": 1.0,
+      "white": {
+        "x": 0.3127,
+        "y": 0.329
+      },
+      "primitives": {
+        "r": {
+          "x": 0.64,
+          "y": 0.33
+        },
+        "g": {
+          "x": 0.21,
+          "y": 0.71
+        },
+        "b": {
+          "x": 0.15,
+          "y": 0.06
+        }
+      }
     },
     "cc_params": {
-      "density_gamma": 2.6,
-      "density_dmax": 2.07,
+      "density_gamma": 1.0,
+      "density_dmax": 2.5,
       "rgb_gains": [
-        0.5,
+        0.65,
         0.0,
         0.0
       ],
@@ -22,24 +46,24 @@
         "name": "Cineon_States_M_to_Print_Density",
         "values": [
           [
-            1.019700050354004,
-            0.031700000166893005,
-            0.009100000374019146
+            1.0197,
+            0.0317,
+            0.0091
           ],
           [
-            -0.005200000014156103,
-            0.8932999968528748,
-            0.05209999904036522
+            -0.0052,
+            0.8933,
+            0.0521
           ],
           [
-            0.013100000098347664,
-            -0.0010999999940395355,
-            0.9711999893188477
+            0.0131,
+            -0.0011,
+            0.9712
           ]
         ]
       },
       "density_curve": {
-        "name": "custom",
+        "name": "Kodak Endura Premier",
         "points": {
           "rgb": [
             [

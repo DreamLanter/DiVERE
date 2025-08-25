@@ -503,54 +503,113 @@ class PreviewWidget(QWidget):
         self.cc_corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
     def _draw_colorchecker_overlay(self, painter: QPainter):
+        """绘制色卡选择器的UI覆盖层：边框、角点、网格等"""
         if not (self.cc_enabled and self.cc_corners):
             return
+        
+        # 绘制边框和角点
         pts = [QPointF(*p) for p in self.cc_corners]
         painter.setPen(QPen(QColor(255, 255, 0, 220), 2))
         painter.setBrush(Qt.NoBrush)
+        
+        # 绘制边框线条
         for i in range(4):
             painter.drawLine(pts[i], pts[(i+1)%4])
-        painter.setBrush(QColor(255,255,0,200))
+        
+        # 绘制角点标记
+        painter.setBrush(QColor(255, 255, 0, 200))
         for p in pts:
             painter.drawEllipse(p, 5, 5)
+        
+        # 绘制4x6色块网格（内嵌参考色块）
+        self._draw_colorchecker_grid(painter)
+        
+        # 可选：绘制参考色块
+        if self.cc_ref_qcolors:
+            self._draw_reference_colors(painter)
 
-        # 绘制网格与采样框
-        import numpy as np
-        import cv2
-        src = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.float32)
-        # cc_corners 始终存储在当前原图坐标系（考虑到旋转已同步）
-        dst = np.array(self.cc_corners, dtype=np.float32)
-        H = cv2.getPerspectiveTransform(src, dst)
-        margin = 0.18
-        xyz_list = []
-        for r in range(4):
-            for c in range(6):
-                gx0 = c/6.0; gx1=(c+1)/6.0
-                gy0 = r/4.0; gy1=(r+1)/4.0
-                sx0 = gx0 + margin*(gx1-gx0)
-                sx1 = gx1 - margin*(gx1-gx0)
-                sy0 = gy0 + margin*(gy1-gy0)
-                sy1 = gy1 - margin*(gy1-gy0)
-                rect = np.array([[sx0,sy0],[sx1,sy0],[sx1,sy1],[sx0,sy1]], dtype=np.float32)
-                rect_h = np.hstack([rect, np.ones((4,1), dtype=np.float32)])
-                poly = (H @ rect_h.T).T
-                poly = poly[:,:2] / poly[:,2:3]
-                poly_int = np.round(poly).astype(np.int32)
-                mask = np.zeros((H_img, W_img), dtype=np.uint8)
-                cv2.fillPoly(mask, [poly_int], 255)
-                m = mask.astype(bool)
-                if not np.any(m):
-                    rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                else:
-                    rgb = arr[m].reshape(-1, arr.shape[2]).mean(axis=0)
-                # 假设预览为 DisplayP3
-                try:
-                    cs = RGB_COLOURSPACES.get('Display P3')
-                    XYZ = RGB_to_XYZ(rgb, cs.whitepoint, cs.whitepoint, cs.matrix_RGB_to_XYZ)
-                except Exception:
-                    XYZ = rgb
-                xyz_list.append(XYZ.astype(np.float32))
-        return np.stack(xyz_list, axis=0)
+    def _draw_colorchecker_grid(self, painter: QPainter):
+        """绘制4x6色块网格，内嵌参考色块"""
+        if not self.cc_corners or not self.current_image or not self.current_image.array is not None:
+            return
+        
+        try:
+            import numpy as np
+            import cv2
+            
+            # 获取图像尺寸
+            h, w = self.current_image.array.shape[:2]
+            
+            # 计算透视变换矩阵
+            src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+            dst = np.array(self.cc_corners, dtype=np.float32)
+            H = cv2.getPerspectiveTransform(src, dst)
+            
+            # 网格参数
+            margin = 0.18  # 色块边距
+            grid_color = QColor(255, 255, 0, 150)  # 半透明黄色，稍微透明以便看到参考色块
+            painter.setPen(QPen(grid_color, 1))
+            painter.setBrush(Qt.NoBrush)
+            
+            # 绘制4x6网格，内嵌参考色块
+            for r in range(4):
+                for c in range(6):
+                    # 计算色块在归一化坐标系中的位置
+                    gx0 = c / 6.0
+                    gx1 = (c + 1) / 6.0
+                    gy0 = r / 4.0
+                    gy1 = (r + 1) / 4.0
+                    
+                    # 应用边距
+                    sx0 = gx0 + margin * (gx1 - gx0)
+                    sx1 = gx1 - margin * (gx1 - gx0)
+                    sy0 = gy0 + margin * (gy1 - gy0)
+                    sy1 = gy1 - margin * (gy1 - gy0)
+                    
+                    # 变换到图像坐标系
+                    rect = np.array([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]], dtype=np.float32)
+                    rect_h = np.hstack([rect, np.ones((4, 1), dtype=np.float32)])
+                    poly = (H @ rect_h.T).T
+                    poly = poly[:, :2] / poly[:, 2:3]
+                    
+                    # 转换为QPointF
+                    qpoly = [QPointF(float(x), float(y)) for x, y in poly]
+                    
+                    # 先绘制参考色块（如果可用）
+                    if self.cc_ref_qcolors:
+                        idx = r * 6 + c
+                        if idx < len(self.cc_ref_qcolors):
+                            ref_color = self.cc_ref_qcolors[idx]
+                            # 使用不透明的参考色块，比网格小一点
+                            painter.setBrush(QColor(ref_color.red(), ref_color.green(), ref_color.blue(), 255))
+                            # 缩小参考色块，留出网格边距
+                            inner_margin = 0.25  # 参考色块比网格小25%
+                            inner_sx0 = sx0 + inner_margin * (sx1 - sx0)
+                            inner_sx1 = sx1 - inner_margin * (sx1 - sx0)
+                            inner_sy0 = sy0 + inner_margin * (sy1 - sy0)
+                            inner_sy1 = sy1 - inner_margin * (sy1 - sy0)
+                            
+                            # 计算内缩后的多边形
+                            inner_rect = np.array([[inner_sx0, inner_sy0], [inner_sx1, inner_sy0], [inner_sx1, inner_sy1], [inner_sx0, inner_sy1]], dtype=np.float32)
+                            inner_rect_h = np.hstack([inner_rect, np.ones((4, 1), dtype=np.float32)])
+                            inner_poly = (H @ inner_rect_h.T).T
+                            inner_poly = inner_poly[:, :2] / inner_poly[:, 2:3]
+                            
+                            # 绘制内缩的参考色块（无边框）
+                            inner_qpoly = [QPointF(float(x), float(y)) for x, y in inner_poly]
+                            painter.setPen(Qt.NoPen)  # 移除边框
+                            painter.drawPolygon(inner_qpoly)
+                    
+                    # 再绘制网格线（确保在参考色块之上）
+                    painter.setBrush(Qt.NoBrush)
+                    painter.setPen(QPen(grid_color, 1))  # 恢复网格线绘制
+                    painter.drawPolygon(qpoly)
+                        
+        except Exception as e:
+            print(f"绘制色卡网格失败: {e}")
+            pass
+
+
 
     def _ensure_cc_reference_colors(self):
         """生成24个参考颜色（QColor，按A1..D6），以 Display P3 显示。"""
@@ -1559,48 +1618,102 @@ class PreviewWidget(QWidget):
         """读取当前色卡选择器24块的平均颜色（XYZ），返回 ndarray (24, 3)。行序为4行x6列。"""
         if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
             return None
-        import numpy as np
-        import cv2
-        from colour import RGB_COLOURSPACES, RGB_to_XYZ
-        arr = self.current_image.array
-        if arr.dtype == np.uint8:
-            arr = arr.astype(np.float32) / 255.0
-        else:
-            arr = np.clip(arr, 0.0, 1.0).astype(np.float32)
-        H_img, W_img = arr.shape[:2]
-        src = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.float32)
-        dst = np.array(self.cc_corners, dtype=np.float32)
-        H = cv2.getPerspectiveTransform(src, dst)
-        margin = 0.18
-        xyz_list = []
-        for r in range(4):
-            for c in range(6):
-                gx0 = c/6.0; gx1=(c+1)/6.0
-                gy0 = r/4.0; gy1=(r+1)/4.0
-                sx0 = gx0 + margin*(gx1-gx0)
-                sx1 = gx1 - margin*(gx1-gx0)
-                sy0 = gy0 + margin*(gy1-gy0)
-                sy1 = gy1 - margin*(gy1-gy0)
-                rect = np.array([[sx0,sy0],[sx1,sy0],[sx1,sy1],[sx0,sy1]], dtype=np.float32)
-                rect_h = np.hstack([rect, np.ones((4,1), dtype=np.float32)])
-                poly = (H @ rect_h.T).T
-                poly = poly[:,:2] / poly[:,2:3]
-                poly_int = np.round(poly).astype(np.int32)
-                mask = np.zeros((H_img, W_img), dtype=np.uint8)
-                cv2.fillPoly(mask, [poly_int], 255)
-                m = mask.astype(bool)
-                if not np.any(m):
-                    rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                else:
-                    rgb = arr[m].reshape(-1, arr.shape[2]).mean(axis=0)
-                # 假设预览为 DisplayP3
+        
+        try:
+            # 使用新的提取方法获取RGB值
+            rgb_array = self._extract_colorchecker_patches()
+            if rgb_array is None:
+                return None
+            
+            # 转换为XYZ
+            from colour import RGB_COLOURSPACES, RGB_to_XYZ
+            xyz_list = []
+            
+            for rgb in rgb_array:
                 try:
+                    # 假设预览为 DisplayP3
                     cs = RGB_COLOURSPACES.get('Display P3')
                     XYZ = RGB_to_XYZ(rgb, cs.whitepoint, cs.whitepoint, cs.matrix_RGB_to_XYZ)
                 except Exception:
+                    # 如果转换失败，使用原始RGB值
                     XYZ = rgb
+                
                 xyz_list.append(XYZ.astype(np.float32))
-        return np.stack(xyz_list, axis=0)
+            
+            return np.stack(xyz_list, axis=0)
+            
+        except Exception as e:
+            print(f"读取色卡XYZ失败: {e}")
+            return None
+
+    def _extract_colorchecker_patches(self):
+        """提取色卡选择器中的24个色块数据，返回RGB值数组"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return None
+        
+        try:
+            import numpy as np
+            import cv2
+            
+            # 获取图像数组
+            arr = self.current_image.array
+            if arr.dtype == np.uint8:
+                arr = arr.astype(np.float32) / 255.0
+            else:
+                arr = np.clip(arr, 0.0, 1.0).astype(np.float32)
+            
+            # 获取图像尺寸
+            H_img, W_img = arr.shape[:2]
+            
+            # 计算透视变换矩阵
+            src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+            dst = np.array(self.cc_corners, dtype=np.float32)
+            H = cv2.getPerspectiveTransform(src, dst)
+            
+            # 色块参数
+            margin = 0.18
+            rgb_list = []
+            
+            # 提取4x6色块
+            for r in range(4):
+                for c in range(6):
+                    # 计算色块在归一化坐标系中的位置
+                    gx0 = c / 6.0
+                    gx1 = (c + 1) / 6.0
+                    gy0 = r / 4.0
+                    gy1 = (r + 1) / 4.0
+                    
+                    # 应用边距
+                    sx0 = gx0 + margin * (gx1 - gx0)
+                    sx1 = gx1 - margin * (gx1 - gx0)
+                    sy0 = gy0 + margin * (gy1 - gy0)
+                    sy1 = gy1 - margin * (gy1 - gy0)
+                    
+                    # 变换到图像坐标系
+                    rect = np.array([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]], dtype=np.float32)
+                    rect_h = np.hstack([rect, np.ones((4, 1), dtype=np.float32)])
+                    poly = (H @ rect_h.T).T
+                    poly = poly[:, :2] / poly[:, 2:3]
+                    
+                    # 转换为整数坐标并创建掩码
+                    poly_int = np.round(poly).astype(np.int32)
+                    mask = np.zeros((H_img, W_img), dtype=np.uint8)
+                    cv2.fillPoly(mask, [poly_int], 255)
+                    
+                    # 提取色块的平均RGB值
+                    m = mask.astype(bool)
+                    if not np.any(m):
+                        rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                    else:
+                        rgb = arr[m].reshape(-1, arr.shape[2]).mean(axis=0)
+                    
+                    rgb_list.append(rgb.astype(np.float32))
+            
+            return np.stack(rgb_list, axis=0)
+            
+        except Exception as e:
+            print(f"提取色卡色块失败: {e}")
+            return None
 
     # ===== 旋转锚点支持 =====
     def prepare_rotate(self, direction: int):

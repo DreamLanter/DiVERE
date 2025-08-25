@@ -125,6 +125,44 @@ class ApplicationContext(QObject):
         # 默认曲线改由 default preset 决定；此处不再强行加载硬编码曲线
             
         return params
+    
+    def _load_smart_default_preset(self, file_path: str):
+        """使用智能预设加载器加载默认预设"""
+        try:
+            from divere.utils.smart_preset_loader import SmartPresetLoader
+            loader = SmartPresetLoader()
+            preset = loader.get_smart_default_preset(file_path)
+            
+            if preset:
+                self.load_preset(preset)
+                self.status_message_changed.emit(f"已应用智能分类默认设置")
+            else:
+                # 回退到通用默认
+                self._load_generic_default_preset()
+                
+        except Exception as e:
+            # 回退到通用默认
+            self._load_generic_default_preset()
+            self.status_message_changed.emit(f"智能分类失败，已应用通用默认设置: {e}")
+    
+    def _load_generic_default_preset(self):
+        """加载通用默认预设"""
+        try:
+            from divere.utils.path_manager import get_default_preset_path
+            default_preset_path = get_default_preset_path("default.json")
+            if default_preset_path:
+                with open(default_preset_path, "r", encoding="utf-8") as f:
+                    import json
+                    data = json.load(f)
+                    from divere.core.data_types import Preset
+                    preset = Preset.from_dict(data)
+                    self.load_preset(preset)
+            else:
+                raise FileNotFoundError("找不到默认预设文件")
+        except Exception:
+            self._current_params = self._create_default_params()
+            self._contactsheet_params = self._current_params.copy()
+            self.params_changed.emit(self._current_params)
 
     # =================
     # 属性访问器 (Getters)
@@ -313,7 +351,19 @@ class ApplicationContext(QObject):
             # 参数集
             params = self._per_crop_params.get(crop_id)
             if params is None:
-                params = self._contactsheet_params.copy()
+                # 优先继承接触印像设置
+                if self._contactsheet_params:
+                    params = self._contactsheet_params.copy()
+                else:
+                    # 没有接触印像设置时，使用智能分类默认
+                    if self._current_image:
+                        self._load_smart_default_preset(self._current_image.file_path)
+                        params = self._current_params.copy()
+                    else:
+                        # 没有图像时，使用通用默认
+                        self._load_generic_default_preset()
+                        params = self._current_params.copy()
+                
                 self._per_crop_params[crop_id] = params
             self._current_params = params.copy()
             # 使用该裁剪的 orientation
@@ -558,16 +608,20 @@ class ApplicationContext(QObject):
                         pass
                     self._prepare_proxy(); self._trigger_preview_update()
                 else:
-                    # 如果没有预设，则应用集中式 default preset（而不是内部硬编码）
+                    # 如果没有预设，则使用智能分类器选择默认预设
                     try:
-                        from divere.utils.defaults import load_default_preset
-                        self.load_preset(load_default_preset())
-                        self.status_message_changed.emit("未找到预设，已应用默认预设")
-                        # 强制按默认预设重建一次预览
+                        self._load_smart_default_preset(file_path)
+                        # 强制按智能默认预设重建一次预览
                         self._prepare_proxy(); self._trigger_preview_update()
                     except Exception:
-                        self.reset_params()
-                        self.status_message_changed.emit("未找到预设，已应用默认参数（回退）")
+                        # 智能分类失败时，回退到通用默认
+                        try:
+                            self._load_generic_default_preset()
+                            self.status_message_changed.emit("未找到预设，已应用通用默认预设")
+                            self._prepare_proxy(); self._trigger_preview_update()
+                        except Exception:
+                            self.reset_params()
+                            self.status_message_changed.emit("未找到预设，已应用默认参数（回退）")
 
             # 通知UI：图像已加载完成
             self.image_loaded.emit()
@@ -833,16 +887,33 @@ class ApplicationContext(QObject):
             self._trigger_preview_update()
 
     def reset_params(self):
-        """重置参数：优先使用 default preset；失败时回退到内部默认构造。"""
-        try:
-            from divere.utils.defaults import load_default_preset
-            self.load_preset(load_default_preset())
-            self.status_message_changed.emit("参数已重置为默认预设")
-        except Exception:
-            self._current_params = self._create_default_params()
-            self._contactsheet_params = self._current_params.copy()
-            self.params_changed.emit(self._current_params)
-            self.status_message_changed.emit("参数已重置（回退内部默认）")
+        """重置参数：根据当前图像类型选择智能默认预设"""
+        if self._current_image:
+            # 有图像时，使用智能分类器选择默认预设
+            try:
+                self._load_smart_default_preset(self._current_image.file_path)
+                self.status_message_changed.emit("参数已重置为智能分类默认预设")
+            except Exception:
+                # 智能分类失败时，回退到通用默认
+                try:
+                    from divere.utils.defaults import load_default_preset
+                    self.load_preset(load_default_preset())
+                    self.status_message_changed.emit("参数已重置为通用默认预设")
+                except Exception:
+                    self._current_params = self._create_default_params()
+                    self._contactsheet_params = self._current_params.copy()
+                    self.params_changed.emit(self._current_params)
+                    self.status_message_changed.emit("参数已重置（回退内部默认）")
+        else:
+            # 没有图像时，使用通用默认
+            try:
+                self._load_generic_default_preset()
+                self.status_message_changed.emit("参数已重置为通用默认预设")
+            except Exception:
+                self._current_params = self._create_default_params()
+                self._contactsheet_params = self._current_params.copy()
+                self.params_changed.emit(self._current_params)
+                self.status_message_changed.emit("参数已重置（回退内部默认）")
 
     def run_auto_color_correction(self, get_preview_callback):
         """执行AI自动白平衡"""
@@ -925,8 +996,6 @@ class ApplicationContext(QObject):
         if not self._current_image:
             return
         
-        
-
         # 源图（用于变换）
         src_image = self._current_image
         orig_h, orig_w = src_image.height, src_image.width
@@ -958,14 +1027,14 @@ class ApplicationContext(QObject):
                 except Exception:
                     pass
 
-        # 生成proxy和色彩空间转换
+        # === 标准变换链：Step 2 - 生成代理 ===
         proxy = self.image_manager.generate_proxy(
             src_image,
             self.the_enlarger.preview_config.get_proxy_size_tuple()
         )
-        # 在设置输入色彩空间之前，应用前置IDT Gamma（幂次变换）
-        idt_gamma = self.get_current_idt_gamma()
 
+        # === 标准变换链：Step 3 - 前置IDT Gamma（幂次变换） ===
+        idt_gamma = self.get_current_idt_gamma()
         if abs(idt_gamma - 1.0) > 1e-6 and proxy.array is not None:
             try:
                 proxy_array = self.the_enlarger.pipeline_processor.math_ops.apply_power(
@@ -975,6 +1044,7 @@ class ApplicationContext(QObject):
             except Exception:
                 pass
 
+        # === 标准变换链：Step 4 - 色彩空间转换（跳过逆伽马） ===
         proxy = self.color_space_manager.set_image_color_space(
             proxy, self._current_params.input_color_space_name
         )
@@ -982,16 +1052,7 @@ class ApplicationContext(QObject):
             proxy, skip_gamma_inverse=True
         )
 
-    def get_current_idt_gamma(self) -> float:
-        """读取当前输入色彩空间的IDT Gamma（无则返回1.0）。"""
-        try:
-            cs_name = self._current_params.input_color_space_name
-            cs_info = self.color_space_manager.get_color_space_info(cs_name) or {}
-            return float(cs_info.get("gamma", 1.0))
-        except Exception:
-            return 1.0
-        
-        # === 标准变换链：Step 2 - 旋转 ===
+        # === 标准变换链：Step 5 - 旋转 ===
         # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用全局orientation
         effective_orientation = self._current_orientation  # 默认使用全局orientation
         
@@ -1013,7 +1074,7 @@ class ApplicationContext(QObject):
             except Exception:
                 pass
         
-        # 注入裁剪可视化元数据（供PreviewWidget绘制）
+        # === 标准变换链：Step 6 - 注入裁剪可视化元数据（供PreviewWidget绘制） ===
         try:
             md = self._current_proxy.metadata
             md['source_wh'] = (int(orig_w), int(orig_h))
@@ -1026,7 +1087,7 @@ class ApplicationContext(QObject):
             else:
                 # 无正式裁剪时，传递 contactsheet 裁剪（若有）
                 md['crop_overlay'] = self._contactsheet_crop_rect
-                # 若此时处于“接触印像聚焦”，为坐标换算提供一个临时的 CropInstance
+                # 若此时处于"接触印像聚焦"，为坐标换算提供一个临时的 CropInstance
                 if self._crop_focused and self._contactsheet_crop_rect is not None:
                     try:
                         md['crop_instance'] = CropInstance(
@@ -1045,6 +1106,15 @@ class ApplicationContext(QObject):
             md['global_orientation'] = int(self._current_orientation)  # 全局orientation
         except Exception:
             pass
+
+    def get_current_idt_gamma(self) -> float:
+        """读取当前输入色彩空间的IDT Gamma（无则返回1.0）。"""
+        try:
+            cs_name = self._current_params.input_color_space_name
+            cs_info = self.color_space_manager.get_color_space_info(cs_name) or {}
+            return float(cs_info.get("gamma", 1.0))
+        except Exception:
+            return 1.0
 
     def _trigger_preview_update(self):
         if not self._current_proxy:

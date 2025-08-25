@@ -276,7 +276,7 @@ class ParameterPanel(QWidget):
         spinbox.setDecimals(2)
 
     def _connect_signals(self):
-        self.input_colorspace_combo.currentIndexChanged.connect(self._on_input_colorspace_changed)
+        self.input_colorspace_combo.currentTextChanged.connect(self._on_input_colorspace_changed)
         # IDT Gamma联动
         self.idt_gamma_slider.valueChanged.connect(self._on_idt_gamma_slider_changed)
         self.idt_gamma_spinbox.valueChanged.connect(self._on_idt_gamma_spinbox_changed)
@@ -491,32 +491,39 @@ class ParameterPanel(QWidget):
         self.parameter_changed.emit()
 
     # --- Action slots ---
-    def _on_input_colorspace_changed(self, index: int):
-        if self._is_updating_ui: return
-        space_name = self.input_colorspace_combo.itemData(index) or self.input_colorspace_combo.currentText().strip('*')
-        self.context.set_input_color_space(space_name)
-        # 同步 UCS 三角：根据选定输入空间的 primaries 刷新基色位置
+    def _on_input_colorspace_changed(self, space_name: str):
+        """当输入色彩空间改变时，更新UCS Diagram和IDT Gamma"""
         try:
-            info = self.context.color_space_manager.get_color_space_info(space_name)
-            if info and 'primaries' in info:
-                prim = np.array(info['primaries'], dtype=float)
-                coords = {
-                    'R': xy_to_uv(prim[0, 0], prim[0, 1]),
-                    'G': xy_to_uv(prim[1, 0], prim[1, 1]),
-                    'B': xy_to_uv(prim[2, 0], prim[2, 1]),
-                }
-                # set_uv_coordinates 会发出 coordinatesChanged，但不会触发参数写回
-                self.ucs_widget.set_uv_coordinates(coords)
-            # 同步IDT Gamma显示
-            try:
-                g = float((info or {}).get('gamma', 1.0))
-            except Exception:
-                g = 1.0
+            # 移除星号标记
+            clean_name = space_name.strip('*')
+            
+            # 更新IDT Gamma
+            cs_info = self.context.color_space_manager.get_color_space_info(clean_name) or {}
+            gamma = float(cs_info.get("gamma", 1.0))
+            
+            # 更新UI（避免触发信号循环）
             self._is_updating_ui = True
-            self.idt_gamma_slider.setValue(int(g * 100))
-            self.idt_gamma_spinbox.setValue(g)
+            self.idt_gamma_slider.setValue(int(gamma * 100))
+            self.idt_gamma_spinbox.setValue(gamma)
             self._is_updating_ui = False
-        except Exception:
+            
+            # 更新UCS Diagram以反映新的色彩空间基色
+            if 'primaries' in cs_info:
+                primaries = cs_info['primaries']
+                # 转换xy坐标到uv坐标
+                coords_uv = {}
+                for i, key in enumerate(['R', 'G', 'B']):
+                    if i < len(primaries):
+                        x, y = primaries[i]
+                        u, v = xy_to_uv(x, y)
+                        coords_uv[key] = (u, v)
+                
+                # 更新UCS Diagram
+                if len(coords_uv) == 3:
+                    self.ucs_widget.set_uv_coordinates(coords_uv)
+                    
+        except Exception as e:
+            print(f"更新色彩空间失败: {e}")
             pass
 
     def _on_matrix_combo_changed(self, index: int):

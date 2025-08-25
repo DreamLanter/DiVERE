@@ -1,0 +1,16 @@
+{
+  "classification_rules": [
+    {
+      "name": "Imacon扫描仪",
+      "conditions": [
+        {
+          "type": "extension",
+          "operator": "equals",
+          "value": ".fff"
+        }
+      ],
+      "default_preset": "defaults/default_imacon.json"
+    }
+  ],
+  "fallback": "defaults/default.json"
+}

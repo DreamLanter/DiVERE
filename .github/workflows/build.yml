@@ -98,7 +98,8 @@ jobs:
         python - <<'PY'
         import importlib, sys
         required = [
-          'PySide6', 'numpy', 'cv2', 'PIL', 'scipy', 'imageio', 'colour', 'onnxruntime', 'pyopencl'
+          'PySide6', 'numpy', 'cv2', 'PIL', 'scipy', 'imageio', 'colour', 'onnxruntime', 'pyopencl',
+          'tifffile', 'imagecodecs', 'cma'
         ]
         missing = []
         for m in required:
@@ -170,9 +171,14 @@ jobs:
           --collect-all onnxruntime \
           --collect-all pyopencl \
           --collect-all cupy \
+          --collect-all tifffile \
+          --collect-all imagecodecs \
           --hidden-import "scipy.interpolate" \
           --hidden-import "scipy.optimize" \
           --hidden-import "scipy.ndimage" \
+          --hidden-import "tifffile" \
+          --hidden-import "imagecodecs" \
+          --hidden-import "cma" \
           divere/__main__.py
         echo "✅ PyInstaller build completed"
 
@@ -208,8 +214,10 @@ jobs:
         if (!(Test-Path $exe)) { Write-Error "Executable not found: $exe"; exit 1 }
         $cfg = Join-Path $appDir "config/app_settings.json"
         $mdl = Join-Path $appDir "models/net_awb.onnx"
+        $ast = Join-Path $appDir "assets/icon.png"
         if (!(Test-Path $cfg)) { Write-Error "Missing config next to exe: $cfg"; exit 1 }
         if (!(Test-Path $mdl)) { Write-Error "Missing model next to exe: $mdl"; exit 1 }
+        if (!(Test-Path $ast)) { Write-Error "Missing assets next to exe: $ast"; exit 1 }
         Write-Host "✅ Windows bundle verified: resources are next to exe"
 
     - name: Relocate resources into Contents/MacOS (for runtime compatibility)
@@ -264,10 +272,13 @@ jobs:
         required_files=(
           "Contents/MacOS/config/app_settings.json"
           "Contents/MacOS/config/colorspace/ACEScg.json"
-          "Contents/MacOS/config/colorspace/Film_KodakRGB_Linear.icc"
-          "Contents/MacOS/config/curves/Kodak_Endura_Paper.json"
+          "Contents/MacOS/config/colorspace/ACESCG Linear.icc"
+          "Contents/MacOS/config/colorspace/Display P3.icc"
+          "Contents/MacOS/config/colorspace/sRGB Profile.icc"
+          "Contents/MacOS/config/curves/Kodak Endura Premier.json"
           "Contents/MacOS/config/matrices/Identity.json"
           "Contents/MacOS/models/net_awb.onnx"
+          "Contents/MacOS/assets/icon.png"
         )
         missing=0
         for f in "${required_files[@]}"; do

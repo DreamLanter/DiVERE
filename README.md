@@ -1,6 +1,6 @@
 # DiVERE - 胶片校色工具
 
-[![Python](https://img.shields.io/badge/Python-3.9~3.11-blue.svg)](https://www.python.org/downloads/) ![Version](https://img.shields.io/badge/Version-v0.1.10-orange)
+[![Python](https://img.shields.io/badge/Python-3.9~3.11-blue.svg)](https://www.python.org/downloads/) ![Version](https://img.shields.io/badge/Version-v0.1.27-orange)
 [![PySide6](https://img.shields.io/badge/PySide6-6.5+-green.svg)](https://pypi.org/project/PySide6/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -43,7 +43,7 @@ pip install -r requirements.txt
 pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders
 
 # 如需 OpenCL（可选）
-# pip install pyopencl
+# pip install pyopencl  # 已在 requirements.txt 中包含
 
 # 运行应用
 python -m divere
@@ -96,10 +96,13 @@ numpy>=1.24.0           # 数值计算
 opencv-python>=4.8.0    # 图像处理
 pillow>=10.0.0          # 图像I/O
 scipy>=1.11.0           # 科学计算
- imageio>=2.31.0         # 图像格式支持
+imageio>=2.31.0         # 图像格式支持
 colour-science>=0.4.2   # 色彩科学计算
-scikit-learn>=1.3.0     # 算法/工具（KMeans等）
-onnxruntime>=1.15.0     # ONNX 推理（自动校色）
+onnxruntime>=1.15.0     # ONNX推理（AI自动校色）
+pyopencl>=2024.1        # GPU加速计算
+tifffile>=2024.2.12     # 高级TIFF处理（ICC支持）
+imagecodecs>=2024.1.1   # TIFF压缩编解码器
+cma>=3.3.0              # CMA-ES优化器（CCM参数优化）
 ```
 
 - 可选（GPU 加速）
@@ -111,16 +114,7 @@ onnxruntime>=1.15.0     # ONNX 推理（自动校色）
 - JPEG：使用 Pillow 保存并嵌入 ICC。
 - TIFF：使用 `tifffile` 写入 16-bit/多通道，并通过 tag 34675 写入 ICC（默认 LZW 压缩）。
 
-注：LZW 压缩依赖 `imagecodecs`，已在 requirements.txt 中包含；若遇到报错提示需要安装 `imagecodecs`，请执行：
-```bash
-pip install -r requirements.txt
-```
-
-安装 `tifffile`：
-
-```bash
-pip install -r requirements.txt  # 已包含 tifffile 依赖
-```
+注：TIFF 的 LZW 压缩和 ICC 嵌入功能依赖 `tifffile` 和 `imagecodecs`，已在 requirements.txt 中包含。这些包是必需的，确保 TIFF 导出功能正常工作。
 
 ICC 存放位置：`divere/config/colorspace/icc/`
 
@@ -235,6 +229,7 @@ enlarger = TheEnlarger(preview_config=cfg)
 ```bash
 pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders
 ```
+- OpenCL 已在 requirements.txt 中包含，无需额外安装
 导出默认仍走 CPU/Metal 全精度公式路径，且开启分块以降低内存峰值。
 
 ## 📁 项目结构
@@ -264,8 +259,8 @@ DiVERE/
 │   ├── colorspace/          # 色彩空间配置
 │   ├── curves/              # 预设曲线
 │   └── matrices/            # 校正矩阵
-├── requirements.txt         # Python依赖
-├── pyproject.toml           # 项目配置
+├── requirements.txt         # Python依赖包列表
+├── pyproject.toml           # Poetry项目配置
 └── README.md                # 项目文档
 ```
 

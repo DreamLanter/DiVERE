@@ -1,17 +1,35 @@
+# DiVERE 胶片校色工具 - 核心依赖包
+# 版本要求与 pyproject.toml 保持一致
+
 # 核心依赖
-PySide6>=6.5.0
-numpy>=1.24.0
-opencv-python>=4.8.0
-pillow>=10.0.0
-scipy>=1.11.0
-imageio>=2.31.0
-colour-science>=0.4.2
-pyopencl>=2024.1
-tifffile>=2024.2.12
-imagecodecs>=2024.1.1
+PySide6>=6.5.0          # GUI框架
+numpy>=1.24.0            # 数值计算
+opencv-python>=4.8.0     # 图像处理
+pillow>=10.0.0           # 图像I/O
+scipy>=1.11.0            # 科学计算
+imageio>=2.31.0          # 图像格式支持
+colour-science>=0.4.2    # 色彩科学计算
+onnxruntime>=1.15.0      # ONNX推理（AI自动校色）
+pyopencl>=2024.1         # GPU加速计算
 
-# CMA-ES 优化器
-cma>=3.3.0
+# TIFF 格式支持（ICC配置文件嵌入）
+tifffile>=2024.2.12      # 高级TIFF处理
+imagecodecs>=2024.1.1    # tifffile的压缩编解码器支持
 
-# AI功能依赖
-onnxruntime>=1.15.0
+# 优化算法
+cma>=3.3.0               # CMA-ES优化器（CCM参数优化）
+
+# 可选GPU加速依赖（根据需要安装）
+# macOS Metal加速
+# pyobjc-framework-Metal
+# pyobjc-framework-MetalPerformanceShaders
+
+# CUDA加速（NVIDIA显卡）
+# cupy-cuda11x  # 按CUDA版本选择
+
+# 开发依赖（可选）
+# pytest>=7.4.0
+# black>=23.7.0
+# isort>=5.12.0
+# flake8>=6.0.0
+# mypy>=1.5.0

@@ -298,6 +298,14 @@ class MainWindow(QMainWindow):
         estimate_film_action = QAction("估算胶片类型", self)
         estimate_film_action.triggered.connect(self._estimate_film_type)
         tools_menu.addAction(estimate_film_action)
+        
+        tools_menu.addSeparator()
+        
+        # 文件分类规则管理器
+        file_classification_action = QAction("文件分类规则管理器", self)
+        file_classification_action.setToolTip("管理文件分类规则和默认预设文件")
+        file_classification_action.triggered.connect(self._open_file_classification_manager)
+        tools_menu.addAction(file_classification_action)
 
         # 配置管理
         tools_menu.addSeparator()
@@ -1261,6 +1269,14 @@ class MainWindow(QMainWindow):
             pass # Placeholder for actual estimation logic
         except Exception as e:
             QMessageBox.critical(self, "错误", f"估算胶片类型失败: {str(e)}")
+    
+    def _open_file_classification_manager(self):
+        """打开文件分类规则管理器"""
+        try:
+            from divere.standalone_tools.launcher import launch_file_classification_manager
+            self.file_classification_manager = launch_file_classification_manager(self)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法打开文件分类规则管理器: {str(e)}")
     
     def _show_about(self):
         """显示关于对话框"""

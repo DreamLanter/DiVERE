@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
         # 左侧参数面板
         self.parameter_panel = ParameterPanel(self.context)
         self.parameter_panel.parameter_changed.connect(self.on_parameter_changed)
+        self.parameter_panel.input_colorspace_changed.connect(self.on_input_colorspace_changed)
         parameter_dock = QDockWidget("调色参数", self)
         parameter_dock.setWidget(self.parameter_panel)
         parameter_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -324,6 +325,11 @@ class MainWindow(QMainWindow):
         profiling_action.setCheckable(True)
         profiling_action.toggled.connect(self._toggle_profiling)
         tools_menu.addAction(profiling_action)
+        
+        # LUT数学一致性验证
+        lut_test_action = QAction("测试LUT数学一致性", self)
+        lut_test_action.triggered.connect(self._test_lut_chain_consistency)
+        tools_menu.addAction(lut_test_action)
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
@@ -1487,6 +1493,10 @@ class MainWindow(QMainWindow):
         """参数改变时的回调"""
         new_params = self.parameter_panel.get_current_params()
         self.context.update_params(new_params)
+    
+    def on_input_colorspace_changed(self, space_name: str):
+        """输入色彩空间改变时的回调 - 需要特殊处理以重建代理"""
+        self.context.set_input_color_space(space_name)
 
     def get_current_params(self) -> ColorGradingParams:
         """获取当前调色参数"""
@@ -1528,36 +1538,28 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"LUT导出失败: {e}")
     
     def _export_input_transform_lut(self, params, file_path: str, size: int) -> bool:
-        """导出输入设备转换LUT (3D)"""
+        """导出输入设备转换LUT (3D) - 包含IDT Gamma + 色彩空间转换"""
         try:
             from divere.utils.lut_generator.interface import DiVERELUTInterface
             
-            # 创建仅包含输入转换的简化参数
-            input_params = params.copy()
-            # 禁用所有后续处理步骤，只保留输入色彩空间转换
-            input_params.enable_density_inversion = False
-            input_params.enable_density_matrix = False
-            input_params.enable_rgb_gains = False
-            input_params.enable_density_curve = False
-            # 重置所有处理参数为默认值
-            input_params.density_gamma = 1.0
-            input_params.density_dmax = 0.0
-            input_params.rgb_gains = (0.0, 0.0, 0.0)
-            input_params.curve_points = [(0.0, 0.0), (1.0, 1.0)]
-            input_params.curve_points_r = [(0.0, 0.0), (1.0, 1.0)]
-            input_params.curve_points_g = [(0.0, 0.0), (1.0, 1.0)]
-            input_params.curve_points_b = [(0.0, 0.0), (1.0, 1.0)]
+            # 获取当前IDT Gamma值
+            try:
+                cs_name = self.context.get_input_color_space()
+                cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
+                idt_gamma = float(cs_info.get("gamma", 1.0))
+            except Exception:
+                idt_gamma = 1.0
             
-            # 管线配置
-            pipeline_config = {
-                "params": input_params,
+            # 创建专门的输入设备转换配置
+            idt_config = {
+                "idt_gamma": idt_gamma,
                 "context": self.context,
-                "the_enlarger": self.context.the_enlarger
+                "input_colorspace_name": params.input_color_space_name
             }
             
             lut_interface = DiVERELUTInterface()
-            return lut_interface.generate_pipeline_lut(
-                pipeline_config, file_path, "3D", size
+            return lut_interface.generate_input_device_transform_lut(
+                idt_config, file_path, size
             )
             
         except Exception as e:
@@ -1594,7 +1596,7 @@ class MainWindow(QMainWindow):
             return False
     
     def _export_density_curve_lut(self, params, file_path: str, size: int) -> bool:
-        """导出密度曲线LUT (1D)"""
+        """导出密度曲线LUT (1D) - 在密度空间应用曲线"""
         try:
             from divere.utils.lut_generator.interface import DiVERELUTInterface
             
@@ -1609,13 +1611,51 @@ class MainWindow(QMainWindow):
             if params.curve_points and params.curve_points != [(0.0, 0.0), (1.0, 1.0)]:
                 curves['R'] = curves['G'] = curves['B'] = params.curve_points
             
-            # 直接使用 generate_curve_lut 方法
+            # 使用密度曲线专用方法
             lut_interface = DiVERELUTInterface()
-            return lut_interface.generate_curve_lut(curves, file_path, size)
+            return lut_interface.generate_density_curve_lut(curves, file_path, size)
             
         except Exception as e:
             print(f"导出密度曲线LUT失败: {e}")
             return False
+    
+    def _test_lut_chain_consistency(self) -> None:
+        """测试三个LUT串联的数学一致性（调试功能）"""
+        try:
+            from divere.utils.lut_generator.interface import DiVERELUTInterface
+            
+            params = self.context.get_current_params()
+            lut_interface = DiVERELUTInterface()
+            
+            # 验证数学一致性（使用小样本快速测试）
+            stats = lut_interface.validate_lut_chain_consistency(
+                self.context, params, "", "", "", test_samples=50
+            )
+            
+            if 'error' in stats:
+                print(f"LUT链验证出错: {stats['error']}")
+                return
+                
+            print("=== LUT链数学一致性验证结果 ===")
+            print(f"测试样本数: {stats['samples_tested']}")
+            print(f"最大绝对误差: {stats['max_abs_error']:.6f}")
+            print(f"平均绝对误差: {stats['mean_abs_error']:.6f}")
+            print(f"最大相对误差: {stats['max_rel_error']:.6f}")
+            print(f"平均相对误差: {stats['mean_rel_error']:.6f}")
+            print(f"RMSE: {stats['rmse']:.6f}")
+            
+            # 简单判断数学一致性
+            if stats['max_abs_error'] < 1e-3 and stats['mean_abs_error'] < 1e-4:
+                print("✅ 数学一致性良好！")
+                self.statusBar().showMessage("LUT链数学一致性验证通过")
+            else:
+                print("⚠️ 检测到数学不一致，可能需要进一步调试")
+                self.statusBar().showMessage("LUT链存在数学不一致问题")
+                
+        except Exception as e:
+            print(f"LUT一致性测试失败: {e}")
+            import traceback
+            traceback.print_exc()
         
 # 移除 Worker 相关类定义
 # class _PreviewWorkerSignals(QObject): ...

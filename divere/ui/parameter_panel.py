@@ -30,6 +30,7 @@ class ParameterPanel(QWidget):
     parameter_changed = Signal()
     auto_color_requested = Signal()
     auto_color_iterative_requested = Signal()
+    input_colorspace_changed = Signal(str)
 
     # Signals for complex actions requiring coordination
     ccm_optimize_requested = Signal()
@@ -102,7 +103,8 @@ class ParameterPanel(QWidget):
         colorspace_layout.addWidget(self.idt_gamma_spinbox, 0, 2)
         self.input_colorspace_combo = QComboBox()
         spaces = self.context.color_space_manager.get_available_color_spaces()
-        self.input_colorspace_combo.addItems(spaces)
+        for space in spaces:
+            self.input_colorspace_combo.addItem(space, space)
         colorspace_layout.addWidget(QLabel("色彩空间:"), 1, 0)
         colorspace_layout.addWidget(self.input_colorspace_combo, 1, 1, 1, 2)
         layout.addWidget(colorspace_group)
@@ -564,6 +566,10 @@ class ParameterPanel(QWidget):
         except Exception as e:
             print(f"更新色彩空间失败: {e}")
             pass
+        
+        # 发出色彩空间特定变更信号，触发专用处理路径
+        clean_name = space_name.strip('*')
+        self.input_colorspace_changed.emit(clean_name)
 
     def _on_matrix_combo_changed(self, index: int):
         if self._is_updating_ui: return

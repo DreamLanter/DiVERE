@@ -2,7 +2,7 @@
   "name": "单位矩阵",
   "description": "不进行任何校正的单位矩阵",
   "film_type": "generic",
-  "matrix_space": "linear",
+  "matrix_space": "density",
   "matrix": [
     [
       1.0,

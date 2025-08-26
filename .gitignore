@@ -124,3 +124,6 @@ test_*.py
 
 # Release helper script
 release.sh
+
+# Claude file
+CLAUDE.md

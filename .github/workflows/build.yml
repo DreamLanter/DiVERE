@@ -201,7 +201,7 @@ jobs:
         if (!(Test-Path $mdl)) { New-Item -ItemType Directory -Path $mdl | Out-Null }
         if (!(Test-Path $ast)) { New-Item -ItemType Directory -Path $ast | Out-Null }
         # Copy from repo if PyInstaller didn't place them
-        Copy-Item -Recurse -Force "divere/config/*" $cfg 2>$null
+        Copy-Item -Recurse -Force "divere/config/*" $cfg -ErrorAction SilentlyContinue
         Copy-Item -Recurse -Force "divere/models/*" $mdl 2>$null
         Copy-Item -Recurse -Force "divere/assets/*" $ast 2>$null
 
@@ -243,7 +243,7 @@ jobs:
         # 验证关键文件类型存在（不指定具体文件名）
         $fileChecks = @(
           @{Dir="config"; Pattern="*.json"; MinCount=1},
-          @{Dir="config/colorspace"; Pattern="*.icc"; MinCount=3},
+          @{Dir="config/colorspace/icc"; Pattern="*.icc"; MinCount=3},
           @{Dir="config/curves"; Pattern="*.json"; MinCount=1},
           @{Dir="config/matrices"; Pattern="*.json"; MinCount=1},
           @{Dir="models"; Pattern="*.onnx"; MinCount=1},
@@ -354,7 +354,7 @@ jobs:
         # 验证关键文件类型存在（不指定具体文件名）
         file_checks=(
           "Contents/MacOS/config:*.json:1"
-          "Contents/MacOS/config/colorspace:*.icc:3"
+          "Contents/MacOS/config/colorspace/icc:*.icc:3"
           "Contents/MacOS/config/curves:*.json:1"
           "Contents/MacOS/config/matrices:*.json:1"
           "Contents/MacOS/models:*.onnx:1"

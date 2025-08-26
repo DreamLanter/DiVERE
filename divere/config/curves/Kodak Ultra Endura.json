@@ -3,6 +3,16 @@
   "description": "Kodak ultra endura e4044 2010",
   "version": 1,
   "curves": {
+    "RGB": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
     "R": [
       [
         0.408501818765,

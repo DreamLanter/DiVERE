@@ -1715,6 +1715,77 @@ class PreviewWidget(QWidget):
             print(f"提取色卡色块失败: {e}")
             return None
 
+    # ===== 色卡选择器变换操作 =====
+    def flip_colorchecker_horizontal(self):
+        """水平翻转色卡选择器"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return
+        
+        try:
+            h, w = self.current_image.array.shape[:2]
+            new_corners = []
+            for (x, y) in self.cc_corners:
+                # 水平翻转: x' = width - 1 - x, y' = y
+                new_x = w - 1.0 - x
+                new_corners.append((new_x, y))
+            self.cc_corners = new_corners
+            self._update_display()
+        except Exception as e:
+            print(f"水平翻转色卡失败: {e}")
+
+    def flip_colorchecker_vertical(self):
+        """竖直翻转色卡选择器"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return
+        
+        try:
+            h, w = self.current_image.array.shape[:2]
+            new_corners = []
+            for (x, y) in self.cc_corners:
+                # 竖直翻转: x' = x, y' = height - 1 - y
+                new_y = h - 1.0 - y
+                new_corners.append((x, new_y))
+            self.cc_corners = new_corners
+            self._update_display()
+        except Exception as e:
+            print(f"竖直翻转色卡失败: {e}")
+
+    def rotate_colorchecker_left(self):
+        """左旋转色卡选择器90度"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return
+        
+        try:
+            h, w = self.current_image.array.shape[:2]
+            new_corners = []
+            for (x, y) in self.cc_corners:
+                # 左旋90度: x' = y, y' = width - 1 - x
+                new_x = y
+                new_y = w - 1.0 - x
+                new_corners.append((new_x, new_y))
+            self.cc_corners = new_corners
+            self._update_display()
+        except Exception as e:
+            print(f"左旋转色卡失败: {e}")
+
+    def rotate_colorchecker_right(self):
+        """右旋转色卡选择器90度"""
+        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+            return
+        
+        try:
+            h, w = self.current_image.array.shape[:2]
+            new_corners = []
+            for (x, y) in self.cc_corners:
+                # 右旋90度: x' = height - 1 - y, y' = x
+                new_x = h - 1.0 - y
+                new_y = x
+                new_corners.append((new_x, new_y))
+            self.cc_corners = new_corners
+            self._update_display()
+        except Exception as e:
+            print(f"右旋转色卡失败: {e}")
+
     # ===== 旋转锚点支持 =====
     def prepare_rotate(self, direction: int):
         """在图像实际旋转前调用，捕获以预览中心为锚的图像坐标。"""

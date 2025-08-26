@@ -658,7 +658,7 @@ class CurveEditorWidget(QWidget):
         control_layout.addWidget(QLabel("已保存曲线:"))
         self.curve_combo = QComboBox()
         self.curve_combo.addItem("自定义", "custom")
-        for curve_key, curve_data in self.preset_curves.items():
+        for curve_key, curve_data in sorted(self.preset_curves.items(), key=lambda x: x[1]["name"]):
             self.curve_combo.addItem(curve_data["name"], curve_key)
         self.curve_combo.setMaximumWidth(200)
         control_layout.addWidget(self.curve_combo)
@@ -808,7 +808,7 @@ class CurveEditorWidget(QWidget):
         # 清空并重新填充
         self.curve_combo.clear()
         self.curve_combo.addItem("自定义", "custom")
-        for curve_key, curve_data in self.preset_curves.items():
+        for curve_key, curve_data in sorted(self.preset_curves.items(), key=lambda x: x[1]["name"]):
             self.curve_combo.addItem(curve_data["name"], curve_key)
         
         # 恢复选择

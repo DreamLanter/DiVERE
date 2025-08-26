@@ -366,7 +366,7 @@ class ColorSpaceManager:
     
     def get_available_color_spaces(self) -> list:
         """获取可用的色彩空间列表"""
-        return list(self._color_spaces.keys())
+        return sorted(list(self._color_spaces.keys()))
     
     def validate_color_space(self, color_space_name: str) -> bool:
         """验证色彩空间名称是否有效"""

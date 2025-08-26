@@ -55,7 +55,7 @@ class FilmPipelineProcessor:
                 print(f"Failed to load matrix {matrix_file}: {e}")
 
     def get_available_matrices(self) -> List[str]:
-        return list(self._density_matrices.keys())
+        return sorted(list(self._density_matrices.keys()))
 
     def get_matrix_data(self, key: str) -> Optional[Dict[str, Any]]:
         return self._density_matrices.get(key)

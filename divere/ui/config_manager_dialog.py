@@ -310,7 +310,7 @@ class ConfigManagerDialog(QDialog):
         self.colorspace_list.clear()
         config_files = enhanced_config_manager.get_config_files("colorspace")
         
-        for config_file in config_files:
+        for config_file in sorted(config_files, key=lambda p: p.stem):
             item = QListWidgetItem(config_file.stem)
             if config_file.parent == enhanced_config_manager.user_colorspace_dir:
                 item.setText(f"📁 {config_file.stem} (用户)")
@@ -326,7 +326,7 @@ class ConfigManagerDialog(QDialog):
         self.curves_list.clear()
         config_files = enhanced_config_manager.get_config_files("curves")
         
-        for config_file in config_files:
+        for config_file in sorted(config_files, key=lambda p: p.stem):
             item = QListWidgetItem(config_file.stem)
             if config_file.parent == enhanced_config_manager.user_curves_dir:
                 item.setText(f"📁 {config_file.stem} (用户)")
@@ -342,7 +342,7 @@ class ConfigManagerDialog(QDialog):
         self.matrices_list.clear()
         config_files = enhanced_config_manager.get_config_files("matrices")
         
-        for config_file in config_files:
+        for config_file in sorted(config_files, key=lambda p: p.stem):
             item = QListWidgetItem(config_file.stem)
             if config_file.parent == enhanced_config_manager.user_matrices_dir:
                 item.setText(f"📁 {config_file.stem} (用户)")

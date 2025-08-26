@@ -141,6 +141,11 @@ class MainWindow(QMainWindow):
         self.parameter_panel.ccm_optimize_requested.connect(self._on_ccm_optimize_requested)
         self.parameter_panel.save_custom_colorspace_requested.connect(self._on_save_custom_colorspace_requested)
         self.parameter_panel.toggle_color_checker_requested.connect(self.preview_widget.toggle_color_checker)
+        # 色卡变换信号连接
+        self.parameter_panel.cc_flip_horizontal_requested.connect(self.preview_widget.flip_colorchecker_horizontal)
+        self.parameter_panel.cc_flip_vertical_requested.connect(self.preview_widget.flip_colorchecker_vertical)
+        self.parameter_panel.cc_rotate_left_requested.connect(self.preview_widget.rotate_colorchecker_left)
+        self.parameter_panel.cc_rotate_right_requested.connect(self.preview_widget.rotate_colorchecker_right)
         # 当 UCS 三角拖动结束：注册/切换到一个临时 custom 输入空间，触发代理重建与预览
         self.parameter_panel.custom_primaries_changed.connect(self._on_custom_primaries_changed)
         # LUT导出信号

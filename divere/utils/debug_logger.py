@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 import platform
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class DiVEREDebugLogger:
@@ -54,19 +54,8 @@ class DiVEREDebugLogger:
     
     def _should_enable_debug(self) -> bool:
         """Check if debug logging should be enabled"""
-        # Check environment variable
-        if os.environ.get('DIVERE_DEBUG', '').lower() in ('1', 'true', 'yes'):
-            return True
-        
-        # Check for debug flag file
-        try:
-            debug_flag_file = self._get_user_config_dir() / '.debug'
-            if debug_flag_file.exists():
-                return True
-        except Exception:
-            pass
-        
-        return False
+        # Debug logging is always enabled
+        return True
     
     def _get_user_config_dir(self) -> Path:
         """Get user configuration directory"""
@@ -93,9 +82,41 @@ class DiVEREDebugLogger:
         return log_dir / log_filename
     
     def _ensure_log_directory(self):
-        """Ensure the log directory exists"""
+        """Ensure the log directory exists and cleanup old logs"""
         if self._log_file:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
+            # Clean up old log files after creating the directory
+            self._cleanup_old_logs()
+    
+    def _cleanup_old_logs(self):
+        """Remove log files older than 30 days"""
+        if not self._log_file:
+            return
+        
+        log_dir = self._log_file.parent
+        cutoff_date = datetime.now() - timedelta(days=30)
+        
+        try:
+            deleted_count = 0
+            for log_file in log_dir.glob("divere_debug_*.log"):
+                try:
+                    # Get file modification time
+                    file_mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
+                    
+                    # Delete if older than 30 days
+                    if file_mtime < cutoff_date:
+                        log_file.unlink()
+                        deleted_count += 1
+                except (OSError, ValueError) as e:
+                    # Skip files that can't be processed
+                    continue
+            
+            if deleted_count > 0:
+                print(f"Debug logger: Cleaned up {deleted_count} old log files (older than 30 days)")
+                
+        except Exception as e:
+            # Silently fail if cleanup encounters issues
+            print(f"Warning: Could not clean up old log files: {e}")
     
     def _setup_logger(self):
         """Set up the logger with file and console handlers"""

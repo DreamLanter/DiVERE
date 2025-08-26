@@ -35,6 +35,11 @@ class ParameterPanel(QWidget):
     ccm_optimize_requested = Signal()
     save_custom_colorspace_requested = Signal(dict)
     toggle_color_checker_requested = Signal(bool)
+    # 色卡变换信号
+    cc_flip_horizontal_requested = Signal()
+    cc_flip_vertical_requested = Signal()
+    cc_rotate_left_requested = Signal()
+    cc_rotate_right_requested = Signal()
     # 新增：基色(primaries)改变（拖动结束时触发，负担轻）
     custom_primaries_changed = Signal(dict)
     # LUT导出信号
@@ -110,9 +115,39 @@ class ParameterPanel(QWidget):
         self.ucs_widget.setVisible(False)
         layout.addWidget(self.ucs_widget)
 
+        # 色卡选择器和变换按钮的水平布局
+        cc_selector_layout = QHBoxLayout()
         self.cc_selector_checkbox = QCheckBox("色卡选择器")
         self.cc_selector_checkbox.setVisible(False)
-        layout.addWidget(self.cc_selector_checkbox)
+        cc_selector_layout.addWidget(self.cc_selector_checkbox)
+        
+        # 色卡变换按钮
+        self.cc_flip_h_button = QPushButton("↔")
+        self.cc_flip_h_button.setToolTip("水平翻转色卡选择器")
+        self.cc_flip_h_button.setFixedWidth(30)
+        self.cc_flip_h_button.setVisible(False)
+        cc_selector_layout.addWidget(self.cc_flip_h_button)
+        
+        self.cc_flip_v_button = QPushButton("↕")
+        self.cc_flip_v_button.setToolTip("竖直翻转色卡选择器")
+        self.cc_flip_v_button.setFixedWidth(30)
+        self.cc_flip_v_button.setVisible(False)
+        cc_selector_layout.addWidget(self.cc_flip_v_button)
+        
+        self.cc_rotate_l_button = QPushButton("↶")
+        self.cc_rotate_l_button.setToolTip("左旋转色卡选择器")
+        self.cc_rotate_l_button.setFixedWidth(30)
+        self.cc_rotate_l_button.setVisible(False)
+        cc_selector_layout.addWidget(self.cc_rotate_l_button)
+        
+        self.cc_rotate_r_button = QPushButton("↷")
+        self.cc_rotate_r_button.setToolTip("右旋转色卡选择器")
+        self.cc_rotate_r_button.setFixedWidth(30)
+        self.cc_rotate_r_button.setVisible(False)
+        cc_selector_layout.addWidget(self.cc_rotate_r_button)
+        
+        cc_selector_layout.addStretch()  # 推到左边
+        layout.addLayout(cc_selector_layout)
 
         self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换")
         self.ccm_optimize_button.setToolTip("从色卡选择器读取24个颜色并优化参数")
@@ -315,6 +350,10 @@ class ParameterPanel(QWidget):
         self.ucs_widget.dragFinished.connect(lambda coords: self._on_ucs_drag_finished(coords))
         self.ucs_widget.resetPointRequested.connect(self._on_reset_point)
         self.cc_selector_checkbox.toggled.connect(self._on_cc_selector_toggled)
+        self.cc_flip_h_button.clicked.connect(self._on_cc_flip_horizontal)
+        self.cc_flip_v_button.clicked.connect(self._on_cc_flip_vertical)
+        self.cc_rotate_l_button.clicked.connect(self._on_cc_rotate_left)
+        self.cc_rotate_r_button.clicked.connect(self._on_cc_rotate_right)
         self.ccm_optimize_button.clicked.connect(self.ccm_optimize_requested.emit)
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
 
@@ -573,6 +612,10 @@ class ParameterPanel(QWidget):
     def _on_scanner_spectral_toggled(self, checked: bool):
         self.ucs_widget.setVisible(checked)
         self.cc_selector_checkbox.setVisible(checked)
+        self.cc_flip_h_button.setVisible(checked)
+        self.cc_flip_v_button.setVisible(checked)
+        self.cc_rotate_l_button.setVisible(checked)
+        self.cc_rotate_r_button.setVisible(checked)
         self.ccm_optimize_button.setVisible(checked)
         self.save_input_colorspace_button.setVisible(checked)
         if checked:
@@ -625,6 +668,22 @@ class ParameterPanel(QWidget):
             
         primaries = {k: uv_to_xy(*v) for k, v in coords_uv.items()}
         self.save_custom_colorspace_requested.emit(primaries)
+
+    def _on_cc_flip_horizontal(self):
+        """水平翻转色卡选择器"""
+        self.cc_flip_horizontal_requested.emit()
+    
+    def _on_cc_flip_vertical(self):
+        """竖直翻转色卡选择器"""
+        self.cc_flip_vertical_requested.emit()
+    
+    def _on_cc_rotate_left(self):
+        """左旋转色卡选择器"""
+        self.cc_rotate_left_requested.emit()
+    
+    def _on_cc_rotate_right(self):
+        """右旋转色卡选择器"""
+        self.cc_rotate_right_requested.emit()
 
     def _on_curve_changed(self, curve_name, points):
         if self._is_updating_ui: return

@@ -3,6 +3,16 @@
   "description": "Kodak professional endura premier e4070 2013",
   "version": 1,
   "curves": {
+    "RGB": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ],
     "R": [
       [
         0.406420456837,

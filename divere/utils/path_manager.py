@@ -49,6 +49,16 @@ class PathManager:
         project_root = self._get_project_root()
         info(f"Using project root: {project_root}", "PathManager")
         
+        # 根据环境使用不同的路径构建策略
+        if self._is_macos_app_bundle():
+            self._initialize_app_bundle_paths(project_root)
+        else:
+            self._initialize_development_paths(project_root)
+    
+    def _initialize_development_paths(self, project_root: str):
+        """初始化开发环境路径"""
+        info("Using development environment paths", "PathManager")
+        
         # 配置路径
         config_paths = [
             os.path.join(project_root, "divere", "config"),
@@ -105,11 +115,124 @@ class PathManager:
         
         self._initialized = True
     
+    def _initialize_app_bundle_paths(self, executable_dir: str):
+        """初始化 macOS app bundle 路径"""
+        info("Using macOS app bundle paths", "PathManager")
+        
+        # 在 app bundle 中，配置文件可能在多个位置
+        # 优先级：1. 可执行文件旁 2. Contents/Resources 3. 其他可能位置
+        bundle_contents = os.path.dirname(executable_dir)  # Contents/
+        bundle_root = os.path.dirname(bundle_contents)     # DiVERE.app/
+        
+        debug(f"Bundle contents dir: {bundle_contents}", "PathManager")
+        debug(f"Bundle root dir: {bundle_root}", "PathManager")
+        
+        # 候选配置路径 (按优先级排序)
+        config_candidates = [
+            # 1. 直接在可执行文件旁边 (Contents/MacOS/config/)
+            os.path.join(executable_dir, "config"),
+            os.path.join(executable_dir, "config", "defaults"),
+            os.path.join(executable_dir, "config", "colorchecker"),
+            os.path.join(executable_dir, "config", "colorspace"),
+            os.path.join(executable_dir, "config", "curves"),
+            os.path.join(executable_dir, "config", "matrices"),
+            
+            # 2. Contents/Resources/ 目录
+            os.path.join(bundle_contents, "Resources", "config"),
+            os.path.join(bundle_contents, "Resources", "config", "defaults"),
+            os.path.join(bundle_contents, "Resources", "config", "colorchecker"),
+            os.path.join(bundle_contents, "Resources", "config", "colorspace"),
+            os.path.join(bundle_contents, "Resources", "config", "curves"),
+            os.path.join(bundle_contents, "Resources", "config", "matrices"),
+            
+            # 3. 保持兼容开发环境结构 (Contents/MacOS/divere/config/)
+            os.path.join(executable_dir, "divere", "config"),
+            os.path.join(executable_dir, "divere", "config", "defaults"),
+            os.path.join(executable_dir, "divere", "config", "colorchecker"),
+            os.path.join(executable_dir, "divere", "config", "colorspace"),
+            os.path.join(executable_dir, "divere", "config", "curves"),
+            os.path.join(executable_dir, "divere", "config", "matrices")
+        ]
+        
+        self._paths["config"].extend(config_candidates)
+        debug(f"App bundle config paths: {config_candidates}", "PathManager")
+        
+        # 默认预设路径
+        defaults_candidates = [
+            os.path.join(executable_dir, "config", "defaults"),
+            os.path.join(bundle_contents, "Resources", "config", "defaults"),
+            os.path.join(executable_dir, "divere", "config", "defaults")
+        ]
+        self._paths["defaults"].extend(defaults_candidates)
+        debug(f"App bundle defaults paths: {defaults_candidates}", "PathManager")
+        
+        # 色彩空间路径
+        colorspace_candidates = [
+            os.path.join(executable_dir, "config", "colorspace"),
+            os.path.join(executable_dir, "config", "colorspace", "legacy"),
+            os.path.join(executable_dir, "config", "colorspace", "icc"),
+            os.path.join(bundle_contents, "Resources", "config", "colorspace"),
+            os.path.join(bundle_contents, "Resources", "config", "colorspace", "legacy"),
+            os.path.join(bundle_contents, "Resources", "config", "colorspace", "icc"),
+            os.path.join(executable_dir, "divere", "config", "colorspace"),
+            os.path.join(executable_dir, "divere", "config", "colorspace", "legacy"),
+            os.path.join(executable_dir, "divere", "config", "colorspace", "icc")
+        ]
+        self._paths["colorspace"].extend(colorspace_candidates)
+        
+        # 曲线路径
+        curves_candidates = [
+            os.path.join(executable_dir, "config", "curves"),
+            os.path.join(bundle_contents, "Resources", "config", "curves"),
+            os.path.join(executable_dir, "divere", "config", "curves")
+        ]
+        self._paths["curves"].extend(curves_candidates)
+        
+        # 矩阵路径
+        matrices_candidates = [
+            os.path.join(executable_dir, "config", "matrices"),
+            os.path.join(bundle_contents, "Resources", "config", "matrices"),
+            os.path.join(executable_dir, "divere", "config", "matrices")
+        ]
+        self._paths["matrices"].extend(matrices_candidates)
+        
+        # 资源路径
+        assets_candidates = [
+            os.path.join(executable_dir, "assets"),
+            os.path.join(bundle_contents, "Resources", "assets"),
+            os.path.join(executable_dir, "divere", "assets")
+        ]
+        self._paths["assets"].extend(assets_candidates)
+        
+        # 模型路径
+        models_candidates = [
+            os.path.join(executable_dir, "models"),
+            os.path.join(bundle_contents, "Resources", "models"),
+            os.path.join(executable_dir, "divere", "models")
+        ]
+        self._paths["models"].extend(models_candidates)
+        
+        # 测试数据路径 (在 app bundle 中通常不存在)
+        test_data_candidates = [
+            os.path.join(executable_dir, "test_scans"),
+            os.path.join(bundle_contents, "Resources", "test_scans")
+        ]
+        self._paths["test_data"].extend(test_data_candidates)
+        
+        # 添加所有路径到Python路径
+        self._add_all_paths()
+        
+        self._initialized = True
+    
     def _get_project_root(self) -> str:
         """获取项目根目录"""
         info("Starting project root detection", "PathManager")
         
-        # 尝试多种方式获取项目根目录
+        # 检查是否在 macOS app bundle 中运行
+        if self._is_macos_app_bundle():
+            return self._get_app_bundle_root()
+        
+        # 标准开发环境路径检测
         current_file = os.path.abspath(__file__)
         debug(f"Current file: {current_file}", "PathManager")
         
@@ -134,6 +257,45 @@ class PathManager:
         log_path_search("pyproject.toml search (not found)", searched_dirs, fallback, "PathManager")
         
         return fallback
+    
+    def _is_macos_app_bundle(self) -> bool:
+        """检测是否在 macOS app bundle 中运行"""
+        try:
+            # 检查 sys.argv[0] 是否包含 .app/Contents/MacOS/
+            argv0 = os.path.abspath(sys.argv[0])
+            is_bundle = '.app/Contents/MacOS' in argv0
+            
+            if is_bundle:
+                info(f"Detected macOS app bundle: {argv0}", "PathManager")
+            else:
+                debug(f"Not in app bundle, argv[0]: {argv0}", "PathManager")
+                
+            return is_bundle
+        except Exception as e:
+            debug(f"App bundle detection failed: {e}", "PathManager")
+            return False
+    
+    def _get_app_bundle_root(self) -> str:
+        """获取 macOS app bundle 的根目录"""
+        info("Using macOS app bundle path resolution", "PathManager")
+        
+        try:
+            # 获取可执行文件路径
+            executable_path = os.path.abspath(sys.argv[0])
+            debug(f"Executable path: {executable_path}", "PathManager")
+            
+            # 获取可执行文件所在目录 (Contents/MacOS/)
+            executable_dir = os.path.dirname(executable_path)
+            info(f"Executable directory: {executable_dir}", "PathManager")
+            
+            return executable_dir
+            
+        except Exception as e:
+            error(f"Failed to get app bundle root: {e}", "PathManager")
+            # 回退到当前工作目录
+            fallback = os.getcwd()
+            warning(f"Using fallback for app bundle: {fallback}", "PathManager")
+            return fallback
     
     def _add_all_paths(self):
         """将所有路径添加到Python路径"""

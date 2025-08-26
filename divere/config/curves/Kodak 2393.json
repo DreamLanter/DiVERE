@@ -3,6 +3,16 @@
   "description": "kodak color print film 2393",
   "version": 1,
   "curves": {
+    "RGB": [
+      [
+        0.0,
+        0.0
+      ],k
+      [
+        1.0,
+        1.0
+      ]
+    ],
     "R": [
       [
         0.316493543927,

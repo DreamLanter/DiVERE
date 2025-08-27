@@ -190,6 +190,7 @@ class MainWindow(QMainWindow):
         self.parameter_panel = ParameterPanel(self.context)
         self.parameter_panel.parameter_changed.connect(self.on_parameter_changed)
         self.parameter_panel.input_colorspace_changed.connect(self.on_input_colorspace_changed)
+        self.parameter_panel.film_type_changed.connect(self.on_film_type_changed)
         parameter_dock = QDockWidget("调色参数", self)
         parameter_dock.setWidget(self.parameter_panel)
         parameter_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -567,6 +568,9 @@ class MainWindow(QMainWindow):
 
             self.context.load_preset(preset)
             
+            # Update parameter panel film type
+            self.parameter_panel.set_film_type(self.context.get_current_film_type())
+            
             # 如果有图像，触发预览更新
             if current_image:
                 self.context._prepare_proxy()
@@ -626,6 +630,7 @@ class MainWindow(QMainWindow):
             raw_file=raw_file,
             orientation=self.context.get_current_orientation(),  # 全局orientation
             crop=crop_rect,  # 向后兼容（single/原图裁剪）
+            film_type=self.parameter_panel.get_current_film_type(),  # 胶片类型
             # 新的多裁剪结构（包含crop的独立orientation）
             crops=(
                 [crop_instance.to_dict()]
@@ -1497,6 +1502,10 @@ class MainWindow(QMainWindow):
     def on_input_colorspace_changed(self, space_name: str):
         """输入色彩空间改变时的回调 - 需要特殊处理以重建代理"""
         self.context.set_input_color_space(space_name)
+    
+    def on_film_type_changed(self, film_type: str):
+        """胶片类型改变时的回调"""
+        self.context.set_current_film_type(film_type)
 
     def get_current_params(self) -> ColorGradingParams:
         """获取当前调色参数"""

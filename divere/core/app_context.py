@@ -74,6 +74,8 @@ class ApplicationContext(QObject):
         self._current_params: ColorGradingParams = self._create_default_params()
         # 图像朝向（以90度为步进，取值 {0,90,180,270}），统一放在Context
         self._current_orientation: int = 0
+        # 当前胶片类型
+        self._current_film_type: str = "color_negative_c41"
         
         # =================
         # 后台处理
@@ -553,7 +555,7 @@ class ApplicationContext(QObject):
 
     def _create_preset_from_params(self, params: ColorGradingParams, name: str = "Preset") -> Preset:
         """将当前参数打包为 Preset（用于 Bundle 导出）。"""
-        preset = Preset(name=name)
+        preset = Preset(name=name, film_type=self._current_film_type)
         # input transformation（保存名称与参数：gamma/white/primaries）
         cs_name = params.input_color_space_name
         cs_def = self.color_space_manager.get_color_space_definition(cs_name)
@@ -635,6 +637,9 @@ class ApplicationContext(QObject):
         """从Preset对象加载状态 - 使用新的CropInstance模型"""
         # 1. 清理当前状态
         self.clear_crop()
+        
+        # Load film type
+        self._current_film_type = preset.film_type
         
         # 2/3. 合并更新参数：先从 grading_params 构造，再应用 input_transformation（若有）
         new_params = ColorGradingParams.from_dict(preset.grading_params or {})
@@ -885,6 +890,14 @@ class ApplicationContext(QObject):
         if self._current_image:
             self._prepare_proxy()
             self._trigger_preview_update()
+    
+    def set_current_film_type(self, film_type: str):
+        """设置当前胶片类型"""
+        self._current_film_type = film_type
+    
+    def get_current_film_type(self) -> str:
+        """获取当前胶片类型"""
+        return self._current_film_type
 
     def reset_params(self):
         """重置参数：根据当前图像类型选择智能默认预设"""

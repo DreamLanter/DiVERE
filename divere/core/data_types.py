@@ -75,6 +75,7 @@ class Preset:
     raw_file: Optional[str] = None
     orientation: int = 0
     crop: Optional[Tuple[float, float, float, float]] = None  # (x_pct, y_pct, w_pct, h_pct)
+    film_type: str = "color_negative_c41"
     # 预留多裁剪结构（向后兼容，当前实现仅填充单裁剪镜像）
     crops: Optional[List[Dict[str, Any]]] = None
     active_crop_id: Optional[str] = None
@@ -94,10 +95,11 @@ class Preset:
             "version": 3,
             "type": "single",
         }
-        # metadata（raw_file 必填；orientation/crop 可选）
+        # metadata（raw_file 必填；orientation/crop/film_type 可选）
         metadata: Dict[str, Any] = {}
         metadata["raw_file"] = self.raw_file if self.raw_file is not None else ""
         metadata["orientation"] = int(self.orientation)
+        metadata["film_type"] = self.film_type
         if self.crop:
             metadata["crop"] = list(self.crop)
         data["metadata"] = metadata
@@ -189,6 +191,7 @@ class Preset:
             raise ValueError("v3 预设 metadata.raw_file 为必填")
         orientation = int(metadata.get("orientation", 0))
         crop = tuple(metadata["crop"]) if isinstance(metadata.get("crop"), list) else None
+        film_type = metadata.get("film_type", "color_negative_c41")  # Default for backward compatibility
 
         preset = cls(
             name=data.get("name", "未命名预设"),
@@ -196,6 +199,7 @@ class Preset:
             raw_file=raw_file,
             orientation=orientation,
             crop=crop,
+            film_type=film_type,
         )
 
         # idt → input_transformation
@@ -443,6 +447,7 @@ class PresetBundle:
                     "raw_file": metadata.get("raw_file"),
                     "orientation": crop_instance.orientation,
                     "crop": list(crop_instance.rect_norm),
+                    "film_type": metadata.get("film_type", "color_negative_c41"),  # Inherit from contactsheet
                 },
                 "idt": data.get("idt", {}),
                 "cc_params": data.get("cc_params", {}),

@@ -31,6 +31,7 @@ class ParameterPanel(QWidget):
     auto_color_requested = Signal()
     auto_color_iterative_requested = Signal()
     input_colorspace_changed = Signal(str)
+    film_type_changed = Signal(str)
 
     # Signals for complex actions requiring coordination
     ccm_optimize_requested = Signal()
@@ -50,6 +51,7 @@ class ParameterPanel(QWidget):
         super().__init__()
         self.context = context
         self.current_params = self.context.get_current_params().copy()
+        self.current_film_type = "color_negative_c41"  # Default film type
         
         self._is_updating_ui = False
         self.context.params_changed.connect(self.on_context_params_changed)
@@ -92,6 +94,11 @@ class ParameterPanel(QWidget):
     def _create_basic_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        
+        # Film Type Group (added above colorspace group)
+        film_type_group = self._create_film_type_group()
+        layout.addWidget(film_type_group)
+        
         colorspace_group = QGroupBox("输入色彩变换")
         colorspace_layout = QGridLayout(colorspace_group)
         # IDT Gamma（在下拉菜单上方）
@@ -164,6 +171,30 @@ class ParameterPanel(QWidget):
 
         layout.addStretch()
         return widget
+
+    def _create_film_type_group(self) -> QGroupBox:
+        """创建胶片类型选择组件"""
+        film_type_group = QGroupBox("胶片类型")
+        film_type_layout = QGridLayout(film_type_group)
+        
+        self.film_type_combo = QComboBox()
+        # Add film type options with Chinese display names and English values
+        film_types = [
+            ("彩色负片C41", "color_negative_c41"),
+            ("彩色电影负片ECN2", "color_negative_ecn2"), 
+            ("彩色反转片", "color_reversal"),
+            ("黑白负片", "b&w_negative"),
+            ("黑白反转片", "b&w_reversal"),
+            ("数字", "digital")
+        ]
+        
+        for display_name, value in film_types:
+            self.film_type_combo.addItem(display_name, value)
+        
+        film_type_layout.addWidget(QLabel("胶片类型:"), 0, 0)
+        film_type_layout.addWidget(self.film_type_combo, 0, 1, 1, 2)
+        
+        return film_type_group
 
     def _create_density_tab(self) -> QWidget:
         widget = QWidget()
@@ -313,6 +344,7 @@ class ParameterPanel(QWidget):
         spinbox.setDecimals(2)
 
     def _connect_signals(self):
+        self.film_type_combo.currentTextChanged.connect(self._on_film_type_changed)
         self.input_colorspace_combo.currentTextChanged.connect(self._on_input_colorspace_changed)
         # IDT Gamma联动
         self.idt_gamma_slider.valueChanged.connect(self._on_idt_gamma_slider_changed)
@@ -363,6 +395,10 @@ class ParameterPanel(QWidget):
         self._is_updating_ui = True
         try:
             params = self.current_params
+            
+            # Sync film type dropdown
+            self._sync_combo_box(self.film_type_combo, self.current_film_type)
+            
             self._sync_combo_box(self.input_colorspace_combo, params.input_color_space_name)
             # 读取当前输入空间的gamma
             try:
@@ -459,6 +495,17 @@ class ParameterPanel(QWidget):
         params.enable_rgb_gains = self.enable_rgb_gains_checkbox.isChecked()
         params.enable_density_curve = self.enable_density_curve_checkbox.isChecked()
         return params
+    
+    def get_current_film_type(self) -> str:
+        """获取当前选择的胶片类型"""
+        return self.current_film_type
+    
+    def set_film_type(self, film_type: str):
+        """设置胶片类型（用于从预设加载时）"""
+        self.current_film_type = film_type
+        self._is_updating_ui = True
+        self._sync_combo_box(self.film_type_combo, film_type)
+        self._is_updating_ui = False
 
     # --- Internal sync slots ---
     def _on_gamma_slider_changed(self, value: int):
@@ -532,6 +579,18 @@ class ParameterPanel(QWidget):
         self.parameter_changed.emit()
 
     # --- Action slots ---
+    def _on_film_type_changed(self, display_name: str):
+        """当胶片类型改变时"""
+        if self._is_updating_ui:
+            return
+        
+        # Get the actual film type value from the combo box data
+        film_type_value = self.film_type_combo.currentData()
+        if film_type_value:
+            self.current_film_type = film_type_value
+            self.film_type_changed.emit(film_type_value)
+            self.parameter_changed.emit()
+    
     def _on_input_colorspace_changed(self, space_name: str):
         """当输入色彩空间改变时，更新UCS Diagram和IDT Gamma"""
         try:

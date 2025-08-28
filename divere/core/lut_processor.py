@@ -69,8 +69,25 @@ class LUTProcessor:
                     # 应用调色管道
                     result = self.the_enlarger.apply_full_pipeline(virtual_image, params)
                     
-                    # 存储输出颜色
-                    lut_data[idx] = result.array[0, 0, :3]
+                    # 存储输出颜色，处理可能的通道数变化
+                    result_pixel = result.array[0, 0]
+                    if len(result.array.shape) == 3 and result.array.shape[2] >= 3:
+                        # 多通道图像，取前3个通道
+                        lut_data[idx] = result_pixel[:3]
+                    elif len(result.array.shape) == 3 and result.array.shape[2] == 1:
+                        # 单通道图像，复制为3通道
+                        lut_data[idx] = np.array([result_pixel[0], result_pixel[0], result_pixel[0]])
+                    elif len(result.array.shape) == 2:
+                        # 2D图像，复制为3通道
+                        lut_data[idx] = np.array([result_pixel, result_pixel, result_pixel])
+                    else:
+                        # 其他情况，尽量处理
+                        if result.array.shape[-1] == 2:
+                            # 2通道，复制第一个通道作为第三个通道
+                            lut_data[idx] = np.array([result_pixel[0], result_pixel[1], result_pixel[0]])
+                        else:
+                            # 默认情况，使用第一个通道
+                            lut_data[idx] = np.array([result_pixel[0], result_pixel[0], result_pixel[0]])
         
         return LUT3D(size=size, data=lut_data)
     

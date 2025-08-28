@@ -95,7 +95,9 @@ class FilmPipelineProcessor:
     def apply_preview_pipeline(self, image: ImageData, params: ColorGradingParams,
                               input_colorspace_transform: Optional[np.ndarray] = None,
                               output_colorspace_transform: Optional[np.ndarray] = None,
-                              include_curve: bool = True) -> ImageData:
+                              include_curve: bool = True,
+                              convert_to_monochrome_in_idt: bool = False,
+                              monochrome_converter: Optional[callable] = None) -> ImageData:
         """
         预览版本管线（优化版）：
         原图 -> 早期降采样 -> 输入色彩科学 -> dmax/gamma调整（图片级别） -> 
@@ -119,6 +121,9 @@ class FilmPipelineProcessor:
         if input_colorspace_transform is not None:
             proxy_array = self._apply_colorspace_transform(proxy_array, input_colorspace_transform)
         profile['input_colorspace_ms'] = (time.time() - t1) * 1000.0
+        
+        # 2.5 IDT阶段monochrome转换（移除 - 现在在显示阶段处理）
+        profile['idt_monochrome_ms'] = 0.0
         
         # 3. 图片级别的dmax/gamma调整（使用LUT优化）
         t2 = time.time()
@@ -315,7 +320,9 @@ class FilmPipelineProcessor:
                                      use_optimization: bool = True,
                                      chunked: Optional[bool] = None,
                                      tile_size: Optional[Tuple[int, int]] = None,
-                                     max_workers: Optional[int] = None) -> ImageData:
+                                     max_workers: Optional[int] = None,
+                                     convert_to_monochrome_in_idt: bool = False,
+                                     monochrome_converter: Optional[callable] = None) -> ImageData:
         """
         全精度版本管线：完整数学过程套在原图上
         
@@ -326,6 +333,11 @@ class FilmPipelineProcessor:
             output_colorspace_transform: 输出色彩空间变换矩阵
             include_curve: 是否包含曲线处理
             use_optimization: 是否使用优化版本
+            chunked: 是否使用分块处理
+            tile_size: 分块大小
+            max_workers: 最大工作线程数
+            convert_to_monochrome_in_idt: 是否在IDT阶段转换为单色
+            monochrome_converter: 单色转换函数
             
         Returns:
             处理后的全精度图像
@@ -351,6 +363,9 @@ class FilmPipelineProcessor:
             if input_colorspace_transform is not None:
                 working_array = self._apply_colorspace_transform(working_array, input_colorspace_transform)
             profile['input_colorspace_ms'] = (time.time() - t0) * 1000.0
+            
+            # 1.5 IDT阶段monochrome转换（移除 - 现在在显示阶段处理）
+            profile['idt_monochrome_ms'] = 0.0
             
             # 2. 应用完整数学管线
             t1 = time.time()
@@ -409,6 +424,9 @@ class FilmPipelineProcessor:
                 if input_colorspace_transform is not None:
                     block = self._apply_colorspace_transform(block, input_colorspace_transform)
                 prof_local['input_ms'] = (time.time() - t0_local) * 1000.0
+                
+                # IDT阶段monochrome转换（移除 - 现在在显示阶段处理）
+                prof_local['monochrome_ms'] = 0.0
 
                 # 完整数学管线（块级）
                 t1_local = time.time()
@@ -469,15 +487,20 @@ class FilmPipelineProcessor:
         if transform_matrix is None:
             return image_array
             
-        # 重塑为 [N, 3] 进行矩阵乘法
+        # 多通道图像，正常处理
         original_shape = image_array.shape
-        reshaped = image_array.reshape(-1, 3)
-        
-        # 应用变换矩阵
-        transformed = np.dot(reshaped, transform_matrix.T)
-        
-        # 恢复形状
-        result = transformed.reshape(original_shape)
+        reshaped = image_array.reshape(-1, image_array.shape[-1])
+        if image_array.shape[-1] == 3:
+            # RGB图像，直接应用变换
+            transformed = np.dot(reshaped, transform_matrix.T)
+            result = transformed.reshape(original_shape)
+        else:
+            # 其他通道数，仅处理前3个通道
+            rgb_part = reshaped[:, :3]
+            transformed_rgb = np.dot(rgb_part, transform_matrix.T)
+            transformed = reshaped.copy()
+            transformed[:, :3] = transformed_rgb
+            result = transformed.reshape(original_shape)
         
         # 裁剪到有效范围
         result = np.clip(result, 0.0, 1.0)

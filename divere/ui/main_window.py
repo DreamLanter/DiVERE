@@ -191,13 +191,16 @@ class MainWindow(QMainWindow):
         self.parameter_panel.parameter_changed.connect(self.on_parameter_changed)
         self.parameter_panel.input_colorspace_changed.connect(self.on_input_colorspace_changed)
         self.parameter_panel.film_type_changed.connect(self.on_film_type_changed)
+        
+        # Connect ApplicationContext signals
+        self.context.film_type_changed.connect(self.on_context_film_type_changed)
         parameter_dock = QDockWidget("调色参数", self)
         parameter_dock.setWidget(self.parameter_panel)
         parameter_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, parameter_dock)
         
         # 中央预览区域
-        self.preview_widget = PreviewWidget()
+        self.preview_widget = PreviewWidget(self.context)
         self.preview_widget.image_rotated.connect(self._on_image_rotated)
         splitter.addWidget(self.preview_widget)
         
@@ -567,9 +570,6 @@ class MainWindow(QMainWindow):
                         return
 
             self.context.load_preset(preset)
-            
-            # Update parameter panel film type
-            self.parameter_panel.set_film_type(self.context.get_current_film_type())
             
             # 如果有图像，触发预览更新
             if current_image:
@@ -1505,7 +1505,117 @@ class MainWindow(QMainWindow):
     
     def on_film_type_changed(self, film_type: str):
         """胶片类型改变时的回调"""
+        # Check if transitioning from color to B&W (data loss warning)
+        old_film_type = self.context.get_current_film_type()
+        old_is_mono = self.context.film_type_controller.is_monochrome_type(old_film_type)
+        new_is_mono = self.context.film_type_controller.is_monochrome_type(film_type)
+        
+        # Show warning dialog if transitioning from color to B&W
+        if not old_is_mono and new_is_mono:
+            if not self._confirm_color_to_bw_transition():
+                # User cancelled - revert film type selection in UI
+                self.parameter_panel.set_film_type(old_film_type)
+                return
+        
+        # Proceed with film type change
         self.context.set_current_film_type(film_type)
+
+    def on_context_film_type_changed(self, film_type: str):
+        """ApplicationContext胶片类型改变时的回调 - 同步UI"""
+        # Update film type dropdown
+        self.parameter_panel.set_film_type(film_type)
+        
+        # Apply neutralization for B&W film types after a short delay
+        # to ensure it happens after film type defaults are applied
+        QTimer.singleShot(10, lambda: self._apply_bw_neutralization_if_needed(film_type))
+    
+    def _apply_bw_neutralization_if_needed(self, film_type: str):
+        """Apply neutral values for B&W film types"""
+        # Check if this is a B&W film type
+        if not self.context.film_type_controller.is_monochrome_type(film_type):
+            return
+        
+        # Get current parameters
+        params = self.context.get_current_params()
+        
+        # Set neutral values for B&W mode
+        # 1. Set IDT color transformation to identity
+        params.input_color_space_name = "Identity"  # This should result in identity transform
+        
+        # 2. Set RGB gains to (0.0, 0.0, 0.0)
+        params.rgb_gains = (0.0, 0.0, 0.0)
+        
+        # 3. Set density matrix to identity
+        params.density_matrix = np.eye(3)
+        params.density_matrix_name = "Identity"
+        
+        # 4. Set RGB curves to Ilford Multigrade 2 (proper B&W curve)
+        # Load the curve from the curve manager if available, otherwise use linear fallback
+        try:
+            # Get the curve from configuration
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            curve_files = enhanced_config_manager.get_config_files("curves")
+            ilford_curve = None
+            
+            for curve_file in curve_files:
+                if "Ilford MGFB 2" in str(curve_file) or "Ilford_MGFB_2" in str(curve_file):
+                    curve_data = enhanced_config_manager.load_config_file(curve_file)
+                    if curve_data and "curves" in curve_data:
+                        # Use RGB curve if available
+                        if "RGB" in curve_data["curves"]:
+                            ilford_curve = curve_data["curves"]["RGB"]
+                        break
+            
+            # Apply Ilford curve if found, otherwise use linear
+            if ilford_curve:
+                params.curve_points = ilford_curve
+                params.curve_points_r = curve_data["curves"].get("R", [(0.0, 0.0), (1.0, 1.0)])
+                params.curve_points_g = curve_data["curves"].get("G", [(0.0, 0.0), (1.0, 1.0)])
+                params.curve_points_b = curve_data["curves"].get("B", [(0.0, 0.0), (1.0, 1.0)])
+                params.density_curve_name = "Ilford MGFB 2"
+            else:
+                # Fallback to linear
+                linear_curve = [(0.0, 0.0), (1.0, 1.0)]
+                params.curve_points_r = linear_curve
+                params.curve_points_g = linear_curve
+                params.curve_points_b = linear_curve
+                params.curve_points = linear_curve
+                params.density_curve_name = "linear"
+                
+        except Exception as e:
+            print(f"Warning: Could not load Ilford Multigrade 2 curve, using linear: {e}")
+            # Fallback to linear
+            linear_curve = [(0.0, 0.0), (1.0, 1.0)]
+            params.curve_points_r = linear_curve
+            params.curve_points_g = linear_curve
+            params.curve_points_b = linear_curve
+            params.curve_points = linear_curve
+            params.density_curve_name = "linear"
+        
+        # Apply the neutralized parameters
+        self.context.update_params(params)
+        
+        # Trigger auto-save after B&W override
+        self.context.autosave_requested.emit()
+
+    def _confirm_color_to_bw_transition(self) -> bool:
+        """Confirm color to B&W transition with user"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self, 
+            "胶片类型变更确认", 
+            "切换到黑白模式将覆盖当前的彩色校正设置：\n"
+            "• IDT色彩变换将设为单位矩阵\n"
+            "• 密度矩阵将设为单位矩阵\n" 
+            "• RGB增益将设为 (0, 0, 0)\n"
+            "• RGB曲线将设为 Ilford Multigrade 2\n\n"
+            "当前的彩色校正信息将丢失。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        return reply == QMessageBox.StandardButton.Yes
 
     def get_current_params(self) -> ColorGradingParams:
         """获取当前调色参数"""

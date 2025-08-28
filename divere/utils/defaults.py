@@ -103,3 +103,103 @@ def load_default_preset() -> Preset:
     return p
 
 
+def load_film_type_default_preset(film_type: str) -> Optional[Preset]:
+    """
+    根据胶片类型加载默认预设
+    现在使用 FilmTypeController 提供的统一默认值逻辑
+    
+    Args:
+        film_type: 胶片类型 (color_negative_c41, color_reversal, etc.)
+        
+    Returns:
+        对应胶片类型的默认预设
+    """
+    try:
+        from divere.core.film_type_controller import FilmTypeController
+        
+        # 使用 FilmTypeController 获取胶片类型的默认参数
+        controller = FilmTypeController()
+        default_params = controller.get_default_params(film_type)
+        
+        # 尝试从通用默认文件获取基础预设结构
+        base_preset = load_default_preset()
+        if base_preset:
+            # 创建副本并应用胶片类型的默认参数
+            preset_dict = base_preset.to_dict()
+            
+            # 更新胶片类型
+            if 'metadata' not in preset_dict:
+                preset_dict['metadata'] = {}
+            preset_dict['metadata']['film_type'] = film_type
+            
+            # 更新 cc_params 为胶片类型的默认值
+            if 'cc_params' not in preset_dict:
+                preset_dict['cc_params'] = {}
+            
+            cc_params = preset_dict['cc_params']
+            cc_params.update({
+                'density_gamma': default_params.get('density_gamma', 1.0),
+                'density_dmax': default_params.get('density_dmax', 2.5),
+                'rgb_gains': list(default_params.get('rgb_gains', (0.0, 0.0, 0.0))),
+                'density_matrix': {
+                    'name': default_params.get('density_matrix_name', 'Identity'),
+                    'values': None
+                },
+                'density_curve': {
+                    'name': default_params.get('density_curve_name', 'linear'),
+                    'points': {'rgb' if film_type not in ['b&w_negative', 'b&w_reversal'] else 'gray': [[0.0, 0.0], [1.0, 1.0]]}
+                }
+            })
+            
+            preset = Preset.from_dict(preset_dict)
+            preset.film_type = film_type
+            return preset
+        else:
+            # 如果没有基础预设，创建最小化预设
+            preset = Preset(
+                name=f"{film_type} 默认预设",
+                version=3,
+                film_type=film_type,
+                grading_params={
+                    'density_gamma': default_params.get('density_gamma', 1.0),
+                    'density_dmax': default_params.get('density_dmax', 2.5),
+                    'rgb_gains': list(default_params.get('rgb_gains', (0.0, 0.0, 0.0))),
+                }
+            )
+            
+            # 设置默认的 density_matrix 和 density_curve
+            preset.density_matrix = MatrixDefinition(
+                name=default_params.get('density_matrix_name', 'Identity'),
+                values=None
+            )
+            preset.density_curve = CurveDefinition(
+                name=default_params.get('density_curve_name', 'linear'),
+                points=[[0.0, 0.0], [1.0, 1.0]]
+            )
+            
+            return preset
+            
+    except Exception as e:
+        print(f"加载胶片类型 '{film_type}' 的默认预设失败: {e}")
+        return None
+
+
+def get_available_film_types() -> list[str]:
+    """
+    获取所有可用的胶片类型（基于配置文件）。
+    
+    Returns:
+        可用胶片类型列表
+    """
+    film_types = [
+        "color_negative_c41",
+        "color_negative_ecn2", 
+        "color_reversal",
+        "b&w_negative",
+        "b&w_reversal",
+        "digital"
+    ]
+    
+    return film_types
+
+

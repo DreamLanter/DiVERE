@@ -396,7 +396,8 @@ class DiVERELUTInterface:
             
             # 完整管线处理
             divere_result = context.the_enlarger.apply_full_pipeline(
-                converted_image, params, include_curve=True, for_export=True
+                converted_image, params, include_curve=True, for_export=True,
+                convert_to_monochrome_in_idt=False, monochrome_converter=None
             )
             divere_colors = divere_result.array.reshape(-1, 3)
             
@@ -447,7 +448,8 @@ class DiVERELUTInterface:
             
             step1_image = ImageData(array=step1_colors.reshape(1, -1, 3), file_path="", metadata={})
             step2_result = context.the_enlarger.apply_full_pipeline(
-                step1_image, color_params, include_curve=False, for_export=True
+                step1_image, color_params, include_curve=False, for_export=True,
+                convert_to_monochrome_in_idt=False, monochrome_converter=None
             )
             step2_colors = step2_result.array.reshape(-1, 3)
             
@@ -567,7 +569,8 @@ class DiVERELUTInterface:
                 # include_curve参数根据LUT类型决定
                 include_curve = params.enable_density_curve
                 processed_image = the_enlarger.apply_full_pipeline(
-                    fake_image, params, include_curve=include_curve
+                    fake_image, params, include_curve=include_curve,
+                    convert_to_monochrome_in_idt=False, monochrome_converter=None
                 )
                 
                 if processed_image is None or processed_image.array is None:

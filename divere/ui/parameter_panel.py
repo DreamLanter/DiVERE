@@ -506,6 +506,103 @@ class ParameterPanel(QWidget):
         self._is_updating_ui = True
         self._sync_combo_box(self.film_type_combo, film_type)
         self._is_updating_ui = False
+        # 应用对应的UI状态
+        self._apply_ui_state_for_film_type(film_type)
+    
+    def _apply_ui_state_for_film_type(self, film_type: str):
+        """根据胶片类型应用UI状态配置"""
+        ui_config = self.context.film_type_controller.get_ui_state_config(film_type)
+        
+        # 应用密度反相控件状态
+        self.enable_density_inversion_checkbox.setEnabled(ui_config.density_inversion_enabled)
+        self.enable_density_inversion_checkbox.setVisible(ui_config.density_inversion_visible)
+        
+        # 应用密度矩阵控件状态
+        self._set_density_matrix_ui_state(ui_config.density_matrix_enabled, ui_config.density_matrix_visible)
+        
+        # 应用RGB增益控件状态
+        self._set_rgb_gains_ui_state(ui_config.rgb_gains_enabled, ui_config.rgb_gains_visible)
+        
+        # 应用密度曲线控件状态
+        self.enable_density_curve_checkbox.setEnabled(ui_config.density_curve_enabled)
+        self.enable_density_curve_checkbox.setVisible(ui_config.density_curve_visible)
+        
+        # 应用色彩空间控件状态
+        self._set_color_space_ui_state(ui_config.color_space_enabled, ui_config.color_space_visible)
+        
+        # 设置工具提示
+        if ui_config.disabled_tooltip:
+            self._set_disabled_tooltips(ui_config.disabled_tooltip)
+    
+    def _set_density_matrix_ui_state(self, enabled: bool, visible: bool):
+        """设置密度矩阵控件组状态"""
+        # 控制矩阵编辑器
+        for i in range(3):
+            for j in range(3):
+                self.matrix_editor_widgets[i][j].setEnabled(enabled)
+        
+        # 控制矩阵下拉菜单
+        self.matrix_combo.setEnabled(enabled)
+        
+        # 控制启用复选框
+        self.enable_density_matrix_checkbox.setEnabled(enabled)
+        self.enable_density_matrix_checkbox.setVisible(visible)
+    
+    def _set_rgb_gains_ui_state(self, enabled: bool, visible: bool):
+        """设置RGB增益控件组状态"""
+        # 控制滑块和输入框
+        self.red_gain_slider.setEnabled(enabled)
+        self.red_gain_spinbox.setEnabled(enabled)
+        self.green_gain_slider.setEnabled(enabled)
+        self.green_gain_spinbox.setEnabled(enabled)
+        self.blue_gain_slider.setEnabled(enabled)
+        self.blue_gain_spinbox.setEnabled(enabled)
+        
+        # 控制自动校色按钮
+        self.auto_color_single_button.setEnabled(enabled)
+        self.auto_color_multi_button.setEnabled(enabled)
+        
+        # 控制启用复选框
+        self.enable_rgb_gains_checkbox.setEnabled(enabled)
+        self.enable_rgb_gains_checkbox.setVisible(visible)
+    
+    def _set_color_space_ui_state(self, enabled: bool, visible: bool):
+        """设置色彩空间控件组状态"""
+        # 控制输入色彩空间下拉菜单
+        self.input_colorspace_combo.setEnabled(enabled)
+        
+        # 控制IDT Gamma控件
+        self.idt_gamma_slider.setEnabled(enabled)
+        self.idt_gamma_spinbox.setEnabled(enabled)
+        
+        # 控制光谱锐化相关控件（如果启用）
+        if hasattr(self, 'enable_scanner_spectral_checkbox'):
+            self.enable_scanner_spectral_checkbox.setEnabled(enabled)
+    
+    def _set_disabled_tooltips(self, tooltip: str):
+        """为禁用的控件设置工具提示"""
+        # 为主要的禁用控件设置工具提示
+        disabled_widgets = []
+        
+        # 根据当前状态确定哪些控件被禁用
+        if not self.enable_density_inversion_checkbox.isEnabled():
+            disabled_widgets.extend([
+                self.density_gamma_slider, self.density_gamma_spinbox,
+                self.density_dmax_slider, self.density_dmax_spinbox
+            ])
+        
+        if not self.matrix_combo.isEnabled():
+            disabled_widgets.append(self.matrix_combo)
+            disabled_widgets.extend([widget for row in self.matrix_editor_widgets for widget in row])
+        
+        if not self.input_colorspace_combo.isEnabled():
+            disabled_widgets.extend([
+                self.input_colorspace_combo, self.idt_gamma_slider, self.idt_gamma_spinbox
+            ])
+        
+        # 应用工具提示
+        for widget in disabled_widgets:
+            widget.setToolTip(tooltip)
 
     # --- Internal sync slots ---
     def _on_gamma_slider_changed(self, value: int):
@@ -588,6 +685,11 @@ class ParameterPanel(QWidget):
         film_type_value = self.film_type_combo.currentData()
         if film_type_value:
             self.current_film_type = film_type_value
+            
+            # 应用UI状态配置
+            self._apply_ui_state_for_film_type(film_type_value)
+            
+            # 发出信号
             self.film_type_changed.emit(film_type_value)
             self.parameter_changed.emit()
     

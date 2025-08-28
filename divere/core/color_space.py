@@ -69,6 +69,9 @@ class ColorSpaceManager:
             self._verbose_logs = False
         self._load_colorspaces_from_json()
         
+        # 设置monochrome色彩空间
+        self.setup_monochrome_color_space()
+        
         # 不再需要预计算转换矩阵，使用在线计算
         # 增加一个简单的转换缓存，加速重复转换
         self._convert_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
@@ -525,10 +528,34 @@ class ColorSpaceManager:
         """应用色彩矩阵变换和增益校正"""
         # 重塑图像为2D数组以便矩阵乘法
         original_shape = image_array.shape
-        if len(original_shape) == 3:
+        
+        # 处理单通道图像
+        if len(original_shape) == 2:
+            # 2D灰度图像，复制为3通道处理
+            mono_array = image_array[..., np.newaxis]
+            rgb_array = np.repeat(mono_array, 3, axis=-1)
+            h, w, c = rgb_array.shape
+            rgb = rgb_array.reshape(-1, 3)
+            # 应用矩阵与白点增益
+            transformed = np.dot(rgb, matrix.T)
+            transformed *= gain_vector[np.newaxis, :]
+            # 转换回单通道（取绿色通道）
+            result_rgb = transformed.reshape(h, w, 3)
+            return result_rgb[..., 1]  # 返回2D灰度图
+        elif len(original_shape) == 3:
             h, w, c = original_shape
-            # 仅对前3个通道做矩阵变换（忽略Alpha），以避免RGBA与3x3矩阵乘法维度不匹配
-            if c >= 3:
+            if c == 1:
+                # 单通道图像，复制为3通道处理
+                rgb_array = np.repeat(image_array, 3, axis=-1)
+                rgb = rgb_array.reshape(-1, 3)
+                # 应用矩阵与白点增益
+                transformed = np.dot(rgb, matrix.T)
+                transformed *= gain_vector[np.newaxis, :]
+                # 转换回单通道（取绿色通道）
+                result_rgb = transformed.reshape(h, w, 3)
+                return result_rgb[..., 1:2]  # 保持单通道维度
+            elif c >= 3:
+                # 多通道图像，仅对前3个通道做矩阵变换（忽略Alpha）
                 rgb = image_array[..., :3].reshape(-1, 3)
                 # 应用矩阵与白点增益
                 transformed = np.dot(rgb, matrix.T)
@@ -537,7 +564,7 @@ class ColorSpaceManager:
                 result[..., :3] = transformed.reshape(h, w, 3)
                 return result
             else:
-                # 非3通道，直接返回
+                # 其他通道数，直接返回
                 return image_array
         else:
             return image_array
@@ -562,8 +589,19 @@ class ColorSpaceManager:
         # 基于图像直方图的分布特征
         
         if len(image.array.shape) == 3:
-            # 使用亮度通道
-            gray = np.dot(image.array[..., :3], [0.299, 0.587, 0.114])
+            channels = image.array.shape[2]
+            if channels >= 3:
+                # 使用RGB亮度加权
+                gray = np.dot(image.array[..., :3], [0.299, 0.587, 0.114])
+            elif channels == 1:
+                # 单通道图像，直接使用
+                gray = image.array[..., 0]
+            elif channels == 2:
+                # 双通道图像，使用第一个通道
+                gray = image.array[..., 0]
+            else:
+                # 其他情况，使用第一个通道
+                gray = image.array[..., 0]
         else:
             gray = image.array
         
@@ -600,7 +638,127 @@ class ColorSpaceManager:
             
             image.array = self._apply_color_matrix(image.array, matrix)
         
-        return image 
+        return image
+    
+    # =================
+    # Monochrome Support for Black & White Films
+    # =================
+    
+    def convert_to_monochrome(self, image: ImageData, preserve_ir: bool = True) -> ImageData:
+        """
+        将彩色图像转换为单色（黑白）图像
+        
+        Args:
+            image: 输入图像
+            preserve_ir: 是否保留红外通道（如果存在）
+            
+        Returns:
+            转换后的单色图像
+        """
+        if image is None or image.array is None:
+            return image
+        
+        array = image.array.copy()
+        original_shape = array.shape
+        
+        # 处理不同的通道数
+        if len(original_shape) == 2:
+            # 已经是单色图像
+            return image
+        elif len(original_shape) == 3:
+            height, width, channels = original_shape
+            
+            if channels == 1:
+                # 已经是单色
+                return image
+            elif channels >= 3:
+                # RGB转换为luminance，使用ITU-R BT.709权重
+                luminance = self._rgb_to_luminance(array[..., :3])
+                
+                if channels == 3:
+                    # RGB → 3个相同的monochrome通道（保持3通道用于管线兼容性）
+                    result_array = np.stack([luminance, luminance, luminance], axis=2)
+                elif channels == 4 and preserve_ir:
+                    # RGBIR → 3个相同的Luminance通道 + IR
+                    ir_channel = array[..., 3:4]  # 保持维度
+                    mono_channels = np.stack([luminance, luminance, luminance], axis=2)
+                    result_array = np.concatenate([mono_channels, ir_channel], axis=2)
+                else:
+                    # 其他情况，3个相同的luminance通道
+                    result_array = np.stack([luminance, luminance, luminance], axis=2)
+                
+                return ImageData(
+                    array=result_array,
+                    file_path=image.file_path,
+                    color_space="Monochrome"
+                )
+        
+        return image
+    
+    def _rgb_to_luminance(self, rgb_array: np.ndarray) -> np.ndarray:
+        """
+        使用ITU-R BT.709权重将RGB转换为luminance
+        
+        Y = 0.2126 * R + 0.7152 * G + 0.0722 * B
+        """
+        if len(rgb_array.shape) == 3 and rgb_array.shape[2] >= 3:
+            # 使用ITU-R BT.709 luminance权重
+            weights = np.array([0.2126, 0.7152, 0.0722])
+            return np.dot(rgb_array[..., :3], weights)
+        else:
+            # 如果不是RGB格式，返回第一个通道
+            return rgb_array[..., 0] if len(rgb_array.shape) == 3 else rgb_array
+    
+    def is_monochrome_image(self, image: ImageData) -> bool:
+        """
+        判断图像是否为单色图像
+        """
+        if image is None or image.array is None:
+            return False
+        
+        shape = image.array.shape
+        if len(shape) == 2:
+            return True
+        elif len(shape) == 3:
+            channels = shape[2]
+            if channels == 1:
+                return True
+            elif channels == 2:
+                # 可能是 Luminance + IR
+                return True
+            elif channels >= 3:
+                # 检查是否所有RGB通道都相等
+                rgb = image.array[..., :3]
+                # 安全检查：确保rgb确实有3个通道
+                if rgb.shape[-1] >= 3:
+                    return np.allclose(rgb[..., 0], rgb[..., 1]) and np.allclose(rgb[..., 1], rgb[..., 2])
+                elif rgb.shape[-1] == 1:
+                    # 如果实际只有1个通道，则认为是单色
+                    return True
+                else:
+                    # 2个通道的情况，假设是单色
+                    return True
+        
+        return False
+    
+    def get_monochrome_color_space_info(self) -> Dict[str, Any]:
+        """
+        获取monochrome色彩空间信息
+        """
+        return {
+            "name": "Monochrome",
+            "type": "monochrome",
+            "gamma": 1.0,
+            "white_point": np.array([0.3127, 0.3290]),  # D65白点
+            "primaries": None,  # 单色没有primaries
+            "description": "Monochrome (Black & White) color space"
+        }
+    
+    def setup_monochrome_color_space(self):
+        """
+        设置monochrome色彩空间定义
+        """
+        self._color_spaces["Monochrome"] = self.get_monochrome_color_space_info()
 
     # --- 颜色空间属性更新 ---
     def update_color_space_gamma(self, space_name: str, gamma: float) -> None:

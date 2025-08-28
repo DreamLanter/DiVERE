@@ -33,6 +33,7 @@ except ImportError:
     DEEP_WB_AVAILABLE = False
 
 
+
 class TheEnlarger:
     """胶片放大机引擎，负责所有图像处理操作 - 重构版本"""
 
@@ -72,7 +73,9 @@ class TheEnlarger:
     def apply_full_pipeline(self, image: ImageData, params: ColorGradingParams, 
                            include_curve: bool = True,
                            for_export: bool = False,
-                           chunked: bool | None = None) -> ImageData:
+                           chunked: bool | None = None,
+                           convert_to_monochrome_in_idt: bool = False,
+                           monochrome_converter: Optional[callable] = None) -> ImageData:
         """
         应用完整处理管线（保持向后兼容的接口）
         
@@ -80,6 +83,10 @@ class TheEnlarger:
             image: 输入图像
             params: 处理参数
             include_curve: 是否包含曲线处理
+            for_export: 是否用于导出
+            chunked: 是否使用分块处理
+            convert_to_monochrome_in_idt: 是否在IDT阶段转换为单色
+            monochrome_converter: 单色转换函数
             
         Returns:
             处理后的图像
@@ -95,11 +102,15 @@ class TheEnlarger:
             image, params,
             include_curve=include_curve,
             use_optimization=use_optimization,
-            chunked=chunked_arg
+            chunked=chunked_arg,
+            convert_to_monochrome_in_idt=convert_to_monochrome_in_idt,
+            monochrome_converter=monochrome_converter
         )
 
     def apply_preview_pipeline(self, image: ImageData, params: ColorGradingParams,
-                              include_curve: bool = True) -> ImageData:
+                              include_curve: bool = True,
+                              convert_to_monochrome_in_idt: bool = False,
+                              monochrome_converter: Optional[callable] = None) -> ImageData:
         """
         应用预览管线（新接口）
         
@@ -107,6 +118,8 @@ class TheEnlarger:
             image: 输入图像
             params: 处理参数
             include_curve: 是否包含曲线处理
+            convert_to_monochrome_in_idt: 是否在IDT阶段转换为单色
+            monochrome_converter: 单色转换函数
             
         Returns:
             处理后的预览图像
@@ -115,7 +128,10 @@ class TheEnlarger:
             return None
             
         return self.pipeline_processor.apply_preview_pipeline(
-            image, params, include_curve=include_curve
+            image, params, 
+            include_curve=include_curve,
+            convert_to_monochrome_in_idt=convert_to_monochrome_in_idt,
+            monochrome_converter=monochrome_converter
         )
 
     def apply_density_inversion(self, image: ImageData, gamma: float, dmax: float) -> ImageData:
@@ -196,8 +212,8 @@ class TheEnlarger:
             # 计算增益
             gains = np.log10(original_mean / corrected_mean)
             
-            # 裁剪增益值
-            gains = -np.clip(gains, -2.0, 2.0) + gains[1]  # 这里需要负号，somehow拟合出来的增益是反向的
+            # 裁剪增益值，并计算相对于G通道的调整
+            gains = -np.clip(gains, -2.0, 2.0) + gains[1]
             
             # 计算光源估计（归一化的原始均值）
             illuminant = original_mean / np.sum(original_mean)

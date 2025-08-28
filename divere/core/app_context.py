@@ -3,10 +3,11 @@ from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
 
-from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition
+from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig
 from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
+from .film_type_controller import FilmTypeController
 from ..utils.auto_preset_manager import AutoPresetManager
 
 
@@ -17,18 +18,29 @@ class _PreviewWorkerSignals(QObject):
 
 
 class _PreviewWorker(QRunnable):
-    def __init__(self, image: ImageData, params: ColorGradingParams, the_enlarger: TheEnlarger, color_space_manager: ColorSpaceManager):
+    def __init__(self, image: ImageData, params: ColorGradingParams, the_enlarger: TheEnlarger, 
+                 color_space_manager: ColorSpaceManager, convert_to_monochrome_in_idt: bool = False):
         super().__init__()
         self.image = image
         self.params = params
         self.the_enlarger = the_enlarger
         self.color_space_manager = color_space_manager
+        self.convert_to_monochrome_in_idt = convert_to_monochrome_in_idt
         self.signals = _PreviewWorkerSignals()
 
     @Slot()
     def run(self):
         try:
-            result_image = self.the_enlarger.apply_full_pipeline(self.image, self.params)
+            # 传递monochrome转换参数
+            monochrome_converter = None
+            if self.convert_to_monochrome_in_idt:
+                monochrome_converter = self.color_space_manager.convert_to_monochrome
+            
+            result_image = self.the_enlarger.apply_full_pipeline(
+                self.image, self.params,
+                convert_to_monochrome_in_idt=self.convert_to_monochrome_in_idt,
+                monochrome_converter=monochrome_converter
+            )
             result_image = self.color_space_manager.convert_to_display_space(result_image, "DisplayP3")
             self.signals.result.emit(result_image)
         except Exception as e:
@@ -54,6 +66,8 @@ class ApplicationContext(QObject):
     autosave_requested = Signal()
     # 裁剪变化（None 或 (x,y,w,h) 归一化）
     crop_changed = Signal(object)
+    # 胶片类型变化信号
+    film_type_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -64,6 +78,7 @@ class ApplicationContext(QObject):
         self.image_manager = ImageManager()
         self.color_space_manager = ColorSpaceManager()
         self.the_enlarger = TheEnlarger()
+        self.film_type_controller = FilmTypeController()
         self.auto_preset_manager = AutoPresetManager()
 
         # =================
@@ -603,6 +618,11 @@ class ApplicationContext(QObject):
                 if preset:
                     self.load_preset(preset)
                     self.status_message_changed.emit(f"已为图像加载自动预设: {preset.name}")
+                    
+                    # NOTE: Do not apply film type overrides when loading presets from file
+                    # The preset's values should be preserved as-is
+                    # self._apply_film_type_override_if_needed()
+                    
                     # 统一在此处强制按当前参数重建一次预览（确保顺序正确）
                     try:
                         print(f"[DEBUG] after load_preset(user): input={self._current_params.input_color_space_name}, gamma={self._current_params.density_gamma}, dmax={self._current_params.density_dmax}, rgb={self._current_params.rgb_gains}")
@@ -633,13 +653,25 @@ class ApplicationContext(QObject):
             print(traceback.format_exc())
             self.status_message_changed.emit(f"无法加载图像: {e}")
 
-    def load_preset(self, preset: Preset):
-        """从Preset对象加载状态 - 使用新的CropInstance模型"""
+    def load_preset(self, preset: Preset, preserve_film_type: bool = False):
+        """从Preset对象加载状态 - 使用新的CropInstance模型
+        
+        Args:
+            preset: 要加载的预设
+            preserve_film_type: 是否保留当前胶片类型，不被预设覆盖
+        """
         # 1. 清理当前状态
         self.clear_crop()
         
-        # Load film type
-        self._current_film_type = preset.film_type
+        # Load film type (optionally preserve current film type)
+        old_film_type = self._current_film_type
+        if not preserve_film_type:
+            # Set film type but do NOT apply defaults when loading a preset
+            # The preset's values should take precedence
+            self.set_current_film_type(preset.film_type, apply_defaults=False)
+        else:
+            # Keep current film type - don't change it
+            pass
         
         # 2/3. 合并更新参数：先从 grading_params 构造，再应用 input_transformation（若有）
         new_params = ColorGradingParams.from_dict(preset.grading_params or {})
@@ -734,7 +766,19 @@ class ApplicationContext(QObject):
         
         # 切换到 contactsheet profile
         self._current_profile_kind = 'contactsheet'
+        
+        # NOTE: Do not apply film type overrides when loading presets
+        # The preset's values should be preserved as-is
+        # self._apply_film_type_override_if_needed()
     
+    def _apply_film_type_override_if_needed(self):
+        """Apply film type hierarchical override system"""
+        # This triggers the UI-based override system that was implemented in MainWindow
+        # The signal will be caught by MainWindow.on_context_film_type_changed
+        # which will then apply the B&W neutralization if needed
+        if hasattr(self, 'film_type_changed'):
+            self.film_type_changed.emit(self._current_film_type)
+
     # === 新增：Bundle 加载/保存 API ===
     def load_preset_bundle(self, bundle: PresetBundle):
         """加载预设集合：设置 contactsheet 与 per-crop 参数集，并默认切换到 contactsheet。"""
@@ -891,13 +935,112 @@ class ApplicationContext(QObject):
             self._prepare_proxy()
             self._trigger_preview_update()
     
-    def set_current_film_type(self, film_type: str):
-        """设置当前胶片类型"""
+    def set_current_film_type(self, film_type: str, apply_defaults: bool = True, 
+                             force_apply_defaults: bool = False):
+        """
+        设置当前胶片类型并可选地应用对应配置
+        
+        Args:
+            film_type: 要设置的胶片类型
+            apply_defaults: 是否应用胶片类型的默认值
+            force_apply_defaults: 是否强制应用默认值（覆盖现有值）
+        """
+        old_film_type = self._current_film_type
         self._current_film_type = film_type
+        
+        # Emit signal if film type changed
+        if old_film_type != film_type:
+            self.film_type_changed.emit(film_type)
+        
+        # 根据参数决定是否应用胶片类型的默认配置
+        if apply_defaults:
+            self._current_params = self.film_type_controller.apply_film_type_defaults(
+                self._current_params, film_type, force_apply=force_apply_defaults
+            )
+        
+        # 触发参数更新和预览刷新
+        self.params_changed.emit(self._current_params)
+        if self._current_image:
+            self._prepare_proxy()
+            self._trigger_preview_update()
+    
+    def convert_to_black_and_white_mode(self, show_dialog: bool = True):
+        """
+        Convert the current photo to black & white mode.
+        This should only be called when explicitly converting a photo to B&W mode,
+        not when loading an existing B&W preset.
+        
+        Args:
+            show_dialog: Whether to show confirmation dialog (handled by UI layer)
+        """
+        if self.is_monochrome_type():
+            return  # Already in B&W mode
+            
+        # Determine the appropriate B&W film type based on current type
+        if self._current_film_type == "color_reversal":
+            new_film_type = "b&w_reversal"
+        else:
+            new_film_type = "b&w_negative"
+        
+        # Set the film type without applying defaults (preserves IDT parameters)
+        self.set_current_film_type(new_film_type, apply_defaults=False)
+        
+        # Apply only the B&W-specific changes (RGB gains, curve, pipeline settings)
+        # This preserves IDT gamma, dmax, and other user settings
+        self._current_params = self.film_type_controller.apply_black_and_white_conversion(
+            self._current_params, new_film_type
+        )
+        
+        # Update the UI and trigger preview refresh
+        self.params_changed.emit(self._current_params)
+        if self._current_image:
+            self._prepare_proxy()
+            self._trigger_preview_update()
+        
+        self.status_message_changed.emit(f"已转换为黑白模式: {self.film_type_controller.get_film_type_display_name(new_film_type)}")
     
     def get_current_film_type(self) -> str:
         """获取当前胶片类型"""
         return self._current_film_type
+    
+    def get_pipeline_config(self) -> 'PipelineConfig':
+        """获取当前胶片类型的pipeline配置"""
+        return self.film_type_controller.get_pipeline_config(self._current_film_type)
+    
+    def get_ui_state_config(self) -> 'UIStateConfig':
+        """获取当前胶片类型的UI状态配置"""
+        return self.film_type_controller.get_ui_state_config(self._current_film_type)
+    
+    def should_convert_to_monochrome(self) -> bool:
+        """判断当前胶片类型是否需要转换为monochrome"""
+        return self.film_type_controller.should_convert_to_monochrome(self._current_film_type)
+    
+    def is_monochrome_type(self) -> bool:
+        """判断当前是否为黑白胶片类型"""
+        return self.film_type_controller.is_monochrome_type(self._current_film_type)
+    
+    def load_film_type_default_preset(self, film_type: Optional[str] = None):
+        """加载指定胶片类型的默认预设"""
+        if film_type is None:
+            film_type = self._current_film_type
+            
+        try:
+            from divere.utils.defaults import load_film_type_default_preset
+            preset = load_film_type_default_preset(film_type)
+            if preset:
+                self.load_preset(preset)
+                self.status_message_changed.emit(f"已加载 {film_type} 胶片类型的默认预设")
+            else:
+                raise ValueError(f"无法加载胶片类型 '{film_type}' 的默认预设")
+        except Exception as e:
+            self.status_message_changed.emit(f"加载胶片类型默认预设失败: {e}")
+            # 回退到通用默认预设
+            try:
+                from divere.utils.defaults import load_default_preset
+                self.load_preset(load_default_preset())
+                self.status_message_changed.emit("已回退到通用默认预设")
+            except Exception as fallback_error:
+                self.status_message_changed.emit(f"加载默认预设失败: {fallback_error}")
 
     def reset_params(self):
         """重置参数：根据当前图像类型选择智能默认预设"""
@@ -930,6 +1073,13 @@ class ApplicationContext(QObject):
 
     def run_auto_color_correction(self, get_preview_callback):
         """执行AI自动白平衡"""
+        # 黑白模式下跳过RGB gains调整
+        if self.is_monochrome_type():
+            pipeline_config = self.film_type_controller.get_pipeline_config(self._current_film_type)
+            if not pipeline_config.enable_rgb_gains:
+                self.status_message_changed.emit("黑白胶片模式下RGB自动校色功能已禁用")
+                return
+        
         preview_image = get_preview_callback()
         if preview_image is None or preview_image.array is None:
             self.status_message_changed.emit("自动校色失败：无预览图像")
@@ -949,14 +1099,30 @@ class ApplicationContext(QObject):
             new_params = self._current_params.copy()
             new_params.rgb_gains = tuple(new_gains)
             self.update_params(new_params)
-            self.status_message_changed.emit(
-                f"AI自动校色完成. ΔGains(×γ/2): R={delta[0]:.2f}, G={delta[1]:.2f}, B={delta[2]:.2f}"
-            )
+            
+            # 根据图像类型显示不同的消息
+            if self.is_monochrome_type():
+                # 黑白图像：只显示灰度增益
+                self.status_message_changed.emit(
+                    f"AI自动校色完成. ΔGain(×γ/2): 灰度={delta[0]:.2f}"
+                )
+            else:
+                # 彩色图像：显示RGB增益
+                self.status_message_changed.emit(
+                    f"AI自动校色完成. ΔGains(×γ/2): R={delta[0]:.2f}, G={delta[1]:.2f}, B={delta[2]:.2f}"
+                )
         except Exception as e:
             self.status_message_changed.emit(f"AI自动校色失败: {e}")
 
     def run_iterative_auto_color(self, get_preview_callback, max_iterations=10):
         """执行迭代式AI自动白平衡"""
+        # 黑白模式下跳过RGB gains调整
+        if self.is_monochrome_type():
+            pipeline_config = self.film_type_controller.get_pipeline_config(self._current_film_type)
+            if not pipeline_config.enable_rgb_gains:
+                self.status_message_changed.emit("黑白胶片模式下RGB迭代校色功能已禁用")
+                return
+        
         self._auto_color_iterations = max_iterations
         self._get_preview_for_auto_color_callback = get_preview_callback
         self._perform_auto_color_iteration() # Start the first iteration
@@ -965,6 +1131,15 @@ class ApplicationContext(QObject):
         if self._auto_color_iterations <= 0 or not self._get_preview_for_auto_color_callback:
             self._get_preview_for_auto_color_callback = None # Clean up
             return
+        
+        # 黑白模式下中止迭代
+        if self.is_monochrome_type():
+            pipeline_config = self.film_type_controller.get_pipeline_config(self._current_film_type)
+            if not pipeline_config.enable_rgb_gains:
+                self.status_message_changed.emit("黑白胶片模式下RGB迭代校色已中止")
+                self._auto_color_iterations = 0
+                self._get_preview_for_auto_color_callback = None
+                return
 
         preview_image = self._get_preview_for_auto_color_callback()
         if preview_image is None or preview_image.array is None:
@@ -1065,6 +1240,8 @@ class ApplicationContext(QObject):
             proxy, skip_gamma_inverse=True
         )
 
+        # Monochrome转换现在在pipeline processor的IDT阶段进行
+
         # === 标准变换链：Step 5 - 旋转 ===
         # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用全局orientation
         effective_orientation = self._current_orientation  # 默认使用全局orientation
@@ -1149,6 +1326,7 @@ class ApplicationContext(QObject):
             params=params_copy,
             the_enlarger=self.the_enlarger,
             color_space_manager=self.color_space_manager,
+            convert_to_monochrome_in_idt=self.should_convert_to_monochrome()
         )
         worker.signals.result.connect(self._on_preview_result)
         worker.signals.error.connect(self._on_preview_error)

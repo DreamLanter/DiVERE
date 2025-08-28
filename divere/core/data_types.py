@@ -763,6 +763,83 @@ class LUT3D:
         
         return result
 
+
+@dataclass
+class PipelineConfig:
+    """Pipeline配置：定义每种胶片类型的处理流程"""
+    # Pipeline步骤启用/禁用
+    enable_density_inversion: bool = True
+    enable_density_matrix: bool = True
+    enable_rgb_gains: bool = True  
+    enable_density_curve: bool = True
+    # IDT相关设置
+    enable_idt_gamma_correction: bool = True      # 启用IDT gamma矫正
+    enable_idt_color_space_conversion: bool = True # 启用IDT色彩空间转换
+    enable_color_space_conversion: bool = True     # 向后兼容字段（已弃用）
+    
+    # 特殊处理模式
+    convert_to_monochrome_in_idt: bool = False  # 在IDT阶段转换为monochrome
+    
+    # 默认值
+    default_density_gamma: float = 1.0
+    default_density_dmax: float = 2.5
+    default_density_matrix_name: str = "Identity"  
+    default_density_curve_name: str = "linear"
+    
+    def copy(self) -> "PipelineConfig":
+        """返回深拷贝"""
+        return PipelineConfig(
+            enable_density_inversion=self.enable_density_inversion,
+            enable_density_matrix=self.enable_density_matrix,
+            enable_rgb_gains=self.enable_rgb_gains,
+            enable_density_curve=self.enable_density_curve,
+            enable_idt_gamma_correction=self.enable_idt_gamma_correction,
+            enable_idt_color_space_conversion=self.enable_idt_color_space_conversion,
+            enable_color_space_conversion=self.enable_color_space_conversion,
+            convert_to_monochrome_in_idt=self.convert_to_monochrome_in_idt,
+            default_density_gamma=self.default_density_gamma,
+            default_density_dmax=self.default_density_dmax,
+            default_density_matrix_name=self.default_density_matrix_name,
+            default_density_curve_name=self.default_density_curve_name
+        )
+
+
+@dataclass
+class UIStateConfig:
+    """UI状态配置：定义每种胶片类型的界面状态"""
+    # 控件启用状态
+    density_inversion_enabled: bool = True
+    density_matrix_enabled: bool = True
+    rgb_gains_enabled: bool = True
+    density_curve_enabled: bool = True
+    color_space_enabled: bool = True
+    
+    # 控件可见性
+    density_inversion_visible: bool = True
+    density_matrix_visible: bool = True
+    rgb_gains_visible: bool = True
+    density_curve_visible: bool = True
+    color_space_visible: bool = True
+    
+    # 工具提示信息
+    disabled_tooltip: str = ""
+    
+    def copy(self) -> "UIStateConfig":
+        """返回深拷贝"""
+        return UIStateConfig(
+            density_inversion_enabled=self.density_inversion_enabled,
+            density_matrix_enabled=self.density_matrix_enabled,
+            rgb_gains_enabled=self.rgb_gains_enabled,
+            density_curve_enabled=self.density_curve_enabled,
+            color_space_enabled=self.color_space_enabled,
+            density_inversion_visible=self.density_inversion_visible,
+            density_matrix_visible=self.density_matrix_visible,
+            rgb_gains_visible=self.rgb_gains_visible,
+            density_curve_visible=self.density_curve_visible,
+            color_space_visible=self.color_space_visible,
+            disabled_tooltip=self.disabled_tooltip
+        )
+
 @dataclass
 class Curve:
     """密度曲线数据结构"""
@@ -802,12 +879,20 @@ class Curve:
         curve_x = curve_data[:, 0]
         curve_y = curve_data[:, 1]
         
-        result = np.zeros_like(image)
-        for c in range(image.shape[2]):
-            # 对每个通道应用曲线
-            channel = image[:, :, c]
-            # 将像素值映射到曲线
-            indices = np.clip(channel * (len(curve_x) - 1), 0, len(curve_x) - 1).astype(int)
-            result[:, :, c] = curve_y[indices]
-        
-        return result
+        # 处理不同维度的图像
+        if len(image.shape) == 2:
+            # 2D灰度图像
+            indices = np.clip(image * (len(curve_x) - 1), 0, len(curve_x) - 1).astype(int)
+            return curve_y[indices]
+        elif len(image.shape) == 3:
+            result = np.zeros_like(image)
+            num_channels = image.shape[2]
+            for c in range(num_channels):
+                # 对每个通道应用曲线
+                channel = image[:, :, c]
+                # 将像素值映射到曲线
+                indices = np.clip(channel * (len(curve_x) - 1), 0, len(curve_x) - 1).astype(int)
+                result[:, :, c] = curve_y[indices]
+            return result
+        else:
+            return image

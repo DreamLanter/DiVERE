@@ -121,27 +121,56 @@ class FilmMathOps:
         if abs(exp_f - 1.0) < 1e-6:
             return image_array
 
-        has_alpha = (image_array.ndim == 3 and image_array.shape[2] >= 4)
-        if use_optimization:
-            # LUT路径（32K级别足以用于预览，导出可选择关闭优化以走高精度pow）
-            lut_size = 32768
-            lut = self._get_power_lut(exp_f, lut_size)
-            # 按通道处理，仅前3通道
-            h, w = image_array.shape[:2]
-            result = image_array.copy()
-            rgb = result[:, :, :3]
-            rgb = np.clip(rgb, 0.0, 1.0)
-            indices = np.round(rgb * (lut_size - 1)).astype(np.uint16)
-            rgb_out = np.take(lut, indices)
-            result[:, :, :3] = rgb_out.astype(result.dtype)
-            return result
+        original_shape = image_array.shape
+        
+        # 处理单通道图像
+        if len(original_shape) == 2:
+            # 2D灰度图像
+            rgb_clipped = np.clip(image_array, 0.0, 1.0)
+            if use_optimization:
+                lut_size = 32768
+                lut = self._get_power_lut(exp_f, lut_size)
+                indices = np.round(rgb_clipped * (lut_size - 1)).astype(np.uint16)
+                return np.take(lut, indices).astype(image_array.dtype)
+            else:
+                return np.power(rgb_clipped, exp_f, dtype=np.float32).astype(image_array.dtype)
+        
+        elif len(original_shape) == 3 and original_shape[2] == 1:
+            # 单通道3D图像
+            rgb_clipped = np.clip(image_array, 0.0, 1.0)
+            if use_optimization:
+                lut_size = 32768
+                lut = self._get_power_lut(exp_f, lut_size)
+                indices = np.round(rgb_clipped * (lut_size - 1)).astype(np.uint16)
+                return np.take(lut, indices).astype(image_array.dtype)
+            else:
+                return np.power(rgb_clipped, exp_f, dtype=np.float32).astype(image_array.dtype)
+        
         else:
-            # 直接pow路径（导出建议走此路径）
-            result = image_array.copy()
-            rgb = np.clip(result[:, :, :3], 0.0, 1.0)
-            rgb_out = np.power(rgb, exp_f, dtype=np.float32)
-            result[:, :, :3] = rgb_out.astype(result.dtype)
-            return result
+            # 多通道图像
+            has_alpha = (len(original_shape) == 3 and original_shape[2] >= 4)
+            if use_optimization:
+                # LUT路径（32K级别足以用于预览，导出可选择关闭优化以走高精度pow）
+                lut_size = 32768
+                lut = self._get_power_lut(exp_f, lut_size)
+                # 按通道处理，仅前3通道
+                h, w = original_shape[:2]
+                result = image_array.copy()
+                if original_shape[2] >= 3:
+                    rgb = result[:, :, :3]
+                    rgb = np.clip(rgb, 0.0, 1.0)
+                    indices = np.round(rgb * (lut_size - 1)).astype(np.uint16)
+                    rgb_out = np.take(lut, indices)
+                    result[:, :, :3] = rgb_out.astype(result.dtype)
+                return result
+            else:
+                # 直接pow路径（导出建议走此路径）
+                result = image_array.copy()
+                if original_shape[2] >= 3:
+                    rgb = np.clip(result[:, :, :3], 0.0, 1.0)
+                    rgb_out = np.power(rgb, exp_f, dtype=np.float32)
+                    result[:, :, :3] = rgb_out.astype(result.dtype)
+                return result
 
     def _get_power_lut(self, exponent: float, size: int = 32768) -> np.ndarray:
         key = ("pow", round(float(exponent), 6), int(size))
@@ -391,22 +420,29 @@ class FilmMathOps:
     def _apply_matrix_sequential(self, input_density: np.ndarray, matrix: np.ndarray,
                                 pivot: float, dmax: float) -> np.ndarray:
         """顺序版本的矩阵应用"""
-        # 重塑为 [N, 3] 进行矩阵乘法
         original_shape = input_density.shape
-        reshaped = input_density.reshape(-1, 3)
         
-        # 应用矩阵变换（以pivot为转轴）
-        adjusted = pivot + np.dot(reshaped - pivot, matrix.T)
-        
-        # 恢复形状并减去dmax
-        result = adjusted.reshape(original_shape) - dmax
+        # 多通道图像，正常处理
+        reshaped = input_density.reshape(-1, input_density.shape[-1])
+        if input_density.shape[-1] == 3:
+            # RGB图像，直接应用变换
+            adjusted = pivot + np.dot(reshaped - pivot, matrix.T)
+            result = adjusted.reshape(original_shape) - dmax
+        else:
+            # 其他通道数，仅处理前3个通道
+            rgb_part = reshaped[:, :3]
+            adjusted_rgb = pivot + np.dot(rgb_part - pivot, matrix.T)
+            adjusted = reshaped.copy()
+            adjusted[:, :3] = adjusted_rgb
+            result = adjusted.reshape(original_shape) - dmax
         
         return result
     
     def _apply_matrix_parallel(self, input_density: np.ndarray, matrix: np.ndarray,
                               pivot: float, dmax: float) -> np.ndarray:
         """并行版本的矩阵应用"""
-        h, w, c = input_density.shape
+        original_shape = input_density.shape
+        h, w, c = original_shape
         
         # 计算分块
         blocks_h = (h + self.block_size - 1) // self.block_size
@@ -422,11 +458,21 @@ class FilmMathOps:
             end_w = min((j + 1) * self.block_size, w)
             
             block = input_density[start_h:end_h, start_w:end_w, :]
-            block_reshaped = block.reshape(-1, 3)
-            adjusted_block = pivot + np.dot(block_reshaped - pivot, matrix.T)
+            if c == 3:
+                # RGB图像，直接处理
+                block_reshaped = block.reshape(-1, 3)
+                adjusted_block = pivot + np.dot(block_reshaped - pivot, matrix.T)
+                result_block = adjusted_block.reshape(block.shape)
+            else:
+                # 其他通道数，仅处理前3个通道
+                block_reshaped = block.reshape(-1, c)
+                rgb_part = block_reshaped[:, :3]
+                adjusted_rgb = pivot + np.dot(rgb_part - pivot, matrix.T)
+                adjusted_block = block_reshaped.copy()
+                adjusted_block[:, :3] = adjusted_rgb
+                result_block = adjusted_block.reshape(block.shape)
             
-            return (start_h, end_h, start_w, end_w, 
-                   adjusted_block.reshape(block.shape))
+            return (start_h, end_h, start_w, end_w, result_block)
         
         # 并行处理所有块
         block_coords = [(i, j) for i in range(blocks_h) for j in range(blocks_w)]
@@ -464,8 +510,9 @@ class FilmMathOps:
         result = density_array.copy()
         
         # RGB增益在密度空间的应用：正增益降低密度（变亮），负增益增加密度（变暗）
-        for i, gain in enumerate(rgb_gains):
-            result[:, :, i] -= gain
+        num_channels = min(result.shape[2], len(rgb_gains))
+        for i in range(num_channels):
+            result[:, :, i] -= rgb_gains[i]
             
         return result
     
@@ -752,16 +799,37 @@ class FilmMathOps:
         """将3D LUT应用到密度数组"""
         density_max = float(self._LOG65536)
         lut_3d_size = lut_3d.shape[0]
+        original_shape = density_array.shape
+        
+        # 处理单通道图像
+        if len(original_shape) == 2 or (len(original_shape) == 3 and original_shape[2] == 1):
+            # 单通道图像，复制为三通道
+            if len(original_shape) == 2:
+                mono_density = density_array[..., np.newaxis]
+            else:
+                mono_density = density_array
+            rgb_density = np.repeat(mono_density, 3, axis=-1)
+        else:
+            rgb_density = density_array
         
         # 归一化密度值到LUT索引范围
-        normalized = np.clip(density_array / density_max, 0.0, 1.0)
+        normalized = np.clip(rgb_density / density_max, 0.0, 1.0)
         indices = (normalized * (lut_3d_size - 1)).astype(np.int32)
         
         # 裁剪索引以防越界
         indices = np.clip(indices, 0, lut_3d_size - 1)
         
         # 3D查表
-        result = lut_3d[indices[:, :, 0], indices[:, :, 1], indices[:, :, 2]]
+        lut_result = lut_3d[indices[:, :, 0], indices[:, :, 1], indices[:, :, 2]]
+        
+        # 如果原图是单通道，转换回单通道（取绿色通道）
+        if len(original_shape) == 2 or (len(original_shape) == 3 and original_shape[2] == 1):
+            if len(original_shape) == 2:
+                result = lut_result[:, :, 1]  # 取绿色通道
+            else:
+                result = lut_result[:, :, 1:2]  # 保持单通道维度
+        else:
+            result = lut_result
         
         return result
     

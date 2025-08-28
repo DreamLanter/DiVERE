@@ -118,9 +118,10 @@ class PreviewWidget(QWidget):
     request_smart_add_crop = Signal()  # 智能添加裁剪
     request_focus_contactsheet = Signal()  # 单张/接触印像的裁剪聚焦
     
-    def __init__(self):
+    def __init__(self, context=None):
         super().__init__()
         
+        self.context = context  # ApplicationContext for checking film type
         self.current_image: Optional[ImageData] = None
         self.zoom_factor = 1.0
         self.pan_x = 0
@@ -787,6 +788,20 @@ class PreviewWidget(QWidget):
     
     def _array_to_pixmap(self, array: np.ndarray) -> QPixmap:
         """将numpy数组转换为QPixmap"""
+        # Check if we should convert to monochrome for B&W film types
+        should_convert_to_mono = False
+        if self.context and hasattr(self.context, 'should_convert_to_monochrome'):
+            should_convert_to_mono = self.context.should_convert_to_monochrome()
+        
+        # Convert to monochrome if needed (at display stage only)
+        if should_convert_to_mono and len(array.shape) == 3 and array.shape[2] >= 3:
+            # Convert RGB to luminance using ITU-R BT.709 weights
+            luminance = (0.2126 * array[:, :, 0] + 
+                        0.7152 * array[:, :, 1] + 
+                        0.0722 * array[:, :, 2])
+            # Convert to grayscale array
+            array = luminance[:, :, np.newaxis].repeat(3, axis=2).astype(array.dtype)
+        
         if array.dtype != np.uint8:
             array = np.clip(array, 0, 1)
             array = (array * 255).astype(np.uint8)

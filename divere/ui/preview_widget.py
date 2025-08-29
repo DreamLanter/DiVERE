@@ -2023,61 +2023,90 @@ class PreviewWidget(QWidget):
     # ===== 裁剪框编辑功能 =====
     def _translate_edit_mode_for_rotation(self, mode: CropEditMode, orientation: int) -> CropEditMode:
         """
-        Translate display-space CropEditMode to original-space CropEditMode based on rotation.
+        Translate display-space CropEditMode to original-space CropEditMode based on image orientation.
         
-        This fixes the bug where clicking edges/corners after rotation adjusts the wrong side
-        by translating the visually-detected interaction zone to the semantically-correct edit mode.
+        IMPORTANT: orientation represents how much the image has been rotated FROM the original.
+        - orientation = 90 means image is currently 90° CCW from original
+        - This means what user sees as "top" is actually the original "right" edge
         
         Args:
-            mode: CropEditMode detected in display coordinates
-            orientation: Rotation angle in degrees (0, 90, 180, 270)
+            mode: CropEditMode detected in display coordinates (what user visually sees)
+            orientation: Final orientation angle in degrees (0, 90, 180, 270)
             
         Returns:
-            CropEditMode translated for original image coordinates
+            CropEditMode translated for original image coordinates (what gets semantically edited)
         """
+        print(f"🔧 TRANSLATE DEBUG: Input mode={mode}, orientation={orientation}")
+        
         if orientation % 360 == 0:
+            print(f"🔧 TRANSLATE DEBUG: No rotation, returning original mode={mode}")
             return mode
         
         # Normalize rotation to 0, 90, 180, 270
         k = (orientation // 90) % 4
         
-        if k == 1:  # 90° CCW rotation
+        print(f"🔧 TRANSLATE DEBUG: k={k} (rotation case)")
+        
+        if k == 1:  # Image is 90° CCW from original (user clicked "left rotate")
+            print(f"🔧 TRANSLATE DEBUG: Using k=1 (90° CCW) mappings")
+            # Visual → Semantic mapping (VERIFIED with np.rot90 test):
+            # After 90° CCW: Original LEFT→Visual TOP, Original TOP→Visual RIGHT, etc.
+            # User sees "top" → actually original "left" edge
+            # User sees "right" → actually original "top" edge  
+            # User sees "bottom" → actually original "right" edge
+            # User sees "left" → actually original "bottom" edge
             translation_map = {
-                CropEditMode.DRAG_TOP: CropEditMode.DRAG_LEFT,
-                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_TOP,
-                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_RIGHT,
-                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_BOTTOM,
-                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_LEFT,
-                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_TOP_LEFT,
-                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_RIGHT,
-                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_RIGHT,        # Visual top → Original right
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_BOTTOM,       # Visual right → Original bottom
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_LEFT,    # Visual bottom → Original left
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_TOP,     # Visual left → Original top
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_TOP_RIGHT,     # Visual top-left → Original top-right
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_RIGHT,       # Visual top-right → Original bottom-right
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,   # Visual bottom-right → Original bottom-left
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_LEFT, # Visual bottom-left → Original top-left
             }
-        elif k == 2:  # 180° rotation
+        elif k == 2:  # Image is 180° from original
+            print(f"🔧 TRANSLATE DEBUG: Using k=2 (180°) mappings")
+            # Visual → Semantic mapping:
+            # User sees "top" → actually original "bottom" edge
+            # User sees "right" → actually original "left" edge
+            # User sees "bottom" → actually original "top" edge
+            # User sees "left" → actually original "right" edge
             translation_map = {
-                CropEditMode.DRAG_TOP: CropEditMode.DRAG_BOTTOM,
-                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_LEFT,
-                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_TOP,
-                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_RIGHT,
-                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,
-                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,
-                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_LEFT,
-                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_RIGHT,
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_BOTTOM,      # Visual top → Original bottom
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_LEFT,      # Visual right → Original left
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_TOP,      # Visual bottom → Original top
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_RIGHT,      # Visual left → Original right
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,    # Visual top-left → Original bottom-right
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,    # Visual top-right → Original bottom-left  
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_LEFT,    # Visual bottom-right → Original top-left
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_RIGHT,    # Visual bottom-left → Original top-right
             }
-        elif k == 3:  # 270° CCW rotation
+        elif k == 3:  # Image is 270° CCW from original (equivalent to 90° CW, user clicked "right rotate")
+            print(f"🔧 TRANSLATE DEBUG: Using k=3 (90° CW) mappings")
+            # Visual → Semantic mapping (VERIFIED with np.rot90 test):
+            # After 90° CW: Original RIGHT→Visual TOP, Original BOTTOM→Visual RIGHT, etc.
+            # User sees "top" → actually original "right" edge
+            # User sees "right" → actually original "bottom" edge
+            # User sees "bottom" → actually original "left" edge
+            # User sees "left" → actually original "top" edge
             translation_map = {
-                CropEditMode.DRAG_TOP: CropEditMode.DRAG_RIGHT,
-                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_BOTTOM,
-                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_LEFT,
-                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_TOP,
-                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_TOP_RIGHT,
-                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_RIGHT,
-                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,
-                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_LEFT,
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_LEFT,       # Visual top → Original left
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_TOP,    # Visual right → Original top
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_RIGHT,     # Visual bottom → Original right
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_BOTTOM,        # Visual left → Original bottom
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_LEFT,       # Visual top-left → Original bottom-left
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_TOP_LEFT,   # Visual top-right → Original top-left
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_RIGHT, # Visual bottom-right → Original top-right
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,     # Visual bottom-left → Original bottom-right
             }
         else:
+            print(f"🔧 TRANSLATE DEBUG: Unknown k value, returning original mode={mode}")
             return mode
-            
-        return translation_map.get(mode, mode)
+        
+        translated_result = translation_map.get(mode, mode)
+        print(f"🔧 TRANSLATE DEBUG: Final result: {mode} → {translated_result}")
+        return translated_result
 
     def _get_crop_interaction_zone(self, mouse_pos: QPoint, rect_norm_override: Optional[Tuple[float, float, float, float]] = None) -> CropEditMode:
         """检测鼠标位置对应的裁剪交互区域。可选传入指定裁剪框rect进行检测。"""
@@ -2105,9 +2134,13 @@ class PreviewWidget(QWidget):
             img_x = (mx - self.pan_x) / self.zoom_factor
             img_y = (my - self.pan_y) / self.zoom_factor
             
-            # 检测容差（在图像坐标系中，考虑缩放）
-            EDGE_TOLERANCE = 8.0 / self.zoom_factor  # 边缘检测容差
-            CORNER_TOLERANCE = 12.0 / self.zoom_factor  # 角点检测容差
+            # 检测容差（固定屏幕像素大小，确保可靠的命中检测）
+            EDGE_TOLERANCE = 12.0  # 边缘检测容差（屏幕像素）
+            CORNER_TOLERANCE = 16.0  # 角点检测容差（屏幕像素）
+            
+            # 转换为图像坐标系下的容差
+            EDGE_TOLERANCE_IMG = EDGE_TOLERANCE / self.zoom_factor
+            CORNER_TOLERANCE_IMG = CORNER_TOLERANCE / self.zoom_factor
             
             # 判断是否在裁剪框附近
             left, right = x, x + w
@@ -2117,30 +2150,30 @@ class PreviewWidget(QWidget):
             detected_mode = CropEditMode.NONE
             
             # 先检测角点（优先级最高）
-            if (abs(img_x - left) <= CORNER_TOLERANCE and 
-                abs(img_y - top) <= CORNER_TOLERANCE):
+            if (abs(img_x - left) <= CORNER_TOLERANCE_IMG and 
+                abs(img_y - top) <= CORNER_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_TOP_LEFT
-            elif (abs(img_x - right) <= CORNER_TOLERANCE and 
-                  abs(img_y - top) <= CORNER_TOLERANCE):
+            elif (abs(img_x - right) <= CORNER_TOLERANCE_IMG and 
+                  abs(img_y - top) <= CORNER_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_TOP_RIGHT
-            elif (abs(img_x - left) <= CORNER_TOLERANCE and 
-                  abs(img_y - bottom) <= CORNER_TOLERANCE):
+            elif (abs(img_x - left) <= CORNER_TOLERANCE_IMG and 
+                  abs(img_y - bottom) <= CORNER_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_BOTTOM_LEFT
-            elif (abs(img_x - right) <= CORNER_TOLERANCE and 
-                  abs(img_y - bottom) <= CORNER_TOLERANCE):
+            elif (abs(img_x - right) <= CORNER_TOLERANCE_IMG and 
+                  abs(img_y - bottom) <= CORNER_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_BOTTOM_RIGHT
             # 再检测边缘
             elif (left <= img_x <= right and 
-                  abs(img_y - top) <= EDGE_TOLERANCE):
+                  abs(img_y - top) <= EDGE_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_TOP
             elif (left <= img_x <= right and 
-                  abs(img_y - bottom) <= EDGE_TOLERANCE):
+                  abs(img_y - bottom) <= EDGE_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_BOTTOM
             elif (top <= img_y <= bottom and 
-                  abs(img_x - left) <= EDGE_TOLERANCE):
+                  abs(img_x - left) <= EDGE_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_LEFT
             elif (top <= img_y <= bottom and 
-                  abs(img_x - right) <= EDGE_TOLERANCE):
+                  abs(img_x - right) <= EDGE_TOLERANCE_IMG):
                 detected_mode = CropEditMode.DRAG_RIGHT
             
             # If no interaction detected, return NONE
@@ -2158,10 +2191,11 @@ class PreviewWidget(QWidget):
                 orientation = crop_instance.orientation if crop_instance else 0
             else:
                 # In contact sheet mode, use global orientation
-                orientation = md.get('global_orientation', 0)
+                orientation = md.get('orientation', 0)
             
             # Translate the detected mode based on rotation
-            return self._translate_edit_mode_for_rotation(detected_mode, orientation)
+            translated_mode = self._translate_edit_mode_for_rotation(detected_mode, orientation)
+            return translated_mode
             
         except Exception:
             return CropEditMode.NONE
@@ -2212,7 +2246,7 @@ class PreviewWidget(QWidget):
                     self._update_crop_cursor(CropEditMode.NONE)
 
     def _update_crop_cursor(self, edit_mode: CropEditMode):
-        """根据编辑模式更新光标样式，考虑优先级"""
+        """根据编辑模式更新光标样式，考虑优先级和图像旋转"""
         
         # 如果正在其他交互中，不改变光标
         if self._crop_mode:
@@ -2224,7 +2258,10 @@ class PreviewWidget(QWidget):
         if self.cc_enabled and self.cc_drag_idx is not None:
             return  # 保持色卡拖拽时的光标
         
-        # 应用裁剪编辑的光标
+        # 获取旋转角度用于光标调整
+        display_edit_mode = self._get_display_cursor_mode(edit_mode)
+        
+        # 应用裁剪编辑的光标（基于显示后的视觉效果）
         cursor_map = {
             CropEditMode.NONE: Qt.CursorShape.ArrowCursor,
             CropEditMode.DRAG_TOP: Qt.CursorShape.SizeVerCursor,
@@ -2237,8 +2274,99 @@ class PreviewWidget(QWidget):
             CropEditMode.DRAG_BOTTOM_LEFT: Qt.CursorShape.SizeBDiagCursor,
         }
         
-        cursor = cursor_map.get(edit_mode, Qt.CursorShape.ArrowCursor)
+        cursor = cursor_map.get(display_edit_mode, Qt.CursorShape.ArrowCursor)
         self.image_label.setCursor(QCursor(cursor))
+    
+    def _get_display_cursor_mode(self, semantic_edit_mode: CropEditMode) -> CropEditMode:
+        """
+        Convert semantic edit mode to display cursor mode based on image rotation.
+        
+        IMPORTANT: This is the INVERSE of _translate_edit_mode_for_rotation.
+        - Semantic mode: what actually gets edited in original coordinates  
+        - Display mode: what cursor the user should see visually after rotation
+        
+        Example: If semantic mode is DRAG_RIGHT (edit original right edge),
+        and image is 90° CCW from original, the user visually sees this as the bottom edge,
+        so we return DRAG_BOTTOM for proper cursor display.
+        
+        Args:
+            semantic_edit_mode: The CropEditMode for original image coordinates
+            
+        Returns:
+            The CropEditMode for display cursor (what user visually sees)
+        """
+        if not self.current_image or semantic_edit_mode == CropEditMode.NONE:
+            return semantic_edit_mode
+            
+        # Get orientation from image metadata
+        md = self.current_image.metadata or {}
+        focused = md.get('crop_focused', False)
+        
+        if focused:
+            # In focused mode, use crop-specific orientation
+            crop_instance = md.get('crop_instance')
+            orientation = crop_instance.orientation if crop_instance else 0
+        else:
+            # In normal mode, use image orientation
+            orientation = md.get('orientation', 0)
+        
+        # Normalize rotation to 0, 90, 180, 270
+        k = (orientation // 90) % 4
+        
+        if k == 0:
+            return semantic_edit_mode
+        elif k == 1:  # Image is 90° CCW from original - INVERSE mapping
+            # Semantic → Visual mapping (inverse of corrected forward mapping):
+            # Original "left" → User sees "top" (inverse of visual top → original left)
+            # Original "top" → User sees "right" (inverse of visual right → original top)
+            # Original "right" → User sees "bottom" (inverse of visual bottom → original right)
+            # Original "bottom" → User sees "left" (inverse of visual left → original bottom)
+            reverse_map = {
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_TOP,            # Original left → Visual top
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_RIGHT,           # Original top → Visual right  
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_BOTTOM,        # Original right → Visual bottom
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_LEFT,         # Original bottom → Visual left
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_LEFT,        # Original bottom-left → Visual top-left
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_TOP_RIGHT,          # Original top-left → Visual top-right
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_RIGHT,      # Original top-right → Visual bottom-right
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,    # Original bottom-right → Visual bottom-left
+            }
+        elif k == 2:  # Image is 180° from original - INVERSE mapping  
+            # Semantic → Visual mapping:
+            # Original "bottom" → User sees "top" (because image rotated 180°)
+            # Original "left" → User sees "right"
+            # Original "top" → User sees "bottom" 
+            # Original "right" → User sees "left"
+            reverse_map = {
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_TOP,          # Original bottom → Visual top
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_RIGHT,          # Original left → Visual right
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_BOTTOM,          # Original top → Visual bottom
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_LEFT,          # Original right → Visual left
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_LEFT,       # Original bottom-right → Visual top-left
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_RIGHT,       # Original bottom-left → Visual top-right  
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,       # Original top-left → Visual bottom-right
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,       # Original top-right → Visual bottom-left
+            }
+        elif k == 3:  # Image is 270° CCW (90° CW) from original - INVERSE mapping
+            # Semantic → Visual mapping (inverse of corrected forward mapping):
+            # Original "right" → User sees "top" (inverse of visual top → original right)
+            # Original "bottom" → User sees "right" (inverse of visual right → original bottom)
+            # Original "left" → User sees "bottom" (inverse of visual bottom → original left)
+            # Original "top" → User sees "left" (inverse of visual left → original top)
+            reverse_map = {
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_TOP,           # Original right → Visual top
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_RIGHT,        # Original bottom → Visual right
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_BOTTOM,         # Original left → Visual bottom
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_LEFT,            # Original top → Visual left
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_TOP_LEFT,          # Original top-right → Visual top-left
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_RIGHT,      # Original bottom-right → Visual top-right
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,    # Original bottom-left → Visual bottom-right
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_LEFT,        # Original top-left → Visual bottom-left
+            }
+        else:
+            return semantic_edit_mode
+            
+        return reverse_map.get(semantic_edit_mode, semantic_edit_mode)
 
     def _clear_crop_hover_state(self):
         """清理裁剪悬停状态，在适当时机调用"""
@@ -2451,30 +2579,35 @@ class PreviewWidget(QWidget):
             # 最小尺寸约束（原始图像像素）
             MIN_SIZE = 20.0
             
-            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+            # Apply rotation translation to edit mode
+            current_orientation = md.get('orientation', 0)
+            k = current_orientation // 90 if current_orientation in [0, 90, 180, 270] else 0
+            translated_edit_mode = self._translate_edit_mode_for_rotation(self._crop_edit_mode, k)
+            
+            if translated_edit_mode == CropEditMode.DRAG_TOP:
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM:
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
-            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
-            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_RIGHT:
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
-            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_TOP_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
             
@@ -2513,30 +2646,36 @@ class PreviewWidget(QWidget):
             start_ph = sh * src_h
             new_px, new_py, new_pw, new_ph = start_px, start_py, start_pw, start_ph
             MIN_SIZE = 20.0
-            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+            
+            # Apply rotation translation to edit mode
+            current_orientation = md.get('orientation', 0)
+            k = current_orientation // 90 if current_orientation in [0, 90, 180, 270] else 0
+            translated_edit_mode = self._translate_edit_mode_for_rotation(self._crop_edit_mode, k)
+            
+            if translated_edit_mode == CropEditMode.DRAG_TOP:
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM:
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
-            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
-            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_RIGHT:
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
-            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_TOP_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_TOP_RIGHT:
                 new_py = max(0, min(orig_y, start_py + start_ph - MIN_SIZE))
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
                 new_ph = start_py + start_ph - new_py
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM_LEFT:
                 new_px = max(0, min(orig_x, start_px + start_pw - MIN_SIZE))
                 new_pw = start_px + start_pw - new_px
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM_RIGHT:
                 new_pw = max(MIN_SIZE, min(src_w - start_px, orig_x - start_px))
                 new_ph = max(MIN_SIZE, min(src_h - start_py, orig_y - start_py))
             # 回写到目标crop
@@ -2585,8 +2724,13 @@ class PreviewWidget(QWidget):
             # 最小尺寸约束（归一化）
             MIN_SIZE_NORM = 0.01  # 1%
             
+            # Apply rotation translation to edit mode
+            current_orientation = md.get('orientation', 0)
+            k = current_orientation // 90 if current_orientation in [0, 90, 180, 270] else 0
+            translated_edit_mode = self._translate_edit_mode_for_rotation(self._crop_edit_mode, k)
+            
             # 关键：根据用户拖动的视觉边缘来调整crop区域
-            if self._crop_edit_mode == CropEditMode.DRAG_TOP:
+            if translated_edit_mode == CropEditMode.DRAG_TOP:
                 # 用户拖动视觉上的"上边缘"
                 # 在crop坐标系中，这对应调整crop的上边界
                 delta_y = (local_y - 0.5) * start_h  # 相对于crop中心的偏移
@@ -2595,19 +2739,19 @@ class PreviewWidget(QWidget):
                 new_y = max(0, min(new_top, new_bottom - MIN_SIZE_NORM))
                 new_h = new_bottom - new_y
                 
-            elif self._crop_edit_mode == CropEditMode.DRAG_BOTTOM:
+            elif translated_edit_mode == CropEditMode.DRAG_BOTTOM:
                 delta_y = (local_y - 0.5) * start_h
                 new_bottom = start_y + start_h + delta_y
                 new_h = max(MIN_SIZE_NORM, min(1.0 - start_y, new_bottom - start_y))
                 
-            elif self._crop_edit_mode == CropEditMode.DRAG_LEFT:
+            elif translated_edit_mode == CropEditMode.DRAG_LEFT:
                 delta_x = (local_x - 0.5) * start_w
                 new_left = start_x + delta_x
                 new_right = start_x + start_w
                 new_x = max(0, min(new_left, new_right - MIN_SIZE_NORM))
                 new_w = new_right - new_x
                 
-            elif self._crop_edit_mode == CropEditMode.DRAG_RIGHT:
+            elif translated_edit_mode == CropEditMode.DRAG_RIGHT:
                 delta_x = (local_x - 0.5) * start_w
                 new_right = start_x + start_w + delta_x
                 new_w = max(MIN_SIZE_NORM, min(1.0 - start_x, new_right - start_x))

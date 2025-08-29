@@ -1268,6 +1268,7 @@ class ApplicationContext(QObject):
         try:
             md = self._current_proxy.metadata
             md['source_wh'] = (int(orig_w), int(orig_h))
+            md['orientation'] = int(effective_orientation) % 360  # Add orientation to metadata
             
             # 传递CropInstance信息到UI层
             crop_instance = self.get_active_crop_instance()

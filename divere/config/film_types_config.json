@@ -1,0 +1,178 @@
+{
+  "film_types": {
+    "color_negative_c41": {
+      "name": "彩色负片 C41",
+      "pipeline": {
+        "enable_density_inversion": true,
+        "enable_density_matrix": true,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": false,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 2.5,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "linear"
+      },
+      "ui_state": {
+        "density_inversion_enabled": true,
+        "density_matrix_enabled": true,
+        "rgb_gains_enabled": true,
+        "density_curve_enabled": true,
+        "color_space_enabled": true,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": ""
+      }
+    },
+    "color_negative_ecn2": {
+      "name": "彩色电影负片 ECN2",
+      "pipeline": {
+        "enable_density_inversion": true,
+        "enable_density_matrix": true,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": false,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 2.5,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "linear"
+      },
+      "ui_state": {
+        "density_inversion_enabled": true,
+        "density_matrix_enabled": true,
+        "rgb_gains_enabled": true,
+        "density_curve_enabled": true,
+        "color_space_enabled": true,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": ""
+      }
+    },
+    "color_reversal": {
+      "name": "彩色反转片",
+      "pipeline": {
+        "enable_density_inversion": false,
+        "enable_density_matrix": true,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": false,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 1.0,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "linear"
+      },
+      "ui_state": {
+        "density_inversion_enabled": false,
+        "density_matrix_enabled": true,
+        "rgb_gains_enabled": true,
+        "density_curve_enabled": true,
+        "color_space_enabled": true,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": "反转片无需密度反相"
+      }
+    },
+    "b&w_negative": {
+      "name": "黑白负片",
+      "pipeline": {
+        "enable_density_inversion": true,
+        "enable_density_matrix": true,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_idt_gamma_correction": true,
+        "enable_idt_color_space_conversion": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": true,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 2.5,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "Ilford MGFB 2",
+        "default_rgb_gains": [0.0, 0.0, 0.0]
+      },
+      "ui_state": {
+        "density_inversion_enabled": true,
+        "density_matrix_enabled": false,
+        "rgb_gains_enabled": false,
+        "density_curve_enabled": true,
+        "color_space_enabled": false,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": "黑白胶片使用中性参数（单位矩阵、零增益、线性曲线）"
+      }
+    },
+    "b&w_reversal": {
+      "name": "黑白反转片",
+      "pipeline": {
+        "enable_density_inversion": false,
+        "enable_density_matrix": true,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_idt_gamma_correction": true,
+        "enable_idt_color_space_conversion": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": true,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 1.0,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "Ilford MGFB 2",
+        "default_rgb_gains": [0.0, 0.0, 0.0]
+      },
+      "ui_state": {
+        "density_inversion_enabled": false,
+        "density_matrix_enabled": false,
+        "rgb_gains_enabled": false,
+        "density_curve_enabled": true,
+        "color_space_enabled": false,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": "黑白反转片使用中性参数（单位矩阵、零增益、线性曲线）"
+      }
+    },
+    "digital": {
+      "name": "数字图像",
+      "pipeline": {
+        "enable_density_inversion": false,
+        "enable_density_matrix": false,
+        "enable_rgb_gains": true,
+        "enable_density_curve": true,
+        "enable_color_space_conversion": true,
+        "convert_to_monochrome_in_idt": false,
+        "default_density_gamma": 1.0,
+        "default_density_dmax": 1.0,
+        "default_density_matrix_name": "Identity",
+        "default_density_curve_name": "linear"
+      },
+      "ui_state": {
+        "density_inversion_enabled": false,
+        "density_matrix_enabled": false,
+        "rgb_gains_enabled": true,
+        "density_curve_enabled": true,
+        "color_space_enabled": true,
+        "density_inversion_visible": true,
+        "density_matrix_visible": true,
+        "rgb_gains_visible": true,
+        "density_curve_visible": true,
+        "color_space_visible": true,
+        "disabled_tooltip": "数字图像无需胶片特有的密度处理"
+      }
+    }
+  }
+}

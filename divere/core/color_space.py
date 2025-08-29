@@ -379,6 +379,31 @@ class ColorSpaceManager:
         """获取色彩空间详细信息"""
         return self._color_spaces.get(color_space_name, None)
     
+    def is_grayscale_colorspace(self, color_space_name: str) -> bool:
+        """判断色彩空间是否为灰度空间"""
+        if not color_space_name:
+            return False
+        
+        # 检查色彩空间配置中的type字段
+        color_space_info = self.get_color_space_info(color_space_name)
+        if color_space_info and color_space_info.get("type") == "grayscale":
+            return True
+        
+        # 基于名称模式的检测（后备方案）
+        name_lower = color_space_name.lower()
+        grayscale_patterns = ["gray", "grey", "grayscale", "greyscale", "mono", "monochrome"]
+        return any(pattern in name_lower for pattern in grayscale_patterns)
+    
+    def get_color_colorspaces(self) -> list:
+        """获取色彩空间列表（排除灰度空间）"""
+        all_spaces = self.get_available_color_spaces()
+        return [space for space in all_spaces if not self.is_grayscale_colorspace(space)]
+    
+    def get_grayscale_colorspaces(self) -> list:
+        """获取灰度色彩空间列表"""
+        all_spaces = self.get_available_color_spaces()
+        return [space for space in all_spaces if self.is_grayscale_colorspace(space)]
+    
     def set_image_color_space(self, image: ImageData, color_space: str) -> ImageData:
         """设置图像的色彩空间"""
         if not self.validate_color_space(color_space):

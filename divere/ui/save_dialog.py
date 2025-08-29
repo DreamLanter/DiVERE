@@ -14,12 +14,13 @@ from pathlib import Path
 class SaveImageDialog(QDialog):
     """保存图像对话框"""
     
-    def __init__(self, parent=None, color_spaces=None):
+    def __init__(self, parent=None, color_spaces=None, is_bw_mode=False):
         super().__init__(parent)
         self.setWindowTitle("保存图像设置")
         self.setModal(True)
         self.setMinimumWidth(400)
         self._save_mode = 'single'  # 'single' | 'all'
+        self._is_bw_mode = is_bw_mode
         
         # 可用的色彩空间
         self.color_spaces = color_spaces or ["sRGB", "AdobeRGB", "ProPhotoRGB"]
@@ -103,20 +104,22 @@ class SaveImageDialog(QDialog):
         
     def _on_format_changed(self):
         """格式选择改变时更新默认色彩空间"""
-        if self.tiff_16bit_radio.isChecked():
-            # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
-            preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
-            for name in preferred:
-                if name in self.color_spaces:
-                    self.colorspace_combo.setCurrentText(name)
-                    break
+        if self._is_bw_mode:
+            # B&W mode: prioritize grayscale color spaces
+            preferred = ["Gray_Gamma_2_2", "Gray Gamma 2.2", "Grayscale", "sRGB"]
         else:
-            # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
-            preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
-            for name in preferred:
-                if name in self.color_spaces:
-                    self.colorspace_combo.setCurrentText(name)
-                    break
+            # Color mode: use existing logic
+            if self.tiff_16bit_radio.isChecked():
+                # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
+                preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
+            else:
+                # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
+                preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
+        
+        for name in preferred:
+            if name in self.color_spaces:
+                self.colorspace_combo.setCurrentText(name)
+                break
     
     def get_settings(self):
         """获取保存设置"""

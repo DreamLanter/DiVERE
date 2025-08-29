@@ -119,6 +119,34 @@ class MainWindow(QMainWindow):
             return out
         except Exception:
             return src_image
+
+    def _convert_to_grayscale_if_bw_mode(self, image: ImageData) -> ImageData:
+        """Convert image to grayscale if current film type is B&W mode."""
+        try:
+            # Check if current film type is monochrome
+            current_film_type = self.context.get_current_film_type()
+            if not self.context.film_type_controller.is_monochrome_type(current_film_type):
+                return image  # Not B&W mode, return unchanged
+            
+            if image.array is None or image.array.ndim != 3 or image.array.shape[2] != 3:
+                return image  # Not RGB format, return unchanged
+            
+            # Convert RGB to grayscale using ITU-R BT.709 weights
+            # Same formula as used in preview_widget.py
+            luminance = (0.2126 * image.array[:, :, 0] + 
+                        0.7152 * image.array[:, :, 1] + 
+                        0.0722 * image.array[:, :, 2])
+            
+            # Create single-channel grayscale array
+            grayscale_array = luminance[:, :, np.newaxis]
+            
+            # Return new ImageData with grayscale array
+            return image.copy_with_new_array(grayscale_array)
+            
+        except Exception as e:
+            print(f"Grayscale conversion failed: {e}")
+            return image  # Return original on error
+    
     def _connect_context_signals(self):
         """连接 ApplicationContext 的信号到UI槽函数"""
         self.context.preview_updated.connect(self._on_preview_updated)
@@ -931,11 +959,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "没有可保存的图像")
             return
         
-        # 获取可用的色彩空间
-        available_spaces = self.context.color_space_manager.get_available_color_spaces()
+        # 检测当前是否为B&W模式
+        current_film_type = self.context.get_current_film_type()
+        is_bw_mode = self.context.film_type_controller.is_monochrome_type(current_film_type)
+        
+        # 根据B&W模式获取合适的色彩空间列表
+        if is_bw_mode:
+            available_spaces = self.context.color_space_manager.get_grayscale_colorspaces()
+            # 如果没有灰度色彩空间，退回到所有色彩空间
+            if not available_spaces:
+                available_spaces = self.context.color_space_manager.get_available_color_spaces()
+        else:
+            available_spaces = self.context.color_space_manager.get_color_colorspaces()
+            # 如果没有彩色色彩空间，退回到所有色彩空间
+            if not available_spaces:
+                available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
         # 打开保存设置对话框
-        save_dialog = SaveImageDialog(self, available_spaces)
+        save_dialog = SaveImageDialog(self, available_spaces, is_bw_mode)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         
@@ -950,8 +991,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "没有可保存的图像")
             return
         
-        available_spaces = self.context.color_space_manager.get_available_color_spaces()
-        save_dialog = SaveImageDialog(self, available_spaces)
+        # 检测当前是否为B&W模式
+        current_film_type = self.context.get_current_film_type()
+        is_bw_mode = self.context.film_type_controller.is_monochrome_type(current_film_type)
+        
+        # 根据B&W模式获取合适的色彩空间列表
+        if is_bw_mode:
+            available_spaces = self.context.color_space_manager.get_grayscale_colorspaces()
+            # 如果没有灰度色彩空间，退回到所有色彩空间
+            if not available_spaces:
+                available_spaces = self.context.color_space_manager.get_available_color_spaces()
+        else:
+            available_spaces = self.context.color_space_manager.get_color_colorspaces()
+            # 如果没有彩色色彩空间，退回到所有色彩空间
+            if not available_spaces:
+                available_spaces = self.context.color_space_manager.get_available_color_spaces()
+        
+        save_dialog = SaveImageDialog(self, available_spaces, is_bw_mode)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
             
@@ -1083,7 +1139,10 @@ class MainWindow(QMainWindow):
                 result_image, settings["color_space"]
             )
             
-            # 根据扩展名与设置计算“有效位深”
+            # Convert to grayscale for B&W film types
+            result_image = self._convert_to_grayscale_if_bw_mode(result_image)
+            
+            # 根据扩展名与设置计算"有效位深"
             ext = str(Path(file_path).suffix).lower()
             requested_bit_depth = int(settings.get("bit_depth", 8))
             if ext in [".jpg", ".jpeg"]:
@@ -1161,6 +1220,8 @@ class MainWindow(QMainWindow):
                     result_image = self.context.color_space_manager.convert_to_display_space(
                         result_image, settings["color_space"]
                     )
+                    # Convert to grayscale for B&W film types
+                    result_image = self._convert_to_grayscale_if_bw_mode(result_image)
                     # 有效位深
                     ext = extension.lower()
                     requested_bit_depth = int(settings.get("bit_depth", 8))
@@ -1218,6 +1279,8 @@ class MainWindow(QMainWindow):
                     result_image = self.context.color_space_manager.convert_to_display_space(
                         result_image, settings["color_space"]
                     )
+                    # Convert to grayscale for B&W film types
+                    result_image = self._convert_to_grayscale_if_bw_mode(result_image)
                     # 有效位深
                     ext = extension.lower()
                     requested_bit_depth = int(settings.get("bit_depth", 8))

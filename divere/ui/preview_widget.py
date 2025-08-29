@@ -2021,6 +2021,64 @@ class PreviewWidget(QWidget):
             return None
 
     # ===== 裁剪框编辑功能 =====
+    def _translate_edit_mode_for_rotation(self, mode: CropEditMode, orientation: int) -> CropEditMode:
+        """
+        Translate display-space CropEditMode to original-space CropEditMode based on rotation.
+        
+        This fixes the bug where clicking edges/corners after rotation adjusts the wrong side
+        by translating the visually-detected interaction zone to the semantically-correct edit mode.
+        
+        Args:
+            mode: CropEditMode detected in display coordinates
+            orientation: Rotation angle in degrees (0, 90, 180, 270)
+            
+        Returns:
+            CropEditMode translated for original image coordinates
+        """
+        if orientation % 360 == 0:
+            return mode
+        
+        # Normalize rotation to 0, 90, 180, 270
+        k = (orientation // 90) % 4
+        
+        if k == 1:  # 90° CCW rotation
+            translation_map = {
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_LEFT,
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_TOP,
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_RIGHT,
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_BOTTOM,
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_LEFT,
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_TOP_LEFT,
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_RIGHT,
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,
+            }
+        elif k == 2:  # 180° rotation
+            translation_map = {
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_BOTTOM,
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_LEFT,
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_TOP,
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_RIGHT,
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_BOTTOM_RIGHT,
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_TOP_LEFT,
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_RIGHT,
+            }
+        elif k == 3:  # 270° CCW rotation
+            translation_map = {
+                CropEditMode.DRAG_TOP: CropEditMode.DRAG_RIGHT,
+                CropEditMode.DRAG_RIGHT: CropEditMode.DRAG_BOTTOM,
+                CropEditMode.DRAG_BOTTOM: CropEditMode.DRAG_LEFT,
+                CropEditMode.DRAG_LEFT: CropEditMode.DRAG_TOP,
+                CropEditMode.DRAG_TOP_LEFT: CropEditMode.DRAG_TOP_RIGHT,
+                CropEditMode.DRAG_TOP_RIGHT: CropEditMode.DRAG_BOTTOM_RIGHT,
+                CropEditMode.DRAG_BOTTOM_RIGHT: CropEditMode.DRAG_BOTTOM_LEFT,
+                CropEditMode.DRAG_BOTTOM_LEFT: CropEditMode.DRAG_TOP_LEFT,
+            }
+        else:
+            return mode
+            
+        return translation_map.get(mode, mode)
+
     def _get_crop_interaction_zone(self, mouse_pos: QPoint, rect_norm_override: Optional[Tuple[float, float, float, float]] = None) -> CropEditMode:
         """检测鼠标位置对应的裁剪交互区域。可选传入指定裁剪框rect进行检测。"""
         if not self.current_image:
@@ -2055,35 +2113,55 @@ class PreviewWidget(QWidget):
             left, right = x, x + w
             top, bottom = y, y + h
             
+            # Detect interaction zone in display coordinates
+            detected_mode = CropEditMode.NONE
+            
             # 先检测角点（优先级最高）
             if (abs(img_x - left) <= CORNER_TOLERANCE and 
                 abs(img_y - top) <= CORNER_TOLERANCE):
-                return CropEditMode.DRAG_TOP_LEFT
+                detected_mode = CropEditMode.DRAG_TOP_LEFT
             elif (abs(img_x - right) <= CORNER_TOLERANCE and 
                   abs(img_y - top) <= CORNER_TOLERANCE):
-                return CropEditMode.DRAG_TOP_RIGHT
+                detected_mode = CropEditMode.DRAG_TOP_RIGHT
             elif (abs(img_x - left) <= CORNER_TOLERANCE and 
                   abs(img_y - bottom) <= CORNER_TOLERANCE):
-                return CropEditMode.DRAG_BOTTOM_LEFT
+                detected_mode = CropEditMode.DRAG_BOTTOM_LEFT
             elif (abs(img_x - right) <= CORNER_TOLERANCE and 
                   abs(img_y - bottom) <= CORNER_TOLERANCE):
-                return CropEditMode.DRAG_BOTTOM_RIGHT
-            
+                detected_mode = CropEditMode.DRAG_BOTTOM_RIGHT
             # 再检测边缘
             elif (left <= img_x <= right and 
                   abs(img_y - top) <= EDGE_TOLERANCE):
-                return CropEditMode.DRAG_TOP
+                detected_mode = CropEditMode.DRAG_TOP
             elif (left <= img_x <= right and 
                   abs(img_y - bottom) <= EDGE_TOLERANCE):
-                return CropEditMode.DRAG_BOTTOM
+                detected_mode = CropEditMode.DRAG_BOTTOM
             elif (top <= img_y <= bottom and 
                   abs(img_x - left) <= EDGE_TOLERANCE):
-                return CropEditMode.DRAG_LEFT
+                detected_mode = CropEditMode.DRAG_LEFT
             elif (top <= img_y <= bottom and 
                   abs(img_x - right) <= EDGE_TOLERANCE):
-                return CropEditMode.DRAG_RIGHT
-                
-            return CropEditMode.NONE
+                detected_mode = CropEditMode.DRAG_RIGHT
+            
+            # If no interaction detected, return NONE
+            if detected_mode == CropEditMode.NONE:
+                return CropEditMode.NONE
+            
+            # Apply rotation translation to get semantically correct edit mode
+            # Get orientation from image metadata
+            md = self.current_image.metadata or {}
+            focused = md.get('crop_focused', False)
+            
+            if focused:
+                # In focused mode, use crop-specific orientation
+                crop_instance = md.get('crop_instance')
+                orientation = crop_instance.orientation if crop_instance else 0
+            else:
+                # In contact sheet mode, use global orientation
+                orientation = md.get('global_orientation', 0)
+            
+            # Translate the detected mode based on rotation
+            return self._translate_edit_mode_for_rotation(detected_mode, orientation)
             
         except Exception:
             return CropEditMode.NONE

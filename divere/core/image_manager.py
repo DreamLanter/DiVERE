@@ -375,6 +375,8 @@ class ImageManager:
                 candidates = ["ACESCG Linear.icc"]
             elif name in {"adobergb", "adobe rgb", "adobe rgb (1998)"}:
                 candidates = ["Adobe RGB (1998).icc", "AdobeRGB1998.icc"]
+            elif name in {"gray_gamma_2_2", "gray gamma 2.2", "grayscale", "greyscale", "gray", "grey"}:
+                candidates = ["Gray Gamma 2.2.icc"]
             else:
                 # 兜底：尝试直接用传入名称加 .icc
                 candidates = [f"{color_space_name}.icc"]

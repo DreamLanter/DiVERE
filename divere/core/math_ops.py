@@ -524,12 +524,13 @@ class FilmMathOps:
                            curve_points: Optional[List[Tuple[float, float]]] = None,
                            channel_curves: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                            lut_size: int = 512,
-                           use_parallel: bool = True) -> np.ndarray:
+                           use_parallel: bool = True,
+                           use_optimization: bool = True) -> np.ndarray:
         """
-        应用密度曲线调整（终极优化版本）
+        应用密度曲线调整（支持高精度导出模式）
         
-        核心优化：4次1D查表 → 1次1D查表
-        原理：预计算合并后的曲线，每个通道独立查表
+        Args:
+            use_optimization: 是否使用LUT优化。False时使用高精度模式（导出用）
         """
         # 快速路径：如果没有曲线，直接返回
         has_rgb_curve = curve_points and len(curve_points) >= 2
@@ -540,15 +541,21 @@ class FilmMathOps:
         if not has_rgb_curve and not has_channel_curves:
             return density_array
         
-        # 终极优化：合并曲线为单次查表
-        should_parallel = self._should_use_parallel(density_array.size, use_parallel)
-        
-        if should_parallel:
-            return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
-                                                        channel_curves, lut_size)
+        # 根据模式选择处理方式
+        if not use_optimization:
+            # 高精度模式（导出用）：使用32K LUT或直接数学插值
+            return self._apply_curves_high_precision(density_array, curve_points, 
+                                                   channel_curves, use_parallel)
         else:
-            return self._apply_curves_merged_lut(density_array, curve_points, 
-                                               channel_curves, lut_size)
+            # 优化模式（预览用）：使用512点LUT
+            should_parallel = self._should_use_parallel(density_array.size, use_parallel)
+            
+            if should_parallel:
+                return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
+                                                            channel_curves, lut_size)
+            else:
+                return self._apply_curves_merged_lut(density_array, curve_points, 
+                                                   channel_curves, lut_size)
     
     def _apply_curves_merged_lut(self, density_array: np.ndarray,
                                curve_points: Optional[List[Tuple[float, float]]],
@@ -883,6 +890,26 @@ class FilmMathOps:
                 result[:, :, channel_idx] = (1.0 - curve_output_c) * log65536
         
         return result
+    
+    def _apply_curves_high_precision(self, density_array: np.ndarray,
+                                   curve_points: Optional[List[Tuple[float, float]]],
+                                   channel_curves: Optional[Dict[str, List[Tuple[float, float]]]],
+                                   use_parallel: bool = True) -> np.ndarray:
+        """
+        高精度密度曲线处理（导出专用）
+        
+        使用32K LUT或直接数学插值，确保导出质量无损
+        """
+# 高精度模式：使用32K LUT确保导出质量
+        should_parallel = self._should_use_parallel(density_array.size, use_parallel)
+        high_precision_lut_size = 32768  # 使用32K LUT确保高精度
+        
+        if should_parallel:
+            return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
+                                                        channel_curves, high_precision_lut_size)
+        else:
+            return self._apply_curves_merged_lut(density_array, curve_points, 
+                                               channel_curves, high_precision_lut_size)
     
     def _apply_curve_to_array(self, density_array: np.ndarray, 
                              curve_points: List[Tuple[float, float]],
@@ -1253,7 +1280,8 @@ class FilmMathOps:
 
             if curve_points or channel_curves:
                 density_array = self.apply_density_curve(
-                    density_array, curve_points, channel_curves
+                    density_array, curve_points, channel_curves,
+                    use_optimization=use_optimization
                 )
             if profile is not None:
                 profile['density_curves_ms'] = (time.time() - t4) * 1000.0

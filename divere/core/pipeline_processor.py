@@ -238,7 +238,8 @@ class FilmPipelineProcessor:
             
             if curve_points or channel_curves:
                 density_array = self.math_ops.apply_density_curve(
-                    density_array, curve_points, channel_curves, use_parallel=False
+                    density_array, curve_points, channel_curves, use_parallel=False,
+                    use_optimization=True  # 预览模式使用LUT优化
                 )
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
         
@@ -298,7 +299,8 @@ class FilmPipelineProcessor:
             
             if curve_points or channel_curves:
                 density_array = self.math_ops.apply_density_curve(
-                    density_array, curve_points, channel_curves, use_parallel=False
+                    density_array, curve_points, channel_curves, use_parallel=False,
+                    use_optimization=True  # 预览模式使用LUT优化
                 )
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
         

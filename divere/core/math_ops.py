@@ -1327,9 +1327,10 @@ class FilmMathOps:
             if profile is not None:
                 profile['rgb_gains_ms'] = (time.time() - t3) * 1000.0
         
-        # 5. 密度曲线调整
+        # 5. 密度曲线调整和转换回线性空间
+        t4 = time.time()
+        
         if include_curve and params.enable_density_curve:
-            t4 = time.time()
             # RGB通用曲线
             curve_points = params.curve_points if not self._is_default_curve(params.curve_points) else None
             
@@ -1354,8 +1355,15 @@ class FilmMathOps:
                 result_array = self.density_to_linear(density_array)
                 if params.screen_glare_compensation > 0.0:
                     result_array = np.maximum(0.0, result_array - params.screen_glare_compensation)
-            if profile is not None:
-                profile['density_curves_ms'] = (time.time() - t4) * 1000.0
+        else:
+            # 密度曲线被禁用时，仍需要将density_array转换回线性空间
+            # 这确保了RGB增益等在密度空间的处理结果能正确返回
+            result_array = self.density_to_linear(density_array)
+            if params.screen_glare_compensation > 0.0:
+                result_array = np.maximum(0.0, result_array - params.screen_glare_compensation)
+        
+        if profile is not None:
+            profile['density_curves_ms'] = (time.time() - t4) * 1000.0
         
         return result_array
 

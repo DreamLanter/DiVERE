@@ -203,16 +203,21 @@ class EnhancedConfigManager:
         Returns:
             是否保存成功
         """
-        user_dir = getattr(self, f"user_{config_type}_dir")
-        file_path = user_dir / f"{name}.json"
+        # 特殊处理：色彩空间保存到项目config目录，其他保存到用户目录
+        if config_type == "colorspace":
+            save_dir = self.app_config_dir / config_type
+        else:
+            save_dir = getattr(self, f"user_{config_type}_dir")
+        
+        file_path = save_dir / f"{name}.json"
         
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"用户配置已保存: {file_path}")
+            print(f"配置已保存: {file_path}")
             return True
         except Exception as e:
-            print(f"保存用户配置失败: {e}")
+            print(f"保存配置失败: {e}")
             return False
     
     def delete_user_config(self, config_type: str, name: str) -> bool:

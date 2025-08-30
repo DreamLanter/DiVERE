@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         
         # 预览后台线程池 - 逻辑迁移到 Context
         # self.thread_pool: QThreadPool = QThreadPool.globalInstance()
-        # 限制为1，防止堆积；配合“忙碌/待处理”标志实现去抖
+        # 限制为1，防止堆积；配合"忙碌/待处理"标志实现去抖
         try:
             self.context.thread_pool.setMaxThreadCount(1)
         except Exception:
@@ -631,7 +631,7 @@ class MainWindow(QMainWindow):
         matrix_def = None
         if matrix_display_name:
             clean_matrix_name = matrix_display_name.replace("preset: ", "")
-            # 如果UI显示是“自定义”，则在预设中记录为 "custom"
+            # 如果UI显示是"自定义"，则在预设中记录为 "custom"
             if clean_matrix_name == "自定义":
                 clean_matrix_name = "custom"
             matrix_def = MatrixDefinition(name=clean_matrix_name, values=matrix_values)
@@ -916,13 +916,41 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(150, _poll)
 
     def _on_save_custom_colorspace_requested(self, primaries_dict: dict):
-        """保存 UCS 三角的基色坐标为输入色彩变换 JSON（用户目录）。"""
+        """保存 UCS 三角的基色坐标为输入色彩变换 JSON（项目config目录）。"""
         try:
-            # primaries_dict: {'R': (x,y), 'G': (x,y), 'B': (x,y)}
+            # 弹出保存对话框，让用户输入名称和描述
+            from PySide6.QtWidgets import QInputDialog, QMessageBox
+            
+            # 获取基础名称作为默认值
             name_base = self.context.get_input_color_space().replace("_custom", "").replace("_preset", "")
-            save_name = f"{name_base}_custom"
+            default_name = f"{name_base}_custom"
+            
+            # 输入自定义名称
+            save_name, ok = QInputDialog.getText(
+                self, 
+                "保存自定义色彩空间", 
+                "请输入色彩空间名称:",
+                text=default_name
+            )
+            
+            if not ok or not save_name.strip():
+                return
+                
+            # 输入描述（可选）
+            description, ok = QInputDialog.getText(
+                self, 
+                "保存自定义色彩空间", 
+                "请输入描述（可选）:",
+                text="用户自定义色彩空间"
+            )
+            
+            if not ok:
+                description = "用户自定义色彩空间"
+            
+            # 构建保存数据
             data = {
                 "name": save_name,
+                "description": description,
                 "primaries": {
                     "R": [float(primaries_dict['R'][0]), float(primaries_dict['R'][1])],
                     "G": [float(primaries_dict['G'][0]), float(primaries_dict['G'][1])],
@@ -932,13 +960,16 @@ class MainWindow(QMainWindow):
                 "white_point": [0.3127, 0.3290],
                 "gamma": 1.0,
             }
+            
+            # 保存到项目config目录
             ok = enhanced_config_manager.save_user_config("colorspace", save_name, data)
             if ok:
-                self.statusBar().showMessage(f"已保存输入色彩变换到用户目录: {save_name}.json")
+                self.statusBar().showMessage(f"已保存自定义色彩空间到项目配置: {save_name}.json")
+                QMessageBox.information(self, "保存成功", f"自定义色彩空间已保存: {save_name}")
             else:
-                QMessageBox.warning(self, "保存失败", "无法保存到用户配置目录")
+                QMessageBox.warning(self, "保存失败", "无法保存到项目配置目录")
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存输入色彩变换失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"保存自定义色彩空间失败: {str(e)}")
     
     def _initialize_color_space_info(self):
         """初始化色彩空间信息"""
@@ -990,7 +1021,7 @@ class MainWindow(QMainWindow):
         self._execute_save(settings, force_dialog=True) # 强制弹出另存为
     
     def _save_image_as(self):
-        """“另存为”图像"""
+        """"另存为"图像"""
         if not self.context.get_current_image():
             QMessageBox.warning(self, "警告", "没有可保存的图像")
             return
@@ -1042,7 +1073,7 @@ class MainWindow(QMainWindow):
                 return f"CC-{original_filename}{extension}"
 
             def _default_name_contactsheet_all():
-                # contactsheet“保存所有”：基名（没有编号），后续批量时加 -[两位数]
+                # contactsheet"保存所有"：基名（没有编号），后续批量时加 -[两位数]
                 return f"CC-{original_filename}{extension}"
 
             def _default_name_contactsheet_single():
@@ -1056,7 +1087,7 @@ class MainWindow(QMainWindow):
                 return f"CC-{original_filename}-接触印像{extension}"
 
             if save_mode == 'all':
-                # 仅选择“目录”和“基名”，不真正返回 file_path（批量保存时逐个拼接）
+                # 仅选择"目录"和"基名"，不真正返回 file_path（批量保存时逐个拼接）
                 base_choice = QFileDialog.getExistingDirectory(self, "选择保存目录", base_dir)
                 if not base_choice:
                     return
@@ -1193,7 +1224,7 @@ class MainWindow(QMainWindow):
                     # 处理图像（复用 _execute_save 的核心管道，但不弹对话框）
                     filename = f"{basename}-{i:02d}{extension}"
                     file_path = str(Path(target_dir) / filename)
-                    # 复用单张保存流程：构造一个“强制路径”，跳过另存弹窗
+                    # 复用单张保存流程：构造一个"强制路径"，跳过另存弹窗
                     tmp_settings = dict(settings)
                     # 临时将 force_dialog 置 False 并直接走保存
                     # 下面直接复制 _execute_save 后半段的处理流程：
@@ -1401,7 +1432,7 @@ class MainWindow(QMainWindow):
         try:
             focused = bool(getattr(self.context, '_crop_focused', False))
             kind = self.context.get_current_profile_kind()
-            # 只有当 kind == 'crop' 且聚焦时，显示“沿用接触印像设置”
+            # 只有当 kind == 'crop' 且聚焦时，显示"沿用接触印像设置"
             visible = (kind == 'crop' and focused)
             try:
                 self._apply_contactsheet_action.setVisible(visible)
@@ -1420,7 +1451,7 @@ class MainWindow(QMainWindow):
     def _on_crop_committed(self, rect_norm: tuple):
         """处理新建裁剪"""
         try:
-            # 不论当前 Profile，点击“+”后的裁剪都视为“新增 crop”
+            # 不论当前 Profile，点击"+"后的裁剪都视为"新增 crop"
             orientation = self.context.get_current_orientation()
             crop_id = self.context.add_crop(rect_norm, orientation)
             if crop_id:

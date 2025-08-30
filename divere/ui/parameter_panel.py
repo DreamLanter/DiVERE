@@ -471,8 +471,32 @@ class ParameterPanel(QWidget):
             self.enable_density_matrix_checkbox.setChecked(params.enable_density_matrix)
             self.enable_rgb_gains_checkbox.setChecked(params.enable_rgb_gains)
             self.enable_density_curve_checkbox.setChecked(params.enable_density_curve)
+            
+            # 根据checkbox状态动态控制控件的enabled状态
+            self._update_controls_enabled_state()
         finally:
             self._is_updating_ui = False
+
+    def _update_controls_enabled_state(self):
+        """根据checkbox状态动态更新控件的enabled状态"""
+        # RGB增益控件：只受"启用RGB增益"checkbox控制
+        rgb_gains_checked = self.enable_rgb_gains_checkbox.isChecked()
+        self.red_gain_slider.setEnabled(rgb_gains_checked)
+        self.red_gain_spinbox.setEnabled(rgb_gains_checked)
+        self.green_gain_slider.setEnabled(rgb_gains_checked)
+        self.green_gain_spinbox.setEnabled(rgb_gains_checked)
+        self.blue_gain_slider.setEnabled(rgb_gains_checked)
+        self.blue_gain_spinbox.setEnabled(rgb_gains_checked)
+        self.auto_color_single_button.setEnabled(rgb_gains_checked)
+        self.auto_color_multi_button.setEnabled(rgb_gains_checked)
+        
+        # 密度曲线相关控件：只受"启用密度曲线"checkbox控制
+        density_curve_checked = self.enable_density_curve_checkbox.isChecked()
+        # 注意：曲线编辑器和屏幕反光补偿都属于密度曲线功能
+        if hasattr(self, 'curve_editor'):
+            self.curve_editor.setEnabled(density_curve_checked)
+        self.glare_compensation_slider.setEnabled(density_curve_checked)
+        self.glare_compensation_spinbox.setEnabled(density_curve_checked)
 
     def _curves_equal(self, a: dict, b: dict) -> bool:
         try:
@@ -929,6 +953,8 @@ class ParameterPanel(QWidget):
         
     def _on_debug_step_changed(self):
         if self._is_updating_ui: return
+        # 当checkbox状态改变时，更新控件的enabled状态
+        self._update_controls_enabled_state()
         self.parameter_changed.emit()
         
     def _on_auto_color_single_clicked(self):

@@ -1593,9 +1593,9 @@ class MainWindow(QMainWindow):
         # Update film type dropdown
         self.parameter_panel.set_film_type(film_type)
         
-        # Apply neutralization for B&W film types after a short delay
-        # to ensure it happens after film type defaults are applied
-        QTimer.singleShot(10, lambda: self._apply_bw_neutralization_if_needed(film_type))
+        # Apply neutralization for B&W film types immediately
+        # This prevents the preview flash issue when loading B&W presets
+        self._apply_bw_neutralization_if_needed(film_type)
     
     def _apply_bw_neutralization_if_needed(self, film_type: str):
         """Apply neutral values for B&W film types"""

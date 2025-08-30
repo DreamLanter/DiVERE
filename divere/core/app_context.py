@@ -663,9 +663,11 @@ class ApplicationContext(QObject):
         # 1. 清理当前状态
         self.clear_crop()
         
-        # Load film type (optionally preserve current film type)
+        # Load film type (optionally preserve current film type)  
         old_film_type = self._current_film_type
+        is_loading_bw_preset = False
         if not preserve_film_type:
+            is_loading_bw_preset = self.film_type_controller.is_monochrome_type(preset.film_type)
             # Set film type but do NOT apply defaults when loading a preset
             # The preset's values should take precedence
             self.set_current_film_type(preset.film_type, apply_defaults=False)

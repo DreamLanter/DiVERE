@@ -238,7 +238,7 @@ class TheEnlarger:
     # =======================
     
     def generate_3d_lut(self, params: ColorGradingParams, lut_size: int = 64,
-                       include_curve: bool = True) -> np.ndarray:
+                       include_curve: bool = True, use_optimization: bool = True) -> np.ndarray:
         """
         生成3D LUT用于外部应用
         
@@ -246,11 +246,12 @@ class TheEnlarger:
             params: 处理参数
             lut_size: LUT大小（每个维度）
             include_curve: 是否包含曲线
+            use_optimization: 是否使用LUT优化
             
         Returns:
             3D LUT数组 [lut_size, lut_size, lut_size, 3]
         """
-        return self.pipeline_processor.generate_3d_lut(params, lut_size, include_curve)
+        return self.pipeline_processor.generate_3d_lut(params, lut_size, include_curve, use_optimization)
 
     # =======================
     # 向后兼容的Legacy方法（标记为弃用）

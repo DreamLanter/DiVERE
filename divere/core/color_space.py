@@ -256,7 +256,7 @@ class ColorSpaceManager:
             gain_vector = self._calculate_white_point_adaptation(src_space, dst_space)
             
             # 缓存结果
-            self._convert_cache[cache_key] = (conversion_matrix.astype(np.float32), gain_vector.astype(np.float32))
+            self._convert_cache[cache_key] = (conversion_matrix.astype(np.float64), gain_vector.astype(np.float64))
             return self._convert_cache[cache_key]
             
         except Exception as e:

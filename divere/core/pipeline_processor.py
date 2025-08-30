@@ -564,7 +564,7 @@ class FilmPipelineProcessor:
     # =======================
     
     def generate_3d_lut(self, params: ColorGradingParams, lut_size: int = 64,
-                       include_curve: bool = True) -> np.ndarray:
+                       include_curve: bool = True, use_optimization: bool = True) -> np.ndarray:
         """
         生成3D LUT用于外部应用
         
@@ -591,7 +591,7 @@ class FilmPipelineProcessor:
         try:
             output_colors = self.math_ops.apply_full_math_pipeline(
                 input_colors.reshape(lut_size, lut_size, lut_size, 3),
-                params, include_curve, enable_density_inversion=False, use_optimization=True
+                params, include_curve, enable_density_inversion=False, use_optimization=use_optimization
             )
         finally:
             # self.math_ops._get_density_matrix = original_get_matrix

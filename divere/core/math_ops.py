@@ -27,7 +27,7 @@ class FilmMathOps:
         self._lut1d_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
         self._curve_lut_cache: "OrderedDict[Any, np.ndarray]" = OrderedDict()
         self._max_cache_size: int = max_cache_size
-        self._LOG65536: np.float32 = np.float32(np.log10(65536.0))
+        self._LOG65536: float = np.log10(65536.0)
         
         # 预览配置（统一管理）
         self.preview_config = preview_config or PreviewConfig()
@@ -133,7 +133,7 @@ class FilmMathOps:
                 indices = np.round(rgb_clipped * (lut_size - 1)).astype(np.uint16)
                 return np.take(lut, indices).astype(image_array.dtype)
             else:
-                return np.power(rgb_clipped, exp_f, dtype=np.float32).astype(image_array.dtype)
+                return np.power(rgb_clipped, exp_f).astype(image_array.dtype)
         
         elif len(original_shape) == 3 and original_shape[2] == 1:
             # 单通道3D图像
@@ -144,7 +144,7 @@ class FilmMathOps:
                 indices = np.round(rgb_clipped * (lut_size - 1)).astype(np.uint16)
                 return np.take(lut, indices).astype(image_array.dtype)
             else:
-                return np.power(rgb_clipped, exp_f, dtype=np.float32).astype(image_array.dtype)
+                return np.power(rgb_clipped, exp_f).astype(image_array.dtype)
         
         else:
             # 多通道图像
@@ -168,7 +168,7 @@ class FilmMathOps:
                 result = image_array.copy()
                 if original_shape[2] >= 3:
                     rgb = np.clip(result[:, :, :3], 0.0, 1.0)
-                    rgb_out = np.power(rgb, exp_f, dtype=np.float32)
+                    rgb_out = np.power(rgb, exp_f)
                     result[:, :, :3] = rgb_out.astype(result.dtype)
                 return result
 
@@ -176,8 +176,8 @@ class FilmMathOps:
         key = ("pow", round(float(exponent), 6), int(size))
         lut = self._lut1d_cache.get(key)
         if lut is None:
-            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
-            lut = np.power(xs, float(exponent)).astype(np.float32)
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float64)
+            lut = np.power(xs, float(exponent)).astype(np.float64)
             self._cache_put(self._lut1d_cache, key, lut)
         return lut
     
@@ -206,8 +206,8 @@ class FilmMathOps:
         if image_array is None or image_array.size == 0:
             return image_array
         
-        # 优先尝试GPU加速（对大图像）
-        if (use_gpu and 
+        # GPU加速（仅在优化模式下启用，导出时强制使用CPU保证精度）
+        if (use_gpu and use_optimization and
             self.gpu_accelerator and 
             self.preview_config.should_use_gpu(image_array.size)):
             try:
@@ -355,11 +355,11 @@ class FilmMathOps:
         
         if lut is None:
             # 生成LUT
-            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float32)
-            safe = np.maximum(xs, np.float32(1e-10))
+            xs = np.linspace(0.0, 1.0, int(size), dtype=np.float64)
+            safe = np.maximum(xs, 1e-10)
             original_density = -np.log10(safe)
             adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-            lut = np.power(np.float32(10.0), adjusted_density).astype(np.float32)
+            lut = np.power(10.0, adjusted_density).astype(np.float64)
             
             self._cache_put(self._lut1d_cache, key, lut)
         
@@ -570,9 +570,9 @@ class FilmMathOps:
         3. 向量化所有操作
         """
         # 预计算常量（只算一次）
-        inv_range = np.float32(1.0 / self._LOG65536)
-        log65536 = np.float32(self._LOG65536)
-        lut_scale = np.float32(lut_size - 1)
+        inv_range = 1.0 / self._LOG65536
+        log65536 = self._LOG65536
+        lut_scale = lut_size - 1
         
         # 原地操作，避免拷贝
         result = density_array
@@ -594,7 +594,7 @@ class FilmMathOps:
             return result
         
         # 一次性归一化所有通道（向量化）
-        normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0, dtype=np.float32)
+        normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
         indices = (normalized * lut_scale).astype(np.uint16, copy=False)
         
         # 向量化处理所有通道
@@ -616,9 +616,9 @@ class FilmMathOps:
         result = np.zeros_like(density_array)
         
         # 预计算常量和LUT
-        inv_range = np.float32(1.0 / self._LOG65536)
-        log65536 = np.float32(self._LOG65536)
-        lut_scale = np.float32(lut_size - 1)
+        inv_range = 1.0 / self._LOG65536
+        log65536 = self._LOG65536
+        lut_scale = lut_size - 1
         
         # 预计算所有通道的LUT
         channel_luts = []
@@ -652,7 +652,7 @@ class FilmMathOps:
             block_result = block.copy()
             
             # 归一化处理
-            normalized = 1.0 - np.clip(block_result * inv_range, 0.0, 1.0, dtype=np.float32)
+            normalized = 1.0 - np.clip(block_result * inv_range, 0.0, 1.0)
             indices = (normalized * lut_scale).astype(np.uint16, copy=False)
             
             # 处理每个通道
@@ -709,7 +709,7 @@ class FilmMathOps:
             return None
         
         # 生成输入密度值
-        x_values = np.linspace(0.0, 1.0, lut_size, dtype=np.float32)
+        x_values = np.linspace(0.0, 1.0, lut_size, dtype=np.float64)
         
         # 初始化为恒等映射
         y_values = x_values.copy()
@@ -726,7 +726,7 @@ class FilmMathOps:
             # 链式应用：再通过单通道曲线变换
             y_values = np.interp(y_values, x_values, channel_lut)
         
-        return y_values.astype(np.float32)
+        return y_values.astype(np.float64)
     
     def _should_use_3d_lut(self, image_shape: tuple) -> bool:
         """判断是否应该使用3D LUT（智能决策）"""
@@ -781,7 +781,7 @@ class FilmMathOps:
         
         # 创建密度空间的采样点
         density_max = float(self._LOG65536)
-        density_samples = np.linspace(0.0, density_max, lut_3d_size, dtype=np.float32)
+        density_samples = np.linspace(0.0, density_max, lut_3d_size, dtype=np.float64)
         
         # 创建3D网格
         r_grid, g_grid, b_grid = np.meshgrid(density_samples, density_samples, density_samples, indexing='ij')
@@ -853,11 +853,11 @@ class FilmMathOps:
         3. 利用NumPy的向量化操作
         """
         result = density_array.copy()
-        inv_range = np.float32(1.0 / self._LOG65536)
-        log65536 = np.float32(self._LOG65536)
+        inv_range = 1.0 / self._LOG65536
+        log65536 = self._LOG65536
         
         # 预计算归一化（只做一次）
-        normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0, dtype=np.float32)
+        normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
         
         # 转换为整数索引（只做一次）
         indices = (normalized * (lut_size - 1)).astype(np.uint16)  # uint16更快
@@ -869,7 +869,7 @@ class FilmMathOps:
             result[:] = (1.0 - curve_output) * log65536
             
             # 重新计算归一化（因为值已改变）
-            normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0, dtype=np.float32)
+            normalized = 1.0 - np.clip(result * inv_range, 0.0, 1.0)
             indices = (normalized * (lut_size - 1)).astype(np.uint16)
         
         # 应用单通道曲线（向量化版本）
@@ -896,20 +896,64 @@ class FilmMathOps:
                                    channel_curves: Optional[Dict[str, List[Tuple[float, float]]]],
                                    use_parallel: bool = True) -> np.ndarray:
         """
-        高精度密度曲线处理（导出专用）
+        高精度密度曲线处理（导出专用）- 纯数学插值，无LUT
         
-        使用32K LUT或直接数学插值，确保导出质量无损
+        完全避免LUT量化，使用逐像素的数学插值计算
         """
-# 高精度模式：使用32K LUT确保导出质量
-        should_parallel = self._should_use_parallel(density_array.size, use_parallel)
-        high_precision_lut_size = 32768  # 使用32K LUT确保高精度
+        return self._apply_curves_pure_interpolation(density_array, curve_points, channel_curves)
+    
+    def _apply_curves_pure_interpolation(self, density_array: np.ndarray,
+                                       curve_points: Optional[List[Tuple[float, float]]],
+                                       channel_curves: Optional[Dict[str, List[Tuple[float, float]]]]) -> np.ndarray:
+        """
+        纯数学插值曲线处理 - 完全避免LUT，逐像素计算
         
-        if should_parallel:
-            return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
-                                                        channel_curves, high_precision_lut_size)
-        else:
-            return self._apply_curves_merged_lut(density_array, curve_points, 
-                                               channel_curves, high_precision_lut_size)
+        使用numpy的高精度插值函数，保持float64精度
+        """
+        result = density_array.copy()
+        inv_range = 1.0 / self._LOG65536
+        log65536 = self._LOG65536
+        
+        # 处理每个通道
+        for channel_idx in range(result.shape[2]):
+            channel_data = result[:, :, channel_idx]
+            
+            # 1. 先应用RGB通用曲线（如果存在）
+            if curve_points and len(curve_points) >= 2:
+                # 将密度转换为归一化值 [0,1]
+                normalized = 1.0 - np.clip(channel_data * inv_range, 0.0, 1.0)
+                
+                # 提取曲线控制点
+                x_points = np.array([p[0] for p in curve_points], dtype=result.dtype)
+                y_points = np.array([p[1] for p in curve_points], dtype=result.dtype)
+                
+                # 高精度插值
+                interpolated = np.interp(normalized, x_points, y_points)
+                
+                # 转回密度空间
+                channel_data = (1.0 - interpolated) * log65536
+            
+            # 2. 再应用单通道曲线（如果存在）
+            channel_key = ['r', 'g', 'b'][channel_idx] if channel_idx < 3 else 'a'
+            if (channel_curves and channel_key in channel_curves and 
+                channel_curves[channel_key] and len(channel_curves[channel_key]) >= 2):
+                
+                channel_curve = channel_curves[channel_key]
+                
+                # 再次归一化
+                normalized = 1.0 - np.clip(channel_data * inv_range, 0.0, 1.0)
+                
+                # 单通道曲线插值
+                x_points = np.array([p[0] for p in channel_curve], dtype=result.dtype)
+                y_points = np.array([p[1] for p in channel_curve], dtype=result.dtype)
+                
+                interpolated = np.interp(normalized, x_points, y_points)
+                channel_data = (1.0 - interpolated) * log65536
+            
+            # 更新结果
+            result[:, :, channel_idx] = channel_data
+        
+        return result
     
     def _apply_curve_to_array(self, density_array: np.ndarray, 
                              curve_points: List[Tuple[float, float]],
@@ -958,7 +1002,7 @@ class FilmMathOps:
                              num_samples: int) -> np.ndarray:
         """获取或生成曲线LUT（优化版）"""
         if not control_points or len(control_points) < 2:
-            return np.linspace(0.0, 1.0, int(num_samples), dtype=np.float32)
+            return np.linspace(0.0, 1.0, int(num_samples), dtype=np.float64)
             
         key_points = tuple((round(float(x), 6), round(float(y), 6)) for x, y in control_points)
         key = ("curve_v2", key_points, int(num_samples))  # v2标记新版本
@@ -969,7 +1013,7 @@ class FilmMathOps:
             if self.curve_quality == 'high_quality':
                 # 高质量：单调三次插值
                 curve_samples = self._generate_monotonic_curve(control_points, int(num_samples))
-                lut = np.array([p[1] for p in curve_samples], dtype=np.float32)
+                lut = np.array([p[1] for p in curve_samples], dtype=np.float64)
             else:
                 # 快速：线性插值
                 lut = self._generate_curve_lut_fast(control_points, int(num_samples))
@@ -981,22 +1025,22 @@ class FilmMathOps:
                                 num_samples: int) -> np.ndarray:
         """快速曲线LUT生成（优化版）"""
         if len(control_points) < 2:
-            return np.linspace(0.0, 1.0, num_samples, dtype=np.float32)
+            return np.linspace(0.0, 1.0, num_samples, dtype=np.float64)
         
         # 预分配输出数组
-        lut = np.empty(num_samples, dtype=np.float32)
+        lut = np.empty(num_samples, dtype=np.float64)
         
         # 向量化生成x值
-        x_values = np.linspace(0.0, 1.0, num_samples, dtype=np.float32)
+        x_values = np.linspace(0.0, 1.0, num_samples, dtype=np.float64)
         
         # 转换控制点为numpy数组以加速
-        points_array = np.array(control_points, dtype=np.float32)
+        points_array = np.array(control_points, dtype=np.float64)
         x_points = points_array[:, 0]
         y_points = points_array[:, 1]
         
         # 使用NumPy的interp进行线性插值（比单调三次插值快很多）
         # 对于大多数情况，线性插值的视觉效果已经足够好
-        lut = np.interp(x_values, x_points, y_points).astype(np.float32)
+        lut = np.interp(x_values, x_points, y_points).astype(np.float64)
         
         return lut
     
@@ -1092,8 +1136,8 @@ class FilmMathOps:
         """直接版本的密度转线性"""
         # 密度转线性：linear = 10^(-density) = exp(-density * ln(10))
         # 使用exp替代power，因为exp通常更快
-        ln10 = np.float32(np.log(10.0))
-        result = np.exp(-density_array * ln10, dtype=np.float32)
+        ln10 = np.log(10.0)
+        result = np.exp(-density_array * ln10).astype(density_array.dtype)
         
         # 裁剪到有效范围
         result = np.clip(result, 0.0, 1.0)
@@ -1106,7 +1150,7 @@ class FilmMathOps:
         result = np.zeros_like(density_array)
         
         # 预计算常量
-        ln10 = np.float32(np.log(10.0))
+        ln10 = np.log(10.0)
         
         # 计算分块数量
         blocks_h = (h + self.block_size - 1) // self.block_size
@@ -1121,7 +1165,7 @@ class FilmMathOps:
             
             # 提取块并处理
             block = density_array[start_h:end_h, start_w:end_w, :]
-            block_result = np.exp(-block * ln10, dtype=np.float32)
+            block_result = np.exp(-block * ln10).astype(density_array.dtype)
             block_result = np.clip(block_result, 0.0, 1.0)
             
             return (start_h, end_h, start_w, end_w, block_result.astype(block.dtype))

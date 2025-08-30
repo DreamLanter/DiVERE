@@ -1125,6 +1125,11 @@ class MainWindow(QMainWindow):
             )
             print(f"  转换后工作色彩空间: {working_image.color_space}")
             
+            # 导出模式：提升为float64精度，确保全程高精度计算
+            if working_image.array is not None:
+                working_image.array = working_image.array.astype(np.float64)
+                working_image.dtype = np.float64
+            
             # 应用调色参数到工作空间的图像（根据设置决定是否包含曲线）
             # 导出必须使用全精度（禁用低精度LUT）+ 分块并行
             result_image = self.context.the_enlarger.apply_full_pipeline(

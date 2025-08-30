@@ -657,13 +657,16 @@ class GPUAccelerator:
     
     def _curve_processing_cpu(self, density_array: np.ndarray, 
                              lut: np.ndarray) -> np.ndarray:
-        """CPU版本的曲线处理（回退方案）"""
-        # 简化的LUT查表实现
-        inv_range = 1.0 / 6.5536
+        """CPU版本的曲线处理（回退方案）- 使用高精度插值"""
+        # 高精度线性插值实现，避免简单索引造成的量化误差
+        inv_range = 1.0 / 6.5536  # LOG65536的倒数
         normalized = 1.0 - np.clip(density_array * inv_range, 0.0, 1.0)
-        indices = np.round(normalized * (len(lut) - 1)).astype(np.int32)
-        indices = np.clip(indices, 0, len(lut) - 1)
-        return np.take(lut, indices)
+        
+        # 使用NumPy的高精度插值而不是简单索引
+        lut_indices = np.linspace(0.0, 1.0, len(lut), dtype=np.float64)
+        result = np.interp(normalized.flatten(), lut_indices, lut).astype(density_array.dtype)
+        
+        return result.reshape(density_array.shape)
 
 
 # 全局GPU加速器实例

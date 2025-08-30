@@ -174,6 +174,10 @@ class MainWindow(QMainWindow):
         self.parameter_panel.cc_flip_vertical_requested.connect(self.preview_widget.flip_colorchecker_vertical)
         self.parameter_panel.cc_rotate_left_requested.connect(self.preview_widget.rotate_colorchecker_left)
         self.parameter_panel.cc_rotate_right_requested.connect(self.preview_widget.rotate_colorchecker_right)
+        # 屏幕反光补偿交互信号连接
+        self.parameter_panel.glare_compensation_interaction_started.connect(self._on_glare_compensation_interaction_started)
+        self.parameter_panel.glare_compensation_interaction_ended.connect(self._on_glare_compensation_interaction_ended)
+        self.parameter_panel.glare_compensation_realtime_update.connect(self._on_glare_compensation_realtime_update)
         # 当 UCS 三角拖动结束：注册/切换到一个临时 custom 输入空间，触发代理重建与预览
         self.parameter_panel.custom_primaries_changed.connect(self._on_custom_primaries_changed)
         # LUT导出信号
@@ -1845,6 +1849,30 @@ class MainWindow(QMainWindow):
             print(f"LUT一致性测试失败: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _on_glare_compensation_interaction_started(self, compensation_value: float):
+        """处理屏幕反光补偿交互开始"""
+        try:
+            # 启用预览中的black cut-off显示
+            self.preview_widget.set_black_cutoff_display(True, compensation_value)
+        except Exception as e:
+            print(f"启用black cut-off显示失败: {e}")
+    
+    def _on_glare_compensation_interaction_ended(self):
+        """处理屏幕反光补偿交互结束"""
+        try:
+            # 关闭预览中的black cut-off显示
+            self.preview_widget.set_black_cutoff_display(False)
+        except Exception as e:
+            print(f"关闭black cut-off显示失败: {e}")
+    
+    def _on_glare_compensation_realtime_update(self, compensation_value: float):
+        """处理屏幕反光补偿实时更新"""
+        try:
+            # 实时更新cut-off显示的补偿值
+            self.preview_widget.update_cutoff_compensation(compensation_value)
+        except Exception as e:
+            print(f"实时更新cut-off显示失败: {e}")
         
 # 移除 Worker 相关类定义
 # class _PreviewWorkerSignals(QObject): ...

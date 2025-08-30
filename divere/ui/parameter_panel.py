@@ -46,6 +46,10 @@ class ParameterPanel(QWidget):
     custom_primaries_changed = Signal(dict)
     # LUT导出信号
     lut_export_requested = Signal(str, str, int)  # (lut_type, file_path, size)
+    # 屏幕反光补偿交互信号
+    glare_compensation_interaction_started = Signal(float)  # 当前补偿值
+    glare_compensation_interaction_ended = Signal()
+    glare_compensation_realtime_update = Signal(float)  # 实时更新补偿值
     
     def __init__(self, context: ApplicationContext):
         super().__init__()
@@ -380,6 +384,9 @@ class ParameterPanel(QWidget):
         # 屏幕反光补偿信号连接
         self.glare_compensation_slider.valueChanged.connect(self._on_glare_compensation_slider_changed)
         self.glare_compensation_spinbox.valueChanged.connect(self._on_glare_compensation_spinbox_changed)
+        # 安装事件过滤器以检测交互开始/结束
+        self.glare_compensation_slider.installEventFilter(self)
+        self.glare_compensation_spinbox.installEventFilter(self)
 
         self.matrix_combo.currentIndexChanged.connect(self._on_matrix_combo_changed)
         for i in range(3):
@@ -440,7 +447,7 @@ class ParameterPanel(QWidget):
             self.blue_gain_slider.setValue(int(params.rgb_gains[2] * 100))
             self.blue_gain_spinbox.setValue(params.rgb_gains[2])
             
-            # 屏幕反光补偿参数同步 (0.0-0.2 -> 0-20)
+            # 屏幕反光补偿参数同步 (0.0-0.05 -> 0-500)
             self.glare_compensation_slider.setValue(int(params.screen_glare_compensation * 10000.0))
             self.glare_compensation_spinbox.setValue(params.screen_glare_compensation * 100.0)
             
@@ -713,16 +720,22 @@ class ParameterPanel(QWidget):
     def _on_glare_compensation_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.glare_compensation_spinbox.blockSignals(True)
-        self.glare_compensation_spinbox.setValue(value / 100.0)  # Slider 0-20 -> SpinBox 0-20
+        self.glare_compensation_spinbox.setValue(value / 100.0)  # Slider 0-500 -> SpinBox 0-5.0
         self.glare_compensation_spinbox.blockSignals(False)
         self.parameter_changed.emit()
+        # 发送实时更新信号（用于cut-off显示）
+        compensation_value = value / 10000.0  # 转换为0.0-0.05范围
+        self.glare_compensation_realtime_update.emit(compensation_value)
 
     def _on_glare_compensation_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.glare_compensation_slider.blockSignals(True)
-        self.glare_compensation_slider.setValue(int(value * 100.0))  # SpinBox 0-20 -> Slider 0-20
+        self.glare_compensation_slider.setValue(int(value * 100.0))  # SpinBox 0-5.0 -> Slider 0-500
         self.glare_compensation_slider.blockSignals(False)
         self.parameter_changed.emit()
+        # 发送实时更新信号（用于cut-off显示）
+        compensation_value = value / 100.0  # 转换为0.0-0.05范围
+        self.glare_compensation_realtime_update.emit(compensation_value)
 
     # --- Action slots ---
     def _on_film_type_changed(self, display_name: str):
@@ -961,3 +974,25 @@ class ParameterPanel(QWidget):
                 file_path += '.cube'
             size = int(self.curve_lut_size_combo.currentText())
             self.lut_export_requested.emit("density_curve", file_path, size)
+    
+    def eventFilter(self, obj, event):
+        """事件过滤器：检测屏幕反光补偿控件的交互"""
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QMouseEvent
+        
+        if obj in (self.glare_compensation_slider, self.glare_compensation_spinbox):
+            if event.type() == QEvent.Type.MouseButtonPress:
+                # 获取当前补偿值
+                current_value = self.glare_compensation_slider.value() / 10000.0
+                self.glare_compensation_interaction_started.emit(current_value)
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self.glare_compensation_interaction_ended.emit()
+            elif event.type() == QEvent.Type.FocusIn:
+                # spinbox获得焦点时也开始交互
+                current_value = self.glare_compensation_slider.value() / 10000.0
+                self.glare_compensation_interaction_started.emit(current_value)
+            elif event.type() == QEvent.Type.FocusOut:
+                # spinbox失去焦点时结束交互
+                self.glare_compensation_interaction_ended.emit()
+        
+        return super().eventFilter(obj, event)

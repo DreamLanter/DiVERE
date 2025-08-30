@@ -211,6 +211,11 @@ class PreviewWidget(QWidget):
         # 聚焦模式：整体移动当前裁剪框
         self._moving_overlay_active: bool = False
         self._moving_overlay_offset_norm: Tuple[float, float] = (0.0, 0.0)
+        
+        # 屏幕反光补偿：black cut-off检测与显示
+        self._show_black_cutoff: bool = False
+        self._cutoff_compensation: float = 0.0
+        self._cutoff_pixels: Optional[np.ndarray] = None  # 布尔mask，标记cut-off像素
 
     # ============ 内部工具 ============
     def _get_viewport_size(self):
@@ -741,6 +746,10 @@ class PreviewWidget(QWidget):
 
     def set_image(self, image_data: ImageData):
         """设置显示的图像"""
+        # 保存当前cut-off显示状态
+        was_showing_cutoff = self._show_black_cutoff
+        current_compensation = self._cutoff_compensation
+        
         self.current_image = image_data
         # 若图像元数据中已有裁剪（来自Preset或Context），并且本地未显式覆盖，则创建/同步虚线框
         try:
@@ -760,6 +769,13 @@ class PreviewWidget(QWidget):
         except Exception:
             pass
         self._update_display()
+        
+        # 恢复cut-off显示状态（如果之前在显示）
+        if was_showing_cutoff:
+            self._show_black_cutoff = True
+            self._cutoff_compensation = current_compensation
+            self._detect_black_cutoff_pixels()
+            
         self.image_label.update()
         # 如果存在旋转锚点，应用
         if self._rotate_anchor_active:
@@ -781,6 +797,10 @@ class PreviewWidget(QWidget):
             self._clamp_pan()
             self.image_label.set_source_pixmap(pixmap)
             self.image_label.set_view(self.zoom_factor, self.pan_x, self.pan_y)
+            
+            # 如果正在显示cut-off，重新检测像素以同步最新图像数据
+            if self._show_black_cutoff:
+                self._detect_black_cutoff_pixels()
             
         except Exception as e:
             print(f"更新显示失败: {e}")
@@ -835,6 +855,155 @@ class PreviewWidget(QWidget):
             qimage.setColorSpace(displayp3_space)
         
         return QPixmap.fromImage(qimage)
+
+    # ===== 屏幕反光补偿：black cut-off检测 =====
+    def set_black_cutoff_display(self, show: bool, compensation: float = 0.0):
+        """设置是否显示black cut-off像素"""
+        self._show_black_cutoff = show
+        self._cutoff_compensation = compensation
+        if show:
+            self._detect_black_cutoff_pixels()
+        else:
+            self._cutoff_pixels = None
+        self.image_label.update()
+    
+    def update_cutoff_compensation(self, compensation: float):
+        """实时更新补偿值（用于滑块拖动过程中）"""
+        if self._show_black_cutoff:
+            self._cutoff_compensation = compensation
+            self._detect_black_cutoff_pixels()
+            self.image_label.update()
+    
+    def _detect_black_cutoff_pixels(self):
+        """检测因屏幕反光补偿导致的black cut-off像素"""
+        if not self.current_image or self.current_image.array is None:
+            self._cutoff_pixels = None
+            return
+        
+        try:
+            if self._cutoff_compensation <= 0.0:
+                self._cutoff_pixels = None
+                return
+            
+            # 获取图像数据 - 这里使用代理图像进行检测以提高性能
+            image_array = self.current_image.array
+            
+            # 检查是否需要转换为黑白（与显示逻辑一致）
+            should_convert_to_mono = False
+            if self.context and hasattr(self.context, 'should_convert_to_monochrome'):
+                should_convert_to_mono = self.context.should_convert_to_monochrome()
+            
+            # 如果需要转换为黑白，先进行转换（与_array_to_pixmap逻辑一致）
+            if should_convert_to_mono and len(image_array.shape) == 3 and image_array.shape[2] >= 3:
+                # Convert RGB to luminance using ITU-R BT.709 weights
+                luminance = (0.2126 * image_array[:, :, 0] + 
+                            0.7152 * image_array[:, :, 1] + 
+                            0.0722 * image_array[:, :, 2])
+                # 对于cut-off检测，我们只需要单通道的luminance值
+                image_array = luminance
+            
+            # 为了提高性能，如果图像太大，进行降采样检测
+            h, w = image_array.shape[:2] if len(image_array.shape) >= 2 else (image_array.shape[0], 1)
+            max_size = 1000  # 最大检测尺寸
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                new_h, new_w = int(h * scale), int(w * scale)
+                
+                # 使用OpenCV或numpy进行降采样
+                try:
+                    import cv2
+                    if len(image_array.shape) == 3:
+                        image_array = cv2.resize(image_array, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        image_array = cv2.resize(image_array, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                except ImportError:
+                    # 如果没有OpenCV，使用简单的降采样
+                    step_h = max(1, h // new_h)
+                    step_w = max(1, w // new_w) 
+                    image_array = image_array[::step_h, ::step_w]
+                    new_h, new_w = image_array.shape[:2] if len(image_array.shape) >= 2 else (image_array.shape[0], 1)
+                
+                h, w = new_h, new_w
+            
+            # 使用固定0.0阈值检测cut-off像素：
+            # 模拟补偿效果，检测应用补偿后会变成负值的像素
+            cutoff_mask = np.zeros((h, w), dtype=bool)
+            
+            if len(image_array.shape) == 3:
+                # RGB图像：检查所有通道
+                for c in range(image_array.shape[2]):
+                    channel = image_array[:, :, c].astype(np.float64)
+                    # 模拟补偿：如果 pixel - compensation < 0.0，则会被cut-off
+                    channel_cutoff = (channel - self._cutoff_compensation) < 0.0
+                    cutoff_mask |= channel_cutoff
+            else:
+                # 灰度图或黑白模式转换后的单通道
+                channel = image_array.astype(np.float64)
+                # 模拟补偿：如果 pixel - compensation < 0.0，则会被cut-off
+                cutoff_mask = (channel - self._cutoff_compensation) < 0.0
+            
+            self._cutoff_pixels = cutoff_mask
+            
+        except Exception as e:
+            print(f"检测black cut-off像素失败: {e}")
+            self._cutoff_pixels = None
+    
+    def _draw_black_cutoff_overlay(self, painter: QPainter):
+        """绘制black cut-off像素覆盖层"""
+        if not self._show_black_cutoff or self._cutoff_pixels is None:
+            return
+        
+        try:
+            if not self.current_image or self.current_image.array is None:
+                return
+            
+            # 获取cut-off mask的尺寸
+            mask_h, mask_w = self._cutoff_pixels.shape
+            
+            # 获取当前显示的图像尺寸（考虑代理图像）
+            image_h, image_w = self.current_image.array.shape[:2]
+            
+            # 计算从mask坐标到图像坐标的映射比例
+            # 如果cut-off检测时进行了降采样，需要恢复到原图像尺寸
+            scale_x = image_w / mask_w
+            scale_y = image_h / mask_h
+            
+            # 设置绘制参数：半透明红色覆盖
+            painter.save()
+            painter.setPen(QPen(QColor(255, 0, 0, 100), 0))  # 红色边框
+            painter.setBrush(QColor(255, 0, 0, 80))  # 半透明红色填充
+            
+            # 根据当前缩放级别动态调整绘制密度，避免性能问题
+            zoom = self.zoom_factor
+            if zoom < 0.25:
+                step = 8  # 缩放很小时，大幅降采样
+            elif zoom < 0.5:
+                step = 4
+            elif zoom < 1.0:
+                step = 2
+            else:
+                step = 1  # 放大时精细绘制
+            
+            # 在图像坐标系中绘制像素
+            # painter已经应用了transform（translate + scale），所以这里直接用图像坐标
+            for mask_y in range(0, mask_h, step):
+                for mask_x in range(0, mask_w, step):
+                    if self._cutoff_pixels[mask_y, mask_x]:
+                        # 将mask坐标映射回图像坐标
+                        img_x = int(mask_x * scale_x)
+                        img_y = int(mask_y * scale_y)
+                        
+                        # 计算像素块大小（考虑步长和缩放比例）
+                        pixel_w = max(1, int(scale_x * step))
+                        pixel_h = max(1, int(scale_y * step))
+                        
+                        # 直接在图像坐标系中绘制，让painter的transform处理缩放和平移
+                        painter.drawRect(img_x, img_y, pixel_w, pixel_h)
+            
+            painter.restore()
+            
+        except Exception as e:
+            print(f"绘制black cut-off覆盖层失败: {e}")
 
     # ===== 裁剪 overlay 与交互 =====
     def _draw_crop_overlay(self, painter: QPainter):
@@ -958,6 +1127,10 @@ class PreviewWidget(QWidget):
             pass
         try:
             self._draw_crop_overlay(painter)
+        except Exception:
+            pass
+        try:
+            self._draw_black_cutoff_overlay(painter)
         except Exception:
             pass
 

@@ -1798,9 +1798,11 @@ class MainWindow(QMainWindow):
             if params.curve_points and params.curve_points != [(0.0, 0.0), (1.0, 1.0)]:
                 curves['R'] = curves['G'] = curves['B'] = params.curve_points
             
-            # 使用密度曲线专用方法
+            # 使用密度曲线专用方法（包含屏幕反光补偿）
             lut_interface = DiVERELUTInterface()
-            return lut_interface.generate_density_curve_lut(curves, file_path, size)
+            return lut_interface.generate_density_curve_lut(
+                curves, file_path, size, params.screen_glare_compensation
+            )
             
         except Exception as e:
             print(f"导出密度曲线LUT失败: {e}")

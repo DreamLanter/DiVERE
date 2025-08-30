@@ -237,16 +237,18 @@ class FilmPipelineProcessor:
                 channel_curves['b'] = params.curve_points_b
             
             if curve_points or channel_curves:
-                density_array = self.math_ops.apply_density_curve(
+                # apply_density_curve现在包含了转线性和屏幕反光补偿
+                result_array = self.math_ops.apply_density_curve(
                     density_array, curve_points, channel_curves, use_parallel=False,
-                    use_optimization=True  # 预览模式使用LUT优化
+                    use_optimization=True,  # 预览模式使用LUT优化
+                    screen_glare_compensation=params.screen_glare_compensation
                 )
+            else:
+                # 没有曲线时，需要手动转换到线性空间并应用屏幕反光补偿
+                result_array = self.math_ops.density_to_linear(density_array)
+                if params.screen_glare_compensation > 0.0:
+                    result_array = np.maximum(0.0, result_array - params.screen_glare_compensation)
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
-        
-        # 转回线性
-        t4 = time.time()
-        result_array = self.math_ops.density_to_linear(density_array)
-        profile['to_linear_ms'] = (time.time() - t4) * 1000.0
         
         return result_array
     
@@ -298,16 +300,18 @@ class FilmPipelineProcessor:
                 channel_curves['b'] = params.curve_points_b
             
             if curve_points or channel_curves:
-                density_array = self.math_ops.apply_density_curve(
+                # apply_density_curve现在包含了转线性和屏幕反光补偿
+                result_array = self.math_ops.apply_density_curve(
                     density_array, curve_points, channel_curves, use_parallel=False,
-                    use_optimization=True  # 预览模式使用LUT优化
+                    use_optimization=True,  # 预览模式使用LUT优化
+                    screen_glare_compensation=params.screen_glare_compensation
                 )
+            else:
+                # 没有曲线时，需要手动转换到线性空间并应用屏幕反光补偿
+                result_array = self.math_ops.density_to_linear(density_array)
+                if params.screen_glare_compensation > 0.0:
+                    result_array = np.maximum(0.0, result_array - params.screen_glare_compensation)
             profile['density_curves_ms'] = (time.time() - t3) * 1000.0
-        
-        # 转回线性
-        t4 = time.time()
-        result_array = self.math_ops.density_to_linear(density_array)
-        profile['to_linear_ms'] = (time.time() - t4) * 1000.0
         
         return result_array
     

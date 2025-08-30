@@ -120,7 +120,8 @@
       "g": [[...], [...]],
       "b": [[...], [...]]
     }
-  }
+  },
+  "screen_glare_compensation": 0.0
 }
 ```
 
@@ -136,6 +137,7 @@
     - rgb: [[x,y], ...]（整体曲线）。
     - r/g/b: [[x,y], ...]（每通道曲线，可选）。
   - 约束：x 单调非降（0~1），y 建议在 0~1 范围内；至少包含一条曲线（rgb 或任一通道）。
+- screen_glare_compensation: number。屏幕反光补偿量。推荐范围 [0.0, 0.2]，默认值 0.0。在线性空间中应用减法补偿。
 
 解析优先级：
 1) 提供了具体数值（matrix.values / curve.points）则优先使用。
@@ -204,7 +206,8 @@
     "density_curve": {
       "name": "Kodak Endura Premier",
       "points": { "rgb": [[0.0,0.0],[1.0,1.0]] }
-    }
+    },
+    "screen_glare_compensation": 0.0
   }
 }
 ```
@@ -252,7 +255,8 @@
         "density_gamma": 1.0,
         "density_dmax": 2.5,
         "density_matrix": { "name": "Cineon_States_M_to_Print_Density" },
-        "density_curve": { "name": "Kodak Endura Premier", "points": { "rgb": [[0,0],[1,1]] } }
+        "density_curve": { "name": "Kodak Endura Premier", "points": { "rgb": [[0,0],[1,1]] } },
+        "screen_glare_compensation": 0.0
       }
     }
   ]

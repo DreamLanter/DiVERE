@@ -238,14 +238,16 @@ class DiVERELUTInterface:
     
     def generate_density_curve_lut(self, curves: Dict[str, List[Tuple[float, float]]],
                                  output_path: str,
-                                 size: int = 1024) -> bool:
+                                 size: int = 1024,
+                                 screen_glare_compensation: float = 0.0) -> bool:
         """
-        生成密度曲线LUT - 在密度空间应用曲线
+        生成密度曲线LUT - 在密度空间应用曲线，然后在线性空间应用屏幕反光补偿
         
         Args:
             curves: 曲线字典，键为'R', 'G', 'B'，值为控制点列表
             output_path: 输出文件路径
             size: LUT大小
+            screen_glare_compensation: 屏幕反光补偿量(0.0-0.2)，在线性空间应用
             
         Returns:
             是否生成成功
@@ -305,6 +307,10 @@ class DiVERELUTInterface:
                         
                         # 密度 -> 线性空间
                         result[:, channel_idx] = np.power(10.0, -output_density)
+                    
+                    # 应用屏幕反光补偿（在线性空间）
+                    if screen_glare_compensation > 0.0:
+                        result = np.maximum(0.0, result - screen_glare_compensation)
                     
                     # 裁剪到有效范围
                     result = np.clip(result, 0.0, 1.0)

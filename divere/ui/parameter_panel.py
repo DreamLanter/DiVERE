@@ -273,6 +273,21 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(widget)
         self.curve_editor = CurveEditorWidget()
         layout.addWidget(self.curve_editor)
+        
+        # 屏幕反光补偿控件
+        glare_group = QGroupBox("屏幕反光补偿")
+        glare_layout = QGridLayout(glare_group)
+        
+        self.glare_compensation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.glare_compensation_spinbox = QDoubleSpinBox()
+        self._setup_slider_spinbox(self.glare_compensation_slider, self.glare_compensation_spinbox, 0, 500, 0.0, 5.0, 0.01)
+        self.glare_compensation_spinbox.setSuffix("%")
+        
+        glare_layout.addWidget(QLabel("补偿强度:"), 0, 0)
+        glare_layout.addWidget(self.glare_compensation_slider, 0, 1)
+        glare_layout.addWidget(self.glare_compensation_spinbox, 0, 2)
+        
+        layout.addWidget(glare_group)
         return widget
 
     def _create_debug_tab(self) -> QWidget:
@@ -361,6 +376,10 @@ class ParameterPanel(QWidget):
         self.green_gain_spinbox.valueChanged.connect(self._on_green_gain_spinbox_changed)
         self.blue_gain_slider.valueChanged.connect(self._on_blue_gain_slider_changed)
         self.blue_gain_spinbox.valueChanged.connect(self._on_blue_gain_spinbox_changed)
+        
+        # 屏幕反光补偿信号连接
+        self.glare_compensation_slider.valueChanged.connect(self._on_glare_compensation_slider_changed)
+        self.glare_compensation_spinbox.valueChanged.connect(self._on_glare_compensation_spinbox_changed)
 
         self.matrix_combo.currentIndexChanged.connect(self._on_matrix_combo_changed)
         for i in range(3):
@@ -420,6 +439,10 @@ class ParameterPanel(QWidget):
             self.green_gain_spinbox.setValue(params.rgb_gains[1])
             self.blue_gain_slider.setValue(int(params.rgb_gains[2] * 100))
             self.blue_gain_spinbox.setValue(params.rgb_gains[2])
+            
+            # 屏幕反光补偿参数同步 (0.0-0.2 -> 0-20)
+            self.glare_compensation_slider.setValue(int(params.screen_glare_compensation * 10000.0))
+            self.glare_compensation_spinbox.setValue(params.screen_glare_compensation * 100.0)
             
             matrix = params.density_matrix if params.density_matrix is not None else np.eye(3)
             for i in range(3):
@@ -490,6 +513,9 @@ class ParameterPanel(QWidget):
         params.curve_points_b = all_curves.get('B', [])
         params.density_curve_name = self.curve_editor.curve_combo.currentData() or self.curve_editor.curve_combo.currentText().strip('*')
         
+        # 屏幕反光补偿参数 (UI显示0-20% -> 实际值0.0-0.2)
+        params.screen_glare_compensation = self.glare_compensation_spinbox.value() / 100.0
+        
         params.enable_density_inversion = self.enable_density_inversion_checkbox.isChecked()
         params.enable_density_matrix = self.enable_density_matrix_checkbox.isChecked()
         params.enable_rgb_gains = self.enable_rgb_gains_checkbox.isChecked()
@@ -524,8 +550,7 @@ class ParameterPanel(QWidget):
         self._set_rgb_gains_ui_state(ui_config.rgb_gains_enabled, ui_config.rgb_gains_visible)
         
         # 应用密度曲线控件状态
-        self.enable_density_curve_checkbox.setEnabled(ui_config.density_curve_enabled)
-        self.enable_density_curve_checkbox.setVisible(ui_config.density_curve_visible)
+        self._set_density_curve_ui_state(ui_config.density_curve_enabled, ui_config.density_curve_visible)
         
         # 应用色彩空间控件状态
         self._set_color_space_ui_state(ui_config.color_space_enabled, ui_config.color_space_visible)
@@ -578,6 +603,16 @@ class ParameterPanel(QWidget):
         # 控制光谱锐化相关控件（如果启用）
         if hasattr(self, 'enable_scanner_spectral_checkbox'):
             self.enable_scanner_spectral_checkbox.setEnabled(enabled)
+    
+    def _set_density_curve_ui_state(self, enabled: bool, visible: bool):
+        """设置密度曲线控件组状态（包括屏幕反光补偿）"""
+        # 控制启用复选框
+        self.enable_density_curve_checkbox.setEnabled(enabled)
+        self.enable_density_curve_checkbox.setVisible(visible)
+        
+        # 控制屏幕反光补偿控件
+        self.glare_compensation_slider.setEnabled(enabled)
+        self.glare_compensation_spinbox.setEnabled(enabled)
     
     def _set_disabled_tooltips(self, tooltip: str):
         """为禁用的控件设置工具提示"""
@@ -673,6 +708,20 @@ class ParameterPanel(QWidget):
         self.blue_gain_slider.blockSignals(True)
         self.blue_gain_slider.setValue(int(value * 100))
         self.blue_gain_slider.blockSignals(False)
+        self.parameter_changed.emit()
+
+    def _on_glare_compensation_slider_changed(self, value: int):
+        if self._is_updating_ui: return
+        self.glare_compensation_spinbox.blockSignals(True)
+        self.glare_compensation_spinbox.setValue(value / 100.0)  # Slider 0-20 -> SpinBox 0-20
+        self.glare_compensation_spinbox.blockSignals(False)
+        self.parameter_changed.emit()
+
+    def _on_glare_compensation_spinbox_changed(self, value: float):
+        if self._is_updating_ui: return
+        self.glare_compensation_slider.blockSignals(True)
+        self.glare_compensation_slider.setValue(int(value * 100.0))  # SpinBox 0-20 -> Slider 0-20
+        self.glare_compensation_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     # --- Action slots ---

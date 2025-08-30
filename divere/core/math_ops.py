@@ -525,37 +525,57 @@ class FilmMathOps:
                            channel_curves: Optional[Dict[str, List[Tuple[float, float]]]] = None,
                            lut_size: int = 512,
                            use_parallel: bool = True,
-                           use_optimization: bool = True) -> np.ndarray:
+                           use_optimization: bool = True,
+                           screen_glare_compensation: float = 0.0) -> np.ndarray:
         """
-        应用密度曲线调整（支持高精度导出模式）
+        应用密度曲线调整，然后转换到线性空间并应用屏幕反光补偿（支持高精度导出模式）
         
         Args:
+            density_array: 密度空间的输入数组
+            curve_points: RGB通用曲线控制点 
+            channel_curves: 单通道曲线控制点字典
+            lut_size: LUT大小
+            use_parallel: 是否使用并行处理
             use_optimization: 是否使用LUT优化。False时使用高精度模式（导出用）
+            screen_glare_compensation: 屏幕反光补偿量(0.0-0.2)，在线性空间应用
+            
+        Returns:
+            处理后的线性空间数组
         """
-        # 快速路径：如果没有曲线，直接返回
+        # 第1步：应用密度曲线（在密度空间）
+        density_result = density_array
+        
         has_rgb_curve = curve_points and len(curve_points) >= 2
         has_channel_curves = (channel_curves and 
                              any(curves and len(curves) >= 2 
                                  for curves in channel_curves.values()))
         
-        if not has_rgb_curve and not has_channel_curves:
-            return density_array
-        
-        # 根据模式选择处理方式
-        if not use_optimization:
-            # 高精度模式（导出用）：使用32K LUT或直接数学插值
-            return self._apply_curves_high_precision(density_array, curve_points, 
-                                                   channel_curves, use_parallel)
-        else:
-            # 优化模式（预览用）：使用512点LUT
-            should_parallel = self._should_use_parallel(density_array.size, use_parallel)
-            
-            if should_parallel:
-                return self._apply_curves_merged_lut_parallel(density_array, curve_points, 
-                                                            channel_curves, lut_size)
+        if has_rgb_curve or has_channel_curves:
+            # 根据模式选择处理方式
+            if not use_optimization:
+                # 高精度模式（导出用）：使用32K LUT或直接数学插值
+                density_result = self._apply_curves_high_precision(density_array, curve_points, 
+                                                               channel_curves, use_parallel)
             else:
-                return self._apply_curves_merged_lut(density_array, curve_points, 
-                                                   channel_curves, lut_size)
+                # 优化模式（预览用）：使用512点LUT
+                should_parallel = self._should_use_parallel(density_array.size, use_parallel)
+                
+                if should_parallel:
+                    density_result = self._apply_curves_merged_lut_parallel(density_array, curve_points, 
+                                                                        channel_curves, lut_size)
+                else:
+                    density_result = self._apply_curves_merged_lut(density_array, curve_points, 
+                                                               channel_curves, lut_size)
+        
+        # 第2步：转换到线性空间
+        linear_result = self.density_to_linear(density_result)
+        
+        # 第3步：应用屏幕反光补偿（在线性空间）
+        if screen_glare_compensation > 0.0:
+            # 在线性空间中减去补偿值，确保不会产生负值
+            linear_result = np.maximum(0.0, linear_result - screen_glare_compensation)
+        
+        return linear_result
     
     def _apply_curves_merged_lut(self, density_array: np.ndarray,
                                curve_points: Optional[List[Tuple[float, float]]],
@@ -1323,18 +1343,19 @@ class FilmMathOps:
                 channel_curves['b'] = params.curve_points_b
 
             if curve_points or channel_curves:
-                density_array = self.apply_density_curve(
+                # apply_density_curve现在包含了转线性和屏幕反光补偿
+                result_array = self.apply_density_curve(
                     density_array, curve_points, channel_curves,
-                    use_optimization=use_optimization
+                    use_optimization=use_optimization,
+                    screen_glare_compensation=params.screen_glare_compensation
                 )
+            else:
+                # 没有曲线时，需要手动转换到线性空间并应用屏幕反光补偿
+                result_array = self.density_to_linear(density_array)
+                if params.screen_glare_compensation > 0.0:
+                    result_array = np.maximum(0.0, result_array - params.screen_glare_compensation)
             if profile is not None:
                 profile['density_curves_ms'] = (time.time() - t4) * 1000.0
-        
-        # 6. 转回线性空间
-        t5 = time.time()
-        result_array = self.density_to_linear(density_array)
-        if profile is not None:
-            profile['to_linear_ms'] = (time.time() - t5) * 1000.0
         
         return result_array
 

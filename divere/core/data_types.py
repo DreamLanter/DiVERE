@@ -172,6 +172,10 @@ class Preset:
         if curve_obj:
             cc["density_curve"] = curve_obj
 
+        # screen_glare_compensation
+        if "screen_glare_compensation" in gp:
+            cc["screen_glare_compensation"] = gp["screen_glare_compensation"]
+
         data["cc_params"] = cc
         return data
 
@@ -244,6 +248,10 @@ class Preset:
             for key_src, key_dst in [("r", "curve_points_r"), ("g", "curve_points_g"), ("b", "curve_points_b")]:
                 if key_src in points_obj:
                     gp[key_dst] = points_obj[key_src]
+
+        # screen_glare_compensation
+        if "screen_glare_compensation" in cc:
+            gp["screen_glare_compensation"] = cc["screen_glare_compensation"]
 
         preset.grading_params = gp
         return preset
@@ -574,6 +582,9 @@ class ColorGradingParams:
     curve_points_g: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
     curve_points_b: List[Tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (1.0, 1.0)])
 
+    # Screen Glare Compensation (applied after density curve in linear space)
+    screen_glare_compensation: float = 0.0
+
     # --- Pipeline Control Flags (transient, not saved in presets) ---
     enable_density_inversion: bool = True
     enable_density_matrix: bool = False
@@ -603,6 +614,9 @@ class ColorGradingParams:
         new_params.curve_points_r = self.curve_points_r.copy()
         new_params.curve_points_g = self.curve_points_g.copy()
         new_params.curve_points_b = self.curve_points_b.copy()
+        
+        # 复制屏幕反光补偿参数
+        new_params.screen_glare_compensation = self.screen_glare_compensation
 
         # 复制 transient 状态
         new_params.enable_density_inversion = self.enable_density_inversion
@@ -625,6 +639,7 @@ class ColorGradingParams:
             'curve_points_r': self.curve_points_r,
             'curve_points_g': self.curve_points_g,
             'curve_points_b': self.curve_points_b,
+            'screen_glare_compensation': self.screen_glare_compensation,
         }
         if self.density_matrix is not None:
             data['density_matrix'] = self.density_matrix.tolist()
@@ -667,6 +682,10 @@ class ColorGradingParams:
             params.curve_points_g = data["curve_points_g"]
         if "curve_points_b" in data:
             params.curve_points_b = data["curve_points_b"]
+        
+        # 屏幕反光补偿参数
+        if "screen_glare_compensation" in data:
+            params.screen_glare_compensation = float(data["screen_glare_compensation"])
         
         # Backward compatibility for matrix
         if 'density_matrix' in data:
@@ -716,6 +735,10 @@ class ColorGradingParams:
         if 'curve_points_r' in data: self.curve_points_r = data['curve_points_r']
         if 'curve_points_g' in data: self.curve_points_g = data['curve_points_g']
         if 'curve_points_b' in data: self.curve_points_b = data['curve_points_b']
+        
+        # 屏幕反光补偿参数
+        if 'screen_glare_compensation' in data:
+            self.screen_glare_compensation = float(data['screen_glare_compensation'])
 
 
 @dataclass

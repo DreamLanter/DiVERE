@@ -36,6 +36,7 @@ class ParameterPanel(QWidget):
     # Signals for complex actions requiring coordination
     ccm_optimize_requested = Signal()
     save_custom_colorspace_requested = Signal(dict)
+    save_density_matrix_requested = Signal(np.ndarray, str)  # 保存密度矩阵信号(矩阵, 当前名称)
     toggle_color_checker_requested = Signal(bool)
     # 色卡变换信号
     cc_flip_horizontal_requested = Signal()
@@ -56,6 +57,7 @@ class ParameterPanel(QWidget):
         self.context = context
         self.current_params = self.context.get_current_params().copy()
         self.current_film_type = "color_negative_c41"  # Default film type
+        self.selected_colorchecker_file = "colorchecker_acescg_rgb_values.json"  # Default reference
         
         self._is_updating_ui = False
         self.context.params_changed.connect(self.on_context_params_changed)
@@ -160,7 +162,32 @@ class ParameterPanel(QWidget):
         cc_selector_layout.addWidget(self.cc_rotate_r_button)
         
         cc_selector_layout.addStretch()  # 推到左边
+        
+        # 色卡类型选择下拉菜单
+        self.colorchecker_combo = QComboBox()
+        self.colorchecker_combo.setToolTip("选择色卡参考类型")
+        self.colorchecker_combo.setVisible(False)
+        self.colorchecker_combo.setMinimumWidth(150)
+        self._populate_colorchecker_combo()
+        cc_selector_layout.addWidget(self.colorchecker_combo)
+        
         layout.addLayout(cc_selector_layout)
+
+        # 光谱锐化优化配置开关
+        spectral_config_layout = QHBoxLayout()
+        self.optimize_idt_checkbox = QCheckBox("优化IDT色彩变换")
+        self.optimize_idt_checkbox.setToolTip("是否将IDT color transformation参数加入优化")
+        self.optimize_idt_checkbox.setChecked(True)  # 默认启用
+        self.optimize_idt_checkbox.setVisible(False)
+        spectral_config_layout.addWidget(self.optimize_idt_checkbox)
+        
+        self.optimize_density_matrix_checkbox = QCheckBox("优化密度矩阵")
+        self.optimize_density_matrix_checkbox.setToolTip("是否将density matrix参数加入优化")
+        self.optimize_density_matrix_checkbox.setChecked(False)  # 默认禁用
+        self.optimize_density_matrix_checkbox.setVisible(False)
+        spectral_config_layout.addWidget(self.optimize_density_matrix_checkbox)
+        
+        layout.addLayout(spectral_config_layout)
 
         self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换")
         self.ccm_optimize_button.setToolTip("从色卡选择器读取24个颜色并优化参数")
@@ -199,6 +226,57 @@ class ParameterPanel(QWidget):
         film_type_layout.addWidget(self.film_type_combo, 0, 1, 1, 2)
         
         return film_type_group
+
+    def _populate_colorchecker_combo(self):
+        """填充色卡类型下拉菜单"""
+        try:
+            from divere.utils.app_paths import resolve_data_path
+            colorchecker_dir = resolve_data_path("config", "colorchecker")
+        except Exception:
+            colorchecker_dir = Path(__file__).parent.parent / "config" / "colorchecker"
+        
+        if not colorchecker_dir.exists():
+            return
+            
+        # 扫描*_rgb_values.json文件
+        chart_files = []
+        for file_path in colorchecker_dir.glob("*_rgb_values.json"):
+            chart_files.append(file_path.name)
+        
+        # 排序并添加到下拉菜单
+        chart_files.sort()
+        for filename in chart_files:
+            display_name = self._format_colorchecker_display_name(filename)
+            self.colorchecker_combo.addItem(display_name, filename)
+            
+        # 设置默认选择
+        default_index = self.colorchecker_combo.findData("colorchecker_acescg_rgb_values.json")
+        if default_index >= 0:
+            self.colorchecker_combo.setCurrentIndex(default_index)
+    
+    def _format_colorchecker_display_name(self, filename: str) -> str:
+        """将文件名格式化为显示名称"""
+        # 移除后缀
+        name = filename.replace("_rgb_values.json", "")
+        
+        # 处理特殊情况
+        if name == "colorchecker_acescg":
+            return "标准色卡 (ACEScg)"
+        
+        # 将下划线替换为空格，首字母大写
+        parts = name.split("_")
+        formatted_parts = []
+        for part in parts:
+            if part.upper() in ["RGB", "ACEScg", "D50", "D60"]:
+                formatted_parts.append(part.upper())
+            else:
+                formatted_parts.append(part.capitalize())
+        
+        return " ".join(formatted_parts)
+    
+    def get_selected_colorchecker_file(self) -> str:
+        """获取当前选择的色卡参考文件"""
+        return self.selected_colorchecker_file
 
     def _create_density_tab(self) -> QWidget:
         widget = QWidget()
@@ -241,6 +319,13 @@ class ParameterPanel(QWidget):
             data = self.context.the_enlarger.pipeline_processor.get_matrix_data(matrix_id)
             if data: self.matrix_combo.addItem(data.get("name", matrix_id), matrix_id)
         combo_layout.addWidget(self.matrix_combo)
+        combo_layout.addStretch()
+        
+        # 保存矩阵按钮
+        self.save_matrix_button = QPushButton("保存矩阵")
+        self.save_matrix_button.setToolTip("将当前密度矩阵保存到文件")
+        combo_layout.addWidget(self.save_matrix_button)
+        
         matrix_layout.addLayout(combo_layout)
         matrix_layout.addLayout(matrix_grid)
         layout.addWidget(matrix_group)
@@ -389,9 +474,10 @@ class ParameterPanel(QWidget):
         self.glare_compensation_spinbox.installEventFilter(self)
 
         self.matrix_combo.currentIndexChanged.connect(self._on_matrix_combo_changed)
+        self.save_matrix_button.clicked.connect(self._on_save_matrix_clicked)
         for i in range(3):
             for j in range(3):
-                # 统一由专用槽处理：必要时自动勾选“启用密度矩阵”，并触发参数变更
+                # 统一由专用槽处理：必要时自动勾选"启用密度矩阵"，并触发参数变更
                 self.matrix_editor_widgets[i][j].valueChanged.connect(self._on_matrix_value_changed)
         
         # 曲线编辑器发出 (curve_name, points)，使用专用槽以丢弃参数并统一触发
@@ -416,6 +502,7 @@ class ParameterPanel(QWidget):
         self.cc_rotate_r_button.clicked.connect(self._on_cc_rotate_right)
         self.ccm_optimize_button.clicked.connect(self.ccm_optimize_requested.emit)
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
+        self.colorchecker_combo.currentTextChanged.connect(self._on_colorchecker_changed)
 
     def update_ui_from_params(self):
         self._is_updating_ui = True
@@ -869,6 +956,9 @@ class ParameterPanel(QWidget):
         self.cc_flip_v_button.setVisible(checked)
         self.cc_rotate_l_button.setVisible(checked)
         self.cc_rotate_r_button.setVisible(checked)
+        self.colorchecker_combo.setVisible(checked)
+        self.optimize_idt_checkbox.setVisible(checked)
+        self.optimize_density_matrix_checkbox.setVisible(checked)
         self.ccm_optimize_button.setVisible(checked)
         self.save_input_colorspace_button.setVisible(checked)
         if checked:
@@ -937,6 +1027,59 @@ class ParameterPanel(QWidget):
     def _on_cc_rotate_right(self):
         """右旋转色卡选择器"""
         self.cc_rotate_right_requested.emit()
+    
+    def _on_colorchecker_changed(self, display_name: str):
+        """色卡类型选择改变时"""
+        if self._is_updating_ui:
+            return
+        filename = self.colorchecker_combo.currentData()
+        if filename:
+            self.selected_colorchecker_file = filename
+    
+    def get_spectral_sharpening_config(self):
+        """获取当前的光谱锐化配置"""
+        from divere.core.data_types import SpectralSharpeningConfig
+        
+        return SpectralSharpeningConfig(
+            optimize_idt_transformation=self.optimize_idt_checkbox.isChecked(),
+            optimize_density_matrix=self.optimize_density_matrix_checkbox.isChecked(),
+            reference_file=self.selected_colorchecker_file if hasattr(self, 'selected_colorchecker_file') else "colorchecker_acescg_rgb_values.json"
+        )
+
+    def _on_save_matrix_clicked(self):
+        """保存当前密度矩阵"""
+        # 获取当前矩阵数据
+        matrix = np.zeros((3, 3), dtype=np.float32)
+        for i in range(3):
+            for j in range(3):
+                matrix[i, j] = self.matrix_editor_widgets[i][j].value()
+        
+        # 获取当前矩阵名称
+        current_name = self.matrix_combo.currentText().strip('*')
+        if current_name == "自定义":
+            current_name = ""
+        
+        # 发射保存信号
+        self.save_density_matrix_requested.emit(matrix, current_name)
+
+    def _refresh_matrix_combo(self):
+        """刷新矩阵下拉列表（保存后调用）"""
+        # 保存当前选择
+        current_data = self.matrix_combo.currentData()
+        
+        # 清空并重新填充
+        self.matrix_combo.clear()
+        self.matrix_combo.addItem("自定义", "custom")
+        available = self.context.the_enlarger.pipeline_processor.get_available_matrices()
+        for matrix_id in available:
+            data = self.context.the_enlarger.pipeline_processor.get_matrix_data(matrix_id)
+            if data: 
+                self.matrix_combo.addItem(data.get("name", matrix_id), matrix_id)
+        
+        # 恢复选择
+        index = self.matrix_combo.findData(current_data)
+        if index >= 0:
+            self.matrix_combo.setCurrentIndex(index)
 
     def _on_curve_changed(self, curve_name, points):
         if self._is_updating_ui: return

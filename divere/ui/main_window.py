@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
         self.parameter_panel.auto_color_iterative_requested.connect(self._on_auto_color_iterative_requested)
         self.parameter_panel.ccm_optimize_requested.connect(self._on_ccm_optimize_requested)
         self.parameter_panel.save_custom_colorspace_requested.connect(self._on_save_custom_colorspace_requested)
+        self.parameter_panel.save_density_matrix_requested.connect(self._on_save_density_matrix_requested)
         self.parameter_panel.toggle_color_checker_requested.connect(self.preview_widget.toggle_color_checker)
         # 色卡变换信号连接
         self.parameter_panel.cc_flip_horizontal_requested.connect(self.preview_widget.flip_colorchecker_horizontal)
@@ -840,15 +841,48 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("正在根据色卡优化光谱锐化参数...（CMA-ES）")
 
+        # 获取光谱锐化配置
+        sharpening_config = self.parameter_panel.get_spectral_sharpening_config()
+        
+        # 获取UI当前参数作为优化初值
+        current_params = self.context.get_current_params()
+        ui_params = {
+            'gamma': current_params.density_gamma,
+            'dmax': current_params.density_dmax,
+            'r_gain': current_params.rgb_gains[0],
+            'b_gain': current_params.rgb_gains[2],
+            'density_matrix': current_params.density_matrix if current_params.density_matrix is not None else np.eye(3)
+        }
+        
+        # 如果启用IDT优化，获取当前色彩空间的primaries
+        if sharpening_config.optimize_idt_transformation:
+            cs_name = self.context.get_input_color_space()
+            cs_info = self.context.color_space_manager.get_color_space_info(cs_name)
+            if cs_info and 'primaries' in cs_info:
+                primaries = cs_info['primaries']
+                # 兼容两种primaries格式
+                if isinstance(primaries, dict):
+                    # 字典格式：{'R': [x, y], 'G': [x, y], 'B': [x, y]}
+                    ui_params['primaries_xy'] = np.array([
+                        [primaries['R'][0], primaries['R'][1]],
+                        [primaries['G'][0], primaries['G'][1]],
+                        [primaries['B'][0], primaries['B'][1]]
+                    ])
+                else:
+                    # numpy数组格式：shape (3, 2)
+                    ui_params['primaries_xy'] = np.array(primaries)
+
         # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
         class _CCMWorker(QRunnable):
-            def __init__(self, image_array, corners, gamma, use_mat, mat):
+            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params):
                 super().__init__()
                 self.image_array = image_array
                 self.corners = corners
                 self.gamma = gamma
                 self.use_mat = use_mat
                 self.mat = mat
+                self.config = config
+                self.ui_params = ui_params
                 self.result = None
                 self.error = None
             @Slot()
@@ -860,14 +894,17 @@ class MainWindow(QMainWindow):
                         self.gamma,
                         self.use_mat,
                         self.mat,
-                        optimizer_max_iter=120,
-                        optimizer_tolerance=1e-6,
+                        optimizer_max_iter=self.config.max_iter,
+                        optimizer_tolerance=self.config.tolerance,
+                        reference_file=self.config.reference_file,
+                        sharpening_config=self.config,
+                        ui_params=self.ui_params,
                     )
                 except Exception as e:
                     import traceback
                     self.error = f"{e}\n{traceback.format_exc()}"
 
-        worker = _CCMWorker(current_image.array, cc_corners, input_gamma, use_mat, corr_mat)
+        worker = _CCMWorker(current_image.array, cc_corners, input_gamma, use_mat, corr_mat, sharpening_config, ui_params)
 
         def _on_done():
             try:
@@ -898,6 +935,12 @@ class MainWindow(QMainWindow):
                 r_gain = float(params_dict.get('r_gain', new_params.rgb_gains[0]))
                 b_gain = float(params_dict.get('b_gain', new_params.rgb_gains[2]))
                 new_params.rgb_gains = (r_gain, new_params.rgb_gains[1], b_gain)
+                
+                # 应用优化的density_matrix（如果有）
+                if 'density_matrix' in params_dict and params_dict['density_matrix'] is not None:
+                    new_params.density_matrix = params_dict['density_matrix']
+                    new_params.enable_density_matrix = True
+                    new_params.density_matrix_name = "optimized_custom"
 
                 self.context.update_params(new_params)
                 self.statusBar().showMessage(
@@ -970,6 +1013,60 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "保存失败", "无法保存到项目配置目录")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存自定义色彩空间失败: {str(e)}")
+
+    def _on_save_density_matrix_requested(self, matrix: np.ndarray, current_name: str):
+        """保存密度矩阵到文件"""
+        try:
+            from PySide6.QtWidgets import QInputDialog, QMessageBox
+            
+            # 输入矩阵名称
+            save_name, ok = QInputDialog.getText(
+                self, 
+                "保存密度矩阵", 
+                "请输入矩阵名称:",
+                text=current_name if current_name else "custom_matrix"
+            )
+            
+            if not ok or not save_name.strip():
+                return
+                
+            # 输入描述（可选）
+            description, ok = QInputDialog.getText(
+                self, 
+                "保存密度矩阵", 
+                "请输入描述（可选）:",
+                text="用户自定义密度校正矩阵"
+            )
+            
+            if not ok:
+                description = "用户自定义密度校正矩阵"
+            
+            # 构建保存数据
+            data = {
+                "name": save_name,
+                "description": description,
+                "version": 1,
+                "matrix": matrix.tolist()  # 转换为列表以便JSON序列化
+            }
+            
+            # 保存到项目config目录的matrices子目录
+            ok = enhanced_config_manager.save_user_config("matrices", save_name, data)
+            if ok:
+                self.statusBar().showMessage(f"已保存密度矩阵到项目配置: {save_name}.json")
+                QMessageBox.information(self, "保存成功", f"密度矩阵已保存: {save_name}")
+                
+                # 重新加载矩阵列表（如果parameter_panel有更新方法）
+                try:
+                    # 刷新parameter_panel的矩阵下拉列表
+                    self.parameter_panel._refresh_matrix_combo()
+                except AttributeError:
+                    # 如果没有刷新方法，用户需要重启应用来看到新矩阵
+                    pass
+            else:
+                QMessageBox.critical(self, "保存失败", "无法保存密度矩阵到配置目录")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"保存密度矩阵时出错：\n{str(e)}")
     
     def _initialize_color_space_info(self):
         """初始化色彩空间信息"""

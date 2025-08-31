@@ -41,13 +41,29 @@ class CCMOptimizer:
     """CCM参数优化器"""
     
     def __init__(self, reference_file: str = "colorchecker_acescg_rgb_values.json",
-                 weights_config_path: Optional[str] = None):
+                 weights_config_path: Optional[str] = None,
+                 sharpening_config: Optional['SpectralSharpeningConfig'] = None):
         """
         初始化优化器
         
         Args:
             reference_file: 参考RGB值文件路径
+            weights_config_path: 权重配置文件路径
+            sharpening_config: 光谱锐化配置，决定哪些参数参与优化
         """
+        # 导入配置类（避免循环导入）
+        if sharpening_config is None:
+            try:
+                from divere.core.data_types import SpectralSharpeningConfig
+                sharpening_config = SpectralSharpeningConfig()
+            except ImportError:
+                # 向后兼容：创建一个简单的配置对象
+                class DefaultConfig:
+                    optimize_idt_transformation = True
+                    optimize_density_matrix = False
+                sharpening_config = DefaultConfig()
+        
+        self.sharpening_config = sharpening_config
         self.pipeline = DiVEREPipelineSimulator(verbose=False)
         self.reference_values = self._load_reference_values(reference_file)
         # 加载权重配置（可选）。默认使用内置的 config/colorchecker/weights.json
@@ -55,29 +71,95 @@ class CCMOptimizer:
         self._patch_weight_map = self._build_patch_weight_map(self._weights_config)
         self._channel_weights = self._load_channel_weights(self._weights_config)
         
-        # 参数边界和初始值
-        self.bounds = {
-            'primaries_xy': [
+        # 根据配置构建参数映射
+        self._build_parameter_mapping()
+        
+    def _build_parameter_mapping(self):
+        """根据配置动态构建参数边界、初始值和索引映射"""
+        self.bounds = {}
+        self.initial_params = {}
+        self._param_indices = {}  # 参数名到数组索引的映射
+        
+        current_idx = 0
+        
+        # IDT transformation参数（始终包含gamma, dmax, r_gain, b_gain）
+        self.bounds['gamma'] = (1.0, 4.0)
+        self.bounds['dmax'] = (0.5, 4.0)  
+        self.bounds['r_gain'] = (-2, 2)
+        self.bounds['b_gain'] = (-2, 2)
+        
+        self.initial_params['gamma'] = 2.0
+        self.initial_params['dmax'] = 2.0
+        self.initial_params['r_gain'] = 0.0
+        self.initial_params['b_gain'] = 0.0
+        
+        self._param_indices['gamma'] = current_idx
+        self._param_indices['dmax'] = current_idx + 1
+        self._param_indices['r_gain'] = current_idx + 2  
+        self._param_indices['b_gain'] = current_idx + 3
+        current_idx += 4
+        
+        # primaries_xy（如果启用IDT优化）
+        if self.sharpening_config.optimize_idt_transformation:
+            self.bounds['primaries_xy'] = [
                 # R基色 x, y
                 (0.0, 1.0), (0.0, 1.0),  # R基色范围
                 # G基色 x, y  
                 (0.0, 1.0), (0.0, 1.0),  # G基色范围
                 # B基色 x, y
                 (0.0, 1.0), (0.0, 1.0)   # B基色范围
-            ],
-            'gamma': (1.0, 4.0),          # 密度反差范围
-            'dmax': (0.5, 4.0),           # 最大密度范围
-            'r_gain': (-2, 2),        # R增益范围
-            'b_gain': (-2, 2)         # B增益范围
-        }
+            ]
+            self.initial_params['primaries_xy'] = np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06])  # sRGB基色
+            self._param_indices['primaries_xy'] = slice(current_idx, current_idx + 6)
+            current_idx += 6
         
-        self.initial_params = {
-            'primaries_xy': np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06]),  # sRGB基色
-            'gamma': 2.6,      # DiVERE默认值
-            'dmax': 2.0,       # DiVERE默认值
-            'r_gain': 0.0,     # 无增益
-            'b_gain': 0.0      # 无增益
-        }
+        # density_matrix（如果启用density matrix优化）  
+        if self.sharpening_config.optimize_density_matrix:
+            # 8个参数：3x3矩阵除了左上角(0,0)固定为1.0的其余8个元素
+            self.bounds['density_matrix'] = [
+                # 跳过(0,0)，从(0,1)开始：第一行剩余2个
+                (-0.2, 0.2), (-0.2, 0.2),  
+                # 第二行3个
+                (-0.2, 0.2), (0.5, 2.0), (-0.2, 0.2),  
+                # 第三行3个
+                (-0.2, 0.2), (-0.2, 0.2), (0.5, 2.0)
+            ]
+            # 初始为单位矩阵的8个可变元素（跳过左上角）
+            self.initial_params['density_matrix'] = np.array([
+                0.0, 0.0,       # 第一行: (0,1), (0,2)
+                0.0, 1.0, 0.0,  # 第二行: (1,0), (1,1), (1,2)
+                0.0, 0.0, 1.0   # 第三行: (2,0), (2,1), (2,2)
+            ])
+            self._param_indices['density_matrix'] = slice(current_idx, current_idx + 8)
+            current_idx += 8
+        
+        self._total_params = current_idx
+    
+    def _update_initial_params_from_ui(self, ui_params: Dict):
+        """根据UI当前参数更新优化初值"""
+        # 更新基础参数
+        if 'gamma' in ui_params:
+            self.initial_params['gamma'] = float(ui_params['gamma'])
+        if 'dmax' in ui_params:
+            self.initial_params['dmax'] = float(ui_params['dmax'])
+        if 'r_gain' in ui_params:
+            self.initial_params['r_gain'] = float(ui_params['r_gain'])
+        if 'b_gain' in ui_params:
+            self.initial_params['b_gain'] = float(ui_params['b_gain'])
+            
+        # 更新primaries_xy（如果启用优化）
+        if 'primaries_xy' in self._param_indices and 'primaries_xy' in ui_params:
+            self.initial_params['primaries_xy'] = np.array(ui_params['primaries_xy']).flatten()
+            
+        # 更新density_matrix（如果启用优化）
+        if 'density_matrix' in self._param_indices and 'density_matrix' in ui_params:
+            matrix = np.array(ui_params['density_matrix'])
+            # 提取8个可变元素作为初值（左上角固定为1.0）
+            self.initial_params['density_matrix'] = np.array([
+                matrix[0, 1], matrix[0, 2],  # 第一行剩余2个
+                matrix[1, 0], matrix[1, 1], matrix[1, 2],  # 第二行3个
+                matrix[2, 0], matrix[2, 1], matrix[2, 2]   # 第三行3个
+            ])
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
         """加载参考RGB值
@@ -190,24 +272,78 @@ class CCMOptimizer:
         return v
     
     def _params_to_dict(self, params: np.ndarray) -> Dict[str, np.ndarray]:
-        """将优化参数数组转换为参数字典"""
-        return {
-            'primaries_xy': params[:6].reshape(3, 2),
-            'gamma': params[6],
-            'dmax': params[7], 
-            'r_gain': params[8],
-            'b_gain': params[9]
-        }
+        """将优化参数数组转换为参数字典（动态映射版本）"""
+        result = {}
+        
+        # 基础参数（始终存在）
+        result['gamma'] = params[self._param_indices['gamma']]
+        result['dmax'] = params[self._param_indices['dmax']]
+        result['r_gain'] = params[self._param_indices['r_gain']]
+        result['b_gain'] = params[self._param_indices['b_gain']]
+        
+        # primaries_xy（如果启用IDT优化）
+        if 'primaries_xy' in self._param_indices:
+            idx_slice = self._param_indices['primaries_xy']
+            result['primaries_xy'] = params[idx_slice].reshape(3, 2)
+        else:
+            # 使用sRGB基色作为固定值（当不优化IDT时）
+            result['primaries_xy'] = np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06]).reshape(3, 2)
+        
+        # density_matrix（如果启用优化）
+        if 'density_matrix' in self._param_indices:
+            idx_slice = self._param_indices['density_matrix']
+            # 重建3x3矩阵：左上角固定为1.0，其余8个元素来自优化参数
+            matrix_params = params[idx_slice]  # 8个参数
+            matrix = np.zeros((3, 3), dtype=float)
+            matrix[0, 0] = 1.0  # 固定左上角
+            matrix[0, 1] = matrix_params[0]  # (0,1)
+            matrix[0, 2] = matrix_params[1]  # (0,2)
+            matrix[1, 0] = matrix_params[2]  # (1,0)
+            matrix[1, 1] = matrix_params[3]  # (1,1)
+            matrix[1, 2] = matrix_params[4]  # (1,2)
+            matrix[2, 0] = matrix_params[5]  # (2,0)
+            matrix[2, 1] = matrix_params[6]  # (2,1)
+            matrix[2, 2] = matrix_params[7]  # (2,2)
+            result['density_matrix'] = matrix
+        else:
+            result['density_matrix'] = None
+        
+        return result
     
     def _dict_to_params(self, params_dict: Dict) -> np.ndarray:
-        """将参数字典转换为优化参数数组"""
-        return np.concatenate([
-            params_dict['primaries_xy'].flatten(),
-            [params_dict['gamma']],
-            [params_dict['dmax']],
-            [params_dict['r_gain']],
-            [params_dict['b_gain']]
-        ])
+        """将参数字典转换为优化参数数组（动态映射版本）"""
+        params = np.zeros(self._total_params, dtype=float)
+        
+        # 基础参数（始终存在）
+        params[self._param_indices['gamma']] = params_dict['gamma']
+        params[self._param_indices['dmax']] = params_dict['dmax']
+        params[self._param_indices['r_gain']] = params_dict['r_gain'] 
+        params[self._param_indices['b_gain']] = params_dict['b_gain']
+        
+        # primaries_xy（如果启用优化）
+        if 'primaries_xy' in self._param_indices:
+            idx_slice = self._param_indices['primaries_xy']
+            if 'primaries_xy' in params_dict:
+                params[idx_slice] = params_dict['primaries_xy'].flatten()
+            
+        # density_matrix（如果启用优化）
+        if 'density_matrix' in self._param_indices:
+            idx_slice = self._param_indices['density_matrix']
+            if 'density_matrix' in params_dict and params_dict['density_matrix'] is not None:
+                matrix = params_dict['density_matrix']
+                # 如果matrix已经是1D数组（从initial_params来），直接使用
+                if matrix.ndim == 1 and len(matrix) == 8:
+                    params[idx_slice] = matrix
+                else:
+                    # 如果是3x3矩阵，提取8个可变元素（跳过左上角(0,0)）
+                    matrix_params = np.array([
+                        matrix[0, 1], matrix[0, 2],  # 第一行剩余2个
+                        matrix[1, 0], matrix[1, 1], matrix[1, 2],  # 第二行3个
+                        matrix[2, 0], matrix[2, 1], matrix[2, 2]   # 第三行3个
+                    ])
+                    params[idx_slice] = matrix_params
+            
+        return params
     
     def objective_function(self, params: np.ndarray, 
                           input_patches: Dict[str, Tuple[float, float, float]]) -> float:
@@ -230,6 +366,13 @@ class CCMOptimizer:
         """计算给定参数与可选密度校正矩阵下的全局RMSE。"""
         try:
             params_dict = self._params_to_dict(params)
+            
+            # 确定实际使用的correction_matrix
+            actual_correction_matrix = correction_matrix
+            if params_dict['density_matrix'] is not None:
+                # 如果参数中包含优化的density_matrix，优先使用它
+                actual_correction_matrix = params_dict['density_matrix']
+            
             output_patches = self.pipeline.simulate_full_pipeline(
                 input_patches,
                 primaries_xy=params_dict['primaries_xy'],
@@ -237,7 +380,7 @@ class CCMOptimizer:
                 dmax=params_dict['dmax'],
                 r_gain=params_dict['r_gain'],
                 b_gain=params_dict['b_gain'],
-                correction_matrix=correction_matrix,
+                correction_matrix=actual_correction_matrix,
             )
             total_weighted_mse = 0.0
             total_weight = 0.0
@@ -265,9 +408,10 @@ class CCMOptimizer:
     
     def optimize(self, input_patches: Dict[str, Tuple[float, float, float]],
                  method: str = 'CMA-ES',
-                 max_iter: int = 300,
+                 max_iter: int = 1000,
                  tolerance: float = 1e-8,
-                 correction_matrix: Optional[np.ndarray] = None) -> Dict:
+                 correction_matrix: Optional[np.ndarray] = None,
+                 ui_params: Optional[Dict] = None) -> Dict:
         """
         执行优化
         
@@ -276,10 +420,20 @@ class CCMOptimizer:
             method: 优化方法
             max_iter: 最大迭代次数
             tolerance: 收敛容差
+            correction_matrix: 密度校正矩阵（如果不优化density matrix时使用）
+            ui_params: 来自UI的当前参数，用作优化初值
             
         Returns:
             优化结果字典
         """
+        # 如果提供了UI参数，使用它们作为初值
+        if ui_params:
+            print(f"使用UI参数作为初值: {ui_params}")
+            self._update_initial_params_from_ui(ui_params)
+            print(f"更新后的初始参数: {self.initial_params}")
+        else:
+            print("使用默认初始参数（未提供UI参数）")
+            
         print(f"开始优化，目标：最小化24个色块的RGB RMSE")
         print(f"优化方法: {method}")
         print(f"最大迭代: {max_iter}")
@@ -301,6 +455,12 @@ class CCMOptimizer:
         Returns:
             评估结果字典
         """
+        # 确定实际使用的correction_matrix
+        actual_correction_matrix = correction_matrix
+        if 'density_matrix' in params_dict and params_dict['density_matrix'] is not None:
+            # 如果参数中包含优化的density_matrix，优先使用它
+            actual_correction_matrix = params_dict['density_matrix']
+        
         # 运行管线
         output_patches = self.pipeline.simulate_full_pipeline(
             input_patches,
@@ -309,7 +469,7 @@ class CCMOptimizer:
             dmax=params_dict['dmax'],
             r_gain=params_dict['r_gain'],
             b_gain=params_dict['b_gain'],
-            correction_matrix=correction_matrix,
+            correction_matrix=actual_correction_matrix,
         )
         
         # 计算每个色块的误差
@@ -366,26 +526,35 @@ class CCMOptimizer:
 
     # ===== CMA-ES 实现 =====
     def _build_bounds_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """生成 (lb, ub, span) 数组，按参数展平顺序对应: rx, ry, gx, gy, bx, by, gamma, dmax, r_gain, b_gain"""
-        prim_bounds = self.bounds['primaries_xy']  # list of 6 tuples
-        lb_list = [
-            prim_bounds[0][0], prim_bounds[1][0],  # rx, ry
-            prim_bounds[2][0], prim_bounds[3][0],  # gx, gy
-            prim_bounds[4][0], prim_bounds[5][0],  # bx, by
-            self.bounds['gamma'][0],
-            self.bounds['dmax'][0],
-            self.bounds['r_gain'][0],
-            self.bounds['b_gain'][0],
-        ]
-        ub_list = [
-            prim_bounds[0][1], prim_bounds[1][1],  # rx, ry
-            prim_bounds[2][1], prim_bounds[3][1],  # gx, gy
-            prim_bounds[4][1], prim_bounds[5][1],  # bx, by
-            self.bounds['gamma'][1],
-            self.bounds['dmax'][1],
-            self.bounds['r_gain'][1],
-            self.bounds['b_gain'][1],
-        ]
+        """生成 (lb, ub, span) 数组，按动态参数映射顺序"""
+        lb_list = []
+        ub_list = []
+        
+        # 按照 _build_parameter_mapping 中的顺序构建边界
+        # 基础参数：gamma, dmax, r_gain, b_gain
+        lb_list.append(self.bounds['gamma'][0])
+        ub_list.append(self.bounds['gamma'][1])
+        lb_list.append(self.bounds['dmax'][0])
+        ub_list.append(self.bounds['dmax'][1])
+        lb_list.append(self.bounds['r_gain'][0])
+        ub_list.append(self.bounds['r_gain'][1])
+        lb_list.append(self.bounds['b_gain'][0])
+        ub_list.append(self.bounds['b_gain'][1])
+        
+        # primaries_xy（如果启用）
+        if 'primaries_xy' in self.bounds:
+            prim_bounds = self.bounds['primaries_xy']
+            for bound in prim_bounds:
+                lb_list.append(bound[0])
+                ub_list.append(bound[1])
+        
+        # density_matrix（如果启用）
+        if 'density_matrix' in self.bounds:
+            matrix_bounds = self.bounds['density_matrix']
+            for bound in matrix_bounds:
+                lb_list.append(bound[0])
+                ub_list.append(bound[1])
+        
         lb = np.array(lb_list, dtype=float)
         ub = np.array(ub_list, dtype=float)
         span = np.maximum(ub - lb, 1e-6)
@@ -393,7 +562,7 @@ class CCMOptimizer:
 
     def _optimize_cma(self,
                       input_patches: Dict[str, Tuple[float, float, float]],
-                      max_iter: int = 300,
+                      max_iter: int = 1000,
                       tolerance: float = 1e-8,
                       correction_matrix: Optional[np.ndarray] = None) -> Dict:
         try:

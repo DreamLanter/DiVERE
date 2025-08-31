@@ -49,6 +49,8 @@ def run(
     optimizer_max_iter: int = 300,
     optimizer_tolerance: float = 1e-8,
     reference_file: str = "colorchecker_acescg_rgb_values.json",
+    sharpening_config: Optional[Any] = None,  # SpectralSharpeningConfig
+    ui_params: Optional[Dict] = None,  # 来自UI的当前参数
 ) -> Dict[str, Any]:
     """
     执行光谱锐化优化，返回优化结果（不改动核心算法）。
@@ -62,6 +64,8 @@ def run(
         optimizer_max_iter: CMA-ES 最大迭代数。
         optimizer_tolerance: 收敛容差。
         reference_file: 参考色卡 RGB 文件名。
+        sharpening_config: 光谱锐化配置对象，控制优化参数。
+        ui_params: 来自UI的当前参数，用作优化初值。
 
     Returns:
         dict: {
@@ -86,14 +90,27 @@ def run(
     if not input_patches:
         raise RuntimeError("无法提取色卡数据")
 
-    optimizer = CCMOptimizer(reference_file=reference_file)
+    # 使用配置对象（如果提供）
+    if sharpening_config is not None:
+        optimizer = CCMOptimizer(
+            reference_file=sharpening_config.reference_file,
+            sharpening_config=sharpening_config
+        )
+        max_iter = sharpening_config.max_iter
+        tolerance = sharpening_config.tolerance
+    else:
+        # 向后兼容：使用传统参数
+        optimizer = CCMOptimizer(reference_file=reference_file)
+        max_iter = optimizer_max_iter
+        tolerance = optimizer_tolerance
 
     cm = correction_matrix if use_correction_matrix else None
     result = optimizer.optimize(
         input_patches,
-        max_iter=int(optimizer_max_iter),
-        tolerance=float(optimizer_tolerance),
+        max_iter=int(max_iter),
+        tolerance=float(tolerance),
         correction_matrix=cm,
+        ui_params=ui_params,
     )
 
     # 附加评估

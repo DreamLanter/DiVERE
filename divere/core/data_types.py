@@ -919,3 +919,26 @@ class Curve:
             return result
         else:
             return image
+
+
+@dataclass
+class SpectralSharpeningConfig:
+    """光谱锐化优化配置"""
+    # 优化控制开关
+    optimize_idt_transformation: bool = True    # IDT color transformation是否参与优化
+    optimize_density_matrix: bool = False       # density matrix是否参与优化
+    
+    # 优化器参数
+    max_iter: int = 3000
+    tolerance: float = 1e-8
+    reference_file: str = "colorchecker_acescg_rgb_values.json"
+    
+    def copy(self) -> "SpectralSharpeningConfig":
+        """返回深拷贝"""
+        return SpectralSharpeningConfig(
+            optimize_idt_transformation=self.optimize_idt_transformation,
+            optimize_density_matrix=self.optimize_density_matrix,
+            max_iter=self.max_iter,
+            tolerance=self.tolerance,
+            reference_file=self.reference_file
+        )

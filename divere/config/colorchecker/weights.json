@@ -2,7 +2,7 @@
     "description": "ColorChecker色块权重配置",
     "version": "1.0",
     "weights": {
-        "grayscale_weight": 10.0,
+        "grayscale_weight": 100.0,
         "skin_weight": 2.0,
         "primaries_weight": 1.0,
         "color_weight": 1.0

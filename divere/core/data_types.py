@@ -521,6 +521,9 @@ class ImageData:
     file_path: str = ""
     is_proxy: bool = False
     proxy_scale: float = 1.0
+    # 单色源图像标记
+    original_channels: int = 3
+    is_monochrome_source: bool = False
     
     def __post_init__(self):
         if self.array is not None:
@@ -542,7 +545,9 @@ class ImageData:
             metadata=self.metadata.copy(),
             file_path=self.file_path,
             is_proxy=self.is_proxy,
-            proxy_scale=self.proxy_scale
+            proxy_scale=self.proxy_scale,
+            original_channels=self.original_channels,
+            is_monochrome_source=self.is_monochrome_source
         )
 
     def copy_with_new_array(self, new_array: np.ndarray):
@@ -554,7 +559,9 @@ class ImageData:
             metadata=self.metadata.copy(),
             file_path=self.file_path,
             is_proxy=self.is_proxy,
-            proxy_scale=self.proxy_scale
+            proxy_scale=self.proxy_scale,
+            original_channels=self.original_channels,
+            is_monochrome_source=self.is_monochrome_source
         )
 
 
@@ -932,13 +939,21 @@ class SpectralSharpeningConfig:
     max_iter: int = 3000
     tolerance: float = 1e-8
     reference_file: str = "colorchecker_acescg_rgb_values.json"
-    
-    def copy(self) -> "SpectralSharpeningConfig":
-        """返回深拷贝"""
-        return SpectralSharpeningConfig(
-            optimize_idt_transformation=self.optimize_idt_transformation,
-            optimize_density_matrix=self.optimize_density_matrix,
-            max_iter=self.max_iter,
-            tolerance=self.tolerance,
-            reference_file=self.reference_file
-        )
+
+# 胶片类型与colorchecker参考文件的映射
+FILM_TYPE_COLORCHECKER_MAPPING = {
+    "color_negative_c41": "kodak_portra_400_rgb_values.json",
+    "color_negative_ecn2": "kodak_vision3_250d_rgb_values.json", 
+    "color_reversal": "colorchecker_acescg_rgb_values.json",  # 反转片使用通用参考
+    "b&w_negative": "colorchecker_acescg_rgb_values.json",    # 黑白使用通用参考
+    "b&w_reversal": "colorchecker_acescg_rgb_values.json",    # 黑白使用通用参考
+    "digital": "colorchecker_acescg_rgb_values.json"          # 数字使用通用参考
+}
+
+
+def get_colorchecker_reference_for_film_type(film_type: str) -> str:
+    """根据胶片类型获取对应的colorchecker参考文件"""
+    return FILM_TYPE_COLORCHECKER_MAPPING.get(
+        film_type, 
+        "colorchecker_acescg_rgb_values.json"
+    )

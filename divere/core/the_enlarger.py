@@ -5,7 +5,7 @@
 """
 
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Union
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import binary_dilation
 import json
@@ -73,7 +73,7 @@ class TheEnlarger:
     def apply_full_pipeline(self, image: ImageData, params: ColorGradingParams, 
                            include_curve: bool = True,
                            for_export: bool = False,
-                           chunked: bool | None = None,
+                           chunked: Optional[bool] = None,
                            convert_to_monochrome_in_idt: bool = False,
                            monochrome_converter: Optional[callable] = None) -> ImageData:
         """

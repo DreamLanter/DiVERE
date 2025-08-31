@@ -133,13 +133,19 @@ class ImageManager:
                         image = np.delete(image, alpha_index, axis=2)
                         print(f"[ImageManager] 检测到Alpha通道(index={alpha_index})，已在导入时移除。当前shape={image.shape}")
 
+                # 检测单/双通道图像并标记
+                original_channels = image.shape[2] if image.ndim == 3 else 1
+                is_monochrome_source = original_channels <= 2
+                
                 # 创建ImageData并返回
                 image_data = ImageData(
                     array=image,
                     color_space=None,
                     file_path=str(file_path),
                     is_proxy=False,
-                    proxy_scale=1.0
+                    proxy_scale=1.0,
+                    original_channels=original_channels,
+                    is_monochrome_source=is_monochrome_source
                 )
                 return image_data
             except Exception as e:
@@ -249,6 +255,13 @@ class ImageManager:
             except Exception as e2:
                 raise RuntimeError(f"无法加载图像文件: {e}, {e2}")
         
+        # 检测单/双通道图像并标记
+        if len(image.shape) == 3:
+            original_channels = image.shape[2]
+        else:
+            original_channels = 1
+        is_monochrome_source = original_channels <= 2
+        
         # 如果存在Alpha通道，暂不丢弃，但在后续色彩空间转换时会自动忽略
         # 创建ImageData对象（默认不设具体空间，由上层默认预设或用户选择决定）
         image_data = ImageData(
@@ -256,7 +269,9 @@ class ImageManager:
             color_space=None,
             file_path=str(file_path),
             is_proxy=False,
-            proxy_scale=1.0
+            proxy_scale=1.0,
+            original_channels=original_channels,
+            is_monochrome_source=is_monochrome_source
         )
         
         return image_data
@@ -267,8 +282,27 @@ class ImageManager:
         # if image.is_proxy:
         #     return image
         
+        # 处理单/双通道图像转换为3通道用于pipeline兼容
+        source_array = image.array.copy()
+        if image.is_monochrome_source and image.array is not None:
+            if image.array.ndim == 2:
+                # 2D灰度图像 → 3通道
+                source_array = np.stack([image.array, image.array, image.array], axis=2)
+                print(f"[ImageManager] 单通道图像转换为3通道代理: {image.array.shape} → {source_array.shape}")
+            elif image.array.ndim == 3 and image.original_channels == 1:
+                # 3D单通道 → 3通道（复制）
+                gray_channel = image.array[:, :, 0]
+                source_array = np.stack([gray_channel, gray_channel, gray_channel], axis=2)
+                print(f"[ImageManager] 单通道图像转换为3通道代理: {image.array.shape} → {source_array.shape}")
+            elif image.array.ndim == 3 and image.original_channels == 2:
+                # 双通道（L+IR）→ 4通道（L,L,L,IR）
+                gray_channel = image.array[:, :, 0]
+                ir_channel = image.array[:, :, 1]
+                source_array = np.stack([gray_channel, gray_channel, gray_channel, ir_channel], axis=2)
+                print(f"[ImageManager] 双通道图像转换为4通道代理: {image.array.shape} → {source_array.shape}")
+        
         # 计算缩放比例
-        h, w = image.height, image.width
+        h, w = source_array.shape[:2]
         max_w, max_h = max_size
         
         scale_w = max_w / w
@@ -276,19 +310,19 @@ class ImageManager:
         scale = min(scale_w, scale_h, 1.0)  # 不放大图像
         
         if scale >= 1.0:
-            # 图像已经足够小，直接返回
-            return image
-        
-        # 计算新的尺寸
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        
-        # 使用OpenCV进行高质量缩放（改为双三次插值，质量与速度均衡）
-        proxy_array = cv2.resize(
-            image.array, 
-            (new_w, new_h), 
-            interpolation=cv2.INTER_CUBIC
-        )
+            # 图像已经足够小，但仍需要通道转换
+            proxy_array = source_array
+        else:
+            # 计算新的尺寸
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            
+            # 使用OpenCV进行高质量缩放（改为双三次插值，质量与速度均衡）
+            proxy_array = cv2.resize(
+                source_array, 
+                (new_w, new_h), 
+                interpolation=cv2.INTER_CUBIC
+            )
         
         # 创建代理ImageData
         proxy_data = ImageData(
@@ -298,7 +332,9 @@ class ImageManager:
             metadata=image.metadata,
             file_path=image.file_path,
             is_proxy=True,
-            proxy_scale=scale
+            proxy_scale=scale,
+            original_channels=image.original_channels,
+            is_monochrome_source=image.is_monochrome_source
         )
         
         return proxy_data
@@ -333,12 +369,27 @@ class ImageManager:
         - 统一归一化通道形状（灰度 squeeze，JPEG 限制为3通道）
         - 检查 imwrite 返回值，失败抛出异常
         - 根据 bit_depth 决定 8/16 位量化
+        - 单色源图像自动还原为单通道并使用灰度ICC
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 确保图像数据在[0,1]范围内
         image_array = np.clip(image_data.array, 0, 1)
+        
+        # 处理单色源图像：还原为单通道
+        force_grayscale_icc = False
+        if image_data.is_monochrome_source:
+            print(f"[ImageManager] 单色源图像导出：还原为单通道，原始{image_data.original_channels}通道")
+            # 取第一个通道作为灰度数据
+            if image_array.ndim == 3 and image_array.shape[2] >= 1:
+                image_array = image_array[:, :, 0]  # 取第一通道
+                force_grayscale_icc = True
+                print(f"[ImageManager] 从3通道还原为单通道: {image_array.shape}")
+        
+        # 覆盖color space为灰度
+        if force_grayscale_icc:
+            export_color_space = "Gray Gamma 2.2"
         
         # 根据位深度和文件格式选择保存类型
         ext = output_path.suffix.lower()

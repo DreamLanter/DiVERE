@@ -178,9 +178,9 @@ class DiVEREPipelineSimulator:
             # 步骤3: DiVERE密度调整公式
             adjusted_density = pivot + (original_density - pivot) * gamma - dmax
             
-            # 步骤4: 应用密度校正矩阵
+            # 步骤4: 应用密度校正矩阵（与DiVERE主管线一致：使用pivot基准点变换）
             if correction_matrix is not None:
-                adjusted_density = correction_matrix @ adjusted_density
+                adjusted_density = pivot + correction_matrix @ (adjusted_density - pivot)
                     
             # 步骤5: 添加RGB增益 (密度空间中的加法)
             adjusted_density[0] += r_gain  # R通道

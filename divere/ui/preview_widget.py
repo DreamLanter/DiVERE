@@ -618,14 +618,141 @@ class PreviewWidget(QWidget):
 
 
     def _ensure_cc_reference_colors(self):
-        """生成24个参考颜色（QColor，按A1..D6），以 Display P3 显示。"""
+        """生成24个参考颜色（QColor，按A1..D6），从当前选择的色卡文件读取"""
         try:
-            from divere.core.color_science import colorchecker_display_p3_qcolors
-            self.cc_ref_qcolors = colorchecker_display_p3_qcolors()
+            # 获取当前选择的色卡文件
+            from divere.ui.main_window import MainWindow
+            main_window = self.window()
+            if hasattr(main_window, 'parameter_panel'):
+                colorchecker_file = main_window.parameter_panel.get_selected_colorchecker_file()
+            else:
+                colorchecker_file = "colorchecker_acescg_rgb_values.json"
+            
+            # 读取色卡JSON文件
+            self.cc_ref_qcolors = self._load_colorchecker_colors(colorchecker_file)
+            
         except Exception as e:
             print(f"生成参考颜色失败: {e}")
-            self.cc_ref_qcolors = None
-    
+            # 降级到默认色卡
+            try:
+                from divere.core.color_science import colorchecker_display_p3_qcolors
+                self.cc_ref_qcolors = colorchecker_display_p3_qcolors()
+            except Exception:
+                self.cc_ref_qcolors = None
+
+    def _load_colorchecker_colors(self, filename: str):
+        """从色卡JSON文件加载颜色值，并进行正确的色彩空间转换"""
+        try:
+            import json
+            from pathlib import Path
+            
+            # 构建文件路径
+            colorchecker_dir = Path(__file__).parent.parent / "config" / "colorchecker"
+            file_path = colorchecker_dir / filename
+            
+            if not file_path.exists():
+                raise FileNotFoundError(f"色卡文件不存在: {file_path}")
+            
+            # 读取JSON文件
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 提取24个色块的RGB值（按A1..D6顺序）
+            patch_order = [
+                'A1', 'A2', 'A3', 'A4', 'A5', 'A6',
+                'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 
+                'C1', 'C2', 'C3', 'C4', 'C5', 'C6',
+                'D1', 'D2', 'D3', 'D4', 'D5', 'D6'
+            ]
+            
+            rgb_values = []
+            for patch_id in patch_order:
+                if patch_id in data.get('data', {}):
+                    rgb_values.append(data['data'][patch_id])
+                else:
+                    # 如果某个色块缺失，使用默认颜色
+                    rgb_values.append([0.5, 0.5, 0.5])
+            
+            # 使用现有的色彩空间管理器进行正确的转换
+            return self._convert_colorchecker_to_display_colors(rgb_values, data.get('color_space', ''))
+            
+        except Exception as e:
+            print(f"加载色卡颜色失败: {e}")
+            return None
+
+    def _convert_colorchecker_to_display_colors(self, rgb_values: list, source_color_space: str) -> list:
+        """使用现有的色彩空间管理器转换色卡颜色到显示空间"""
+        try:
+            from divere.core.data_types import ImageData
+            
+            # 将RGB值转换为numpy数组 (24, 3)
+            rgb_array = np.array(rgb_values, dtype=np.float32)
+            
+            # 创建虚拟的ImageData对象，模拟24x1像素的图像
+            # 重塑为 (24, 1, 3) 以便处理
+            rgb_array_reshaped = rgb_array.reshape(24, 1, 3)
+            
+            # 根据源色彩空间确定输入色彩空间
+            if 'ACEScg' in source_color_space or '胶片敏感度响应空间' in source_color_space:
+                input_space = "ACEScg"
+            else:
+                input_space = "ACEScg"  # 默认假设为ACEScg
+            
+            # 创建虚拟ImageData对象
+            virtual_image = ImageData(
+                array=rgb_array_reshaped,
+                width=1,
+                height=24,
+                channels=3,
+                dtype=np.float32,
+                color_space=input_space,
+                metadata={},
+                file_path=""
+            )
+            
+            # 使用现有的色彩空间管理器转换到DisplayP3
+            from divere.ui.main_window import MainWindow
+            main_window = self.window()
+            if hasattr(main_window, 'context') and hasattr(main_window.context, 'color_space_manager'):
+                color_space_manager = main_window.context.color_space_manager
+                converted_image = color_space_manager.convert_to_display_space(virtual_image, "DisplayP3")
+                
+                # 提取转换后的RGB值并转换为QColor
+                converted_rgb = converted_image.array.reshape(24, 3)
+                colors = []
+                for rgb in converted_rgb:
+                    r = int(np.clip(rgb[0], 0, 1) * 255 + 0.5)
+                    g = int(np.clip(rgb[1], 0, 1) * 255 + 0.5)
+                    b = int(np.clip(rgb[2], 0, 1) * 255 + 0.5)
+                    colors.append(QColor(r, g, b))
+                
+                return colors
+            else:
+                # 如果无法获取色彩空间管理器，降级到简单处理
+                return self._simple_rgb_to_qcolor(rgb_values)
+                
+        except Exception as e:
+            print(f"色彩空间转换失败: {e}")
+            # 降级到简单处理
+            return self._simple_rgb_to_qcolor(rgb_values)
+
+    def _simple_rgb_to_qcolor(self, rgb_values: list) -> list:
+        """简单的RGB到QColor转换（降级方案）"""
+        colors = []
+        for rgb in rgb_values:
+            r = int(np.clip(rgb[0], 0, 1) * 255 + 0.5)
+            g = int(np.clip(rgb[1], 0, 1) * 255 + 0.5)
+            b = int(np.clip(rgb[2], 0, 1) * 255 + 0.5)
+            colors.append(QColor(r, g, b))
+        return colors
+
+    def on_colorchecker_changed(self, filename: str):
+        """当色卡类型改变时，重新生成参考色块"""
+        if self.cc_enabled:
+            self._ensure_cc_reference_colors()
+            # 触发重绘以显示新的参考色块
+            self._update_display()
+
     def _setup_mouse_controls(self):
         """设置鼠标控制"""
         # 将鼠标事件绑定到image_label而不是scroll_area

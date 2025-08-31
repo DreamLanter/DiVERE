@@ -175,6 +175,8 @@ class MainWindow(QMainWindow):
         self.parameter_panel.cc_flip_vertical_requested.connect(self.preview_widget.flip_colorchecker_vertical)
         self.parameter_panel.cc_rotate_left_requested.connect(self.preview_widget.rotate_colorchecker_left)
         self.parameter_panel.cc_rotate_right_requested.connect(self.preview_widget.rotate_colorchecker_right)
+        # 色卡类型变化信号连接
+        self.parameter_panel.colorchecker_changed.connect(self.preview_widget.on_colorchecker_changed)
         # 屏幕反光补偿交互信号连接
         self.parameter_panel.glare_compensation_interaction_started.connect(self._on_glare_compensation_interaction_started)
         self.parameter_panel.glare_compensation_interaction_ended.connect(self._on_glare_compensation_interaction_ended)

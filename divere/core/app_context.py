@@ -597,6 +597,19 @@ class ApplicationContext(QObject):
         try:
             self.status_message_changed.emit(f"正在加载图像: {file_path}...")
             self._current_image = self.image_manager.load_image(file_path)
+            
+            # 检测单/双通道图像，自动切换黑白模式
+            if self._current_image.is_monochrome_source:
+                # 根据现有胶片类型智能选择黑白类型
+                if self._current_film_type == "color_reversal":
+                    target_film_type = "b&w_reversal"
+                else:
+                    target_film_type = "b&w_negative"  # 默认选择
+                
+                print(f"[ApplicationContext] 检测到{self._current_image.original_channels}通道图像，自动切换为{target_film_type}")
+                self.set_current_film_type(target_film_type, apply_defaults=True)
+                self.status_message_changed.emit(f"检测到单色图像，已自动切换为黑白模式")
+            
             # 重置朝向
             self._current_orientation = 0
             # 重置裁剪
@@ -953,6 +966,11 @@ class ApplicationContext(QObject):
         # Emit signal if film type changed
         if old_film_type != film_type:
             self.film_type_changed.emit(film_type)
+            
+            # 对于黑白类型，强制延迟触发UI状态更新以确保正确禁用控件
+            if self.is_monochrome_type():
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._ensure_ui_state_sync_for_monochrome())
         
         # 根据参数决定是否应用胶片类型的默认配置
         if apply_defaults:
@@ -1382,6 +1400,15 @@ class ApplicationContext(QObject):
                 self._autosave_timer.start()
         except Exception:
             pass
+    
+    def _ensure_ui_state_sync_for_monochrome(self):
+        """确保黑白模式下UI状态正确同步（延迟调用以避免时序问题）"""
+        try:
+            # 再次发射film_type_changed信号，确保UI层收到并处理
+            self.film_type_changed.emit(self._current_film_type)
+            print(f"[ApplicationContext] 强制同步黑白模式UI状态: {self._current_film_type}")
+        except Exception as e:
+            print(f"[ApplicationContext] UI状态同步失败: {e}")
 
     def rotate(self, direction: int):
         """direction: 1=左旋+90°, -1=右旋-90°

@@ -32,6 +32,7 @@ class ParameterPanel(QWidget):
     auto_color_iterative_requested = Signal()
     input_colorspace_changed = Signal(str)
     film_type_changed = Signal(str)
+    colorchecker_changed = Signal(str)  # 色卡类型变化信号，参数为文件名
 
     # Signals for complex actions requiring coordination
     ccm_optimize_requested = Signal()
@@ -732,6 +733,32 @@ class ParameterPanel(QWidget):
         self.glare_compensation_slider.setEnabled(enabled)
         self.glare_compensation_spinbox.setEnabled(enabled)
     
+    def _update_colorchecker_for_film_type(self, film_type: str):
+        """根据胶片类型更新colorchecker参考文件选择"""
+        from divere.core.data_types import FILM_TYPE_COLORCHECKER_MAPPING
+        
+        # 获取对应的参考文件
+        reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
+            film_type, 
+            "colorchecker_acescg_rgb_values.json"
+        )
+        
+        # 更新选中的参考文件
+        self.selected_colorchecker_file = reference_file
+        
+        # 如果有colorchecker下拉菜单，同步选择
+        if hasattr(self, 'colorchecker_combo'):
+            try:
+                # 查找对应的菜单项并选择
+                for i in range(self.colorchecker_combo.count()):
+                    if self.colorchecker_combo.itemData(i) == reference_file:
+                        self._is_updating_ui = True
+                        self.colorchecker_combo.setCurrentIndex(i)
+                        self._is_updating_ui = False
+                        break
+            except Exception as e:
+                print(f"警告：无法同步colorchecker选择: {e}")
+    
     def _set_disabled_tooltips(self, tooltip: str):
         """为禁用的控件设置工具提示"""
         # 为主要的禁用控件设置工具提示
@@ -861,6 +888,9 @@ class ParameterPanel(QWidget):
             
             # 应用UI状态配置
             self._apply_ui_state_for_film_type(film_type_value)
+            
+            # 更新colorchecker参考文件选择（如果存在相关UI组件）
+            self._update_colorchecker_for_film_type(film_type_value)
             
             # 发出信号
             self.film_type_changed.emit(film_type_value)
@@ -1035,15 +1065,23 @@ class ParameterPanel(QWidget):
         filename = self.colorchecker_combo.currentData()
         if filename:
             self.selected_colorchecker_file = filename
+            self.colorchecker_changed.emit(filename) # 发出色卡类型变化信号
     
     def get_spectral_sharpening_config(self):
-        """获取当前的光谱锐化配置"""
-        from divere.core.data_types import SpectralSharpeningConfig
+        """获取当前的光谱锐化配置（根据胶片类型自动选择参考文件）"""
+        from divere.core.data_types import SpectralSharpeningConfig, FILM_TYPE_COLORCHECKER_MAPPING
+        
+        # 根据当前胶片类型自动选择对应的colorchecker参考文件
+        film_type = self.get_current_film_type()
+        reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
+            film_type, 
+            "colorchecker_acescg_rgb_values.json"  # 默认值
+        )
         
         return SpectralSharpeningConfig(
             optimize_idt_transformation=self.optimize_idt_checkbox.isChecked(),
             optimize_density_matrix=self.optimize_density_matrix_checkbox.isChecked(),
-            reference_file=self.selected_colorchecker_file if hasattr(self, 'selected_colorchecker_file') else "colorchecker_acescg_rgb_values.json"
+            reference_file=reference_file
         )
 
     def _on_save_matrix_clicked(self):

@@ -63,8 +63,34 @@ class FilmPipelineProcessor:
     def get_density_matrix_array(self, key: str) -> Optional[np.ndarray]:
         """获取校正矩阵的numpy数组"""
         matrix_data = self.get_matrix_data(key)
-        if matrix_data and matrix_data.get("matrix_space") == "density":
-            return np.array(matrix_data["matrix"])
+        print(f"Debug: get_density_matrix_array({key}) - data found: {matrix_data is not None}")
+        if matrix_data:
+            print(f"Debug: matrix_data keys: {list(matrix_data.keys())}")
+            print(f"Debug: matrix_space: {matrix_data.get('matrix_space')}")
+            
+            # 检查matrix_space（兼容没有该字段的旧格式）
+            matrix_space = matrix_data.get("matrix_space", "density")  # 默认为density
+            if matrix_space == "density":
+                try:
+                    matrix_array = matrix_data.get("matrix")
+                    if matrix_array is not None:
+                        result = np.array(matrix_array, dtype=np.float64)
+                        print(f"Debug: converted matrix shape: {result.shape}, values: {result.tolist()}")
+                        # 验证矩阵有效性
+                        if result.shape != (3, 3):
+                            print(f"Error: invalid matrix shape {result.shape}, expected (3,3)")
+                            return None
+                        if not np.isfinite(result).all():
+                            print(f"Warning: matrix contains invalid values, cleaning up")
+                            result = np.where(np.isfinite(result), result, 0.0)
+                        return result
+                    else:
+                        print(f"Error: no 'matrix' field in matrix_data for {key}")
+                except Exception as e:
+                    print(f"Error: failed to convert matrix for {key}: {e}")
+                    return None
+            else:
+                print(f"Debug: skipping matrix {key} - wrong matrix_space: {matrix_space}")
         return None
 
     def reload_matrices(self):

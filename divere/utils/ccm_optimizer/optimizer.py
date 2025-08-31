@@ -118,11 +118,11 @@ class CCMOptimizer:
             # 8个参数：3x3矩阵除了左上角(0,0)固定为1.0的其余8个元素
             self.bounds['density_matrix'] = [
                 # 跳过(0,0)，从(0,1)开始：第一行剩余2个
-                (-0.2, 0.2), (-0.2, 0.2),  
+                (-0.5, 0.5), (-0.5, 0.5),
                 # 第二行3个
-                (-0.2, 0.2), (0.5, 2.0), (-0.2, 0.2),  
+                (-0.5, 0.5), (0.5, 2.0), (-0.5, 0.5),
                 # 第三行3个
-                (-0.2, 0.2), (-0.2, 0.2), (0.5, 2.0)
+                (-0.5, 0.5), (-0.5, 0.5), (0.5, 2.0)
             ]
             # 初始为单位矩阵的8个可变元素（跳过左上角）
             self.initial_params['density_matrix'] = np.array([
@@ -231,16 +231,23 @@ class CCMOptimizer:
         通用化：对 cfg['patch_categories'] 中的每个类别 cat，优先查找
         cfg['weights'][f"{cat}_weight"] 作为该类别权重（缺省=1）。
         支持自定义类别，例如 'primaries' + 'primaries_weight'。
+        支持individual_weights覆盖特定色块权重。
         """
         mapping: Dict[str, float] = {}
         try:
             w = cfg.get("weights", {}) or {}
             cats = cfg.get("patch_categories", {}) or {}
+            # 首先根据类别设置权重
             for cat, ids in cats.items():
                 weight_key = f"{cat}_weight"
                 wv = float(w.get(weight_key, 1.0))
                 for pid in ids or []:
                     mapping[str(pid)] = wv
+            
+            # 然后应用个别权重覆盖（优先级更高）
+            individual_weights = cfg.get("individual_weights", {}) or {}
+            for patch_id, weight in individual_weights.items():
+                mapping[str(patch_id)] = float(weight)
         except Exception:
             pass
         return mapping

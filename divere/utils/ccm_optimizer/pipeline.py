@@ -29,6 +29,7 @@ if str(project_root) not in sys.path:
 try:
     from divere.core.color_space import ColorSpaceManager
     from divere.core.data_types import ImageData, ColorGradingParams
+    from divere.core.math_ops import FilmMathOps
     import colour
 except ImportError as e:
     print(f"Warning: 无法导入divere模块: {e}")
@@ -40,6 +41,8 @@ class DiVEREPipelineSimulator:
     def __init__(self, verbose=False):
         """初始化管线模拟器"""
         self.verbose = verbose  # 控制详细输出
+        # 初始化真实的DiVERE数学运算引擎
+        self.math_ops = FilmMathOps()
 
     @staticmethod
     def primaries_to_xyz_matrix(primaries, white_point):
@@ -158,47 +161,44 @@ class DiVEREPipelineSimulator:
             acescg_rgb = acescg_rgb * gain_vector
             working_space_patches[patch_id] = tuple(acescg_rgb.tolist())
         
-        # ===== 步骤2-6: 核心密度处理 =====
-        final_rgb_patches = {}
-        pivot = 0.9  # DiVERE固定基准点
+        # ===== 步骤2-6: 使用真实的DiVERE核心处理 =====
         
-        for patch_id, (r, g, b) in working_space_patches.items():
-            # 步骤2: 计算原始密度 (使用软约束避免log(0)和负数)
-            # 防止RGB值为负数，确保log10操作的安全性
-            r_safe = max(r, 1e-10)  # 确保R值 >= 1e-10
-            g_safe = max(g, 1e-10)  # 确保G值 >= 1e-10
-            b_safe = max(b, 1e-10)  # 确保B值 >= 1e-10
-            
-            original_density = np.array([
-                -np.log10(r_safe),
-                -np.log10(g_safe),
-                -np.log10(b_safe)
-            ])
-            
-            # 步骤3: DiVERE密度调整公式
-            adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-            
-            # 步骤4: 应用密度校正矩阵（与DiVERE主管线一致：使用pivot基准点变换）
-            if correction_matrix is not None:
-                adjusted_density = pivot + correction_matrix @ (adjusted_density - pivot)
-                    
-            # 步骤5: 添加RGB增益 (密度空间中的加法)
-            adjusted_density[0] += r_gain  # R通道
-            adjusted_density[2] += b_gain  # B通道
-            # G通道增益固定为0 (adjusted_density[1] += 0.0)
-            
-            # 步骤6: 转换回RGB
-            final_rgb = 10 ** adjusted_density
-            
-            # 注意：这里不应该除以65535，因为：
-            # 1. 输入已经是0-1范围的RGB值
-            # 2. 输出也应该保持在0-1范围
-            # 3. 65535是16位整数的最大值，不适用于浮点RGB
-            
-            final_rgb_patches[patch_id] = tuple(final_rgb.tolist())
+        # 将色块数据转换为图像数组格式以使用DiVERE处理函数
+        patch_array = np.array([list(working_space_patches.values())]).reshape(1, len(working_space_patches), 3)
+        
+        # 构造临时参数对象用于DiVERE处理
+        from divere.core.data_types import ColorGradingParams
+        temp_params = ColorGradingParams()
+        temp_params.density_gamma = gamma
+        temp_params.density_dmax = dmax
+        temp_params.rgb_gains = (r_gain, 0.0, b_gain)  # G通道固定为0
+        temp_params.enable_density_inversion = True
+        temp_params.enable_density_matrix = (correction_matrix is not None)
+        temp_params.enable_rgb_gains = True
+        temp_params.enable_density_curve = False  # 优化中不包含曲线
+        
+        # 如果有校正矩阵，直接设置矩阵数据（不通过名称）
+        if correction_matrix is not None:
+            temp_params.density_matrix = correction_matrix  # 直接设置numpy数组
+        
+        # 使用真实的DiVERE数学管线处理
+        processed_array = self.math_ops.apply_full_math_pipeline(
+            patch_array, 
+            temp_params,
+            include_curve=False,
+            enable_density_inversion=True,
+            use_optimization=False
+        )
+        
+        # 将处理结果转换回字典格式
+        final_rgb_patches = {}
+        patch_ids = list(working_space_patches.keys())
+        for i, patch_id in enumerate(patch_ids):
+            rgb_values = processed_array[0, i, :]
+            final_rgb_patches[patch_id] = tuple(rgb_values.tolist())
         
         if self.verbose:
-            print(f"✓ 一体化管线处理完成，处理了 {len(final_rgb_patches)} 个色块")
+            print(f"✓ 使用真实DiVERE管线处理完成，处理了 {len(final_rgb_patches)} 个色块")
         return final_rgb_patches
 
 if __name__ == "__main__":

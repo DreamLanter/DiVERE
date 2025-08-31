@@ -856,23 +856,23 @@ class MainWindow(QMainWindow):
             'density_matrix': current_params.density_matrix if current_params.density_matrix is not None else np.eye(3)
         }
         
-        # 如果启用IDT优化，获取当前色彩空间的primaries
-        if sharpening_config.optimize_idt_transformation:
-            cs_name = self.context.get_input_color_space()
-            cs_info = self.context.color_space_manager.get_color_space_info(cs_name)
-            if cs_info and 'primaries' in cs_info:
-                primaries = cs_info['primaries']
-                # 兼容两种primaries格式
-                if isinstance(primaries, dict):
-                    # 字典格式：{'R': [x, y], 'G': [x, y], 'B': [x, y]}
-                    ui_params['primaries_xy'] = np.array([
-                        [primaries['R'][0], primaries['R'][1]],
-                        [primaries['G'][0], primaries['G'][1]],
-                        [primaries['B'][0], primaries['B'][1]]
-                    ])
-                else:
-                    # numpy数组格式：shape (3, 2)
-                    ui_params['primaries_xy'] = np.array(primaries)
+        # 始终获取当前色彩空间的primaries（无论是否优化IDT）
+        # 这样确保优化器使用正确的初值，而不是硬编码的sRGB
+        cs_name = self.context.get_input_color_space()
+        cs_info = self.context.color_space_manager.get_color_space_info(cs_name)
+        if cs_info and 'primaries' in cs_info:
+            primaries = cs_info['primaries']
+            # 兼容两种primaries格式
+            if isinstance(primaries, dict):
+                # 字典格式：{'R': [x, y], 'G': [x, y], 'B': [x, y]}
+                ui_params['primaries_xy'] = np.array([
+                    [primaries['R'][0], primaries['R'][1]],
+                    [primaries['G'][0], primaries['G'][1]],
+                    [primaries['B'][0], primaries['B'][1]]
+                ])
+            else:
+                # numpy数组格式：shape (3, 2)
+                ui_params['primaries_xy'] = np.array(primaries)
 
         # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
         class _CCMWorker(QRunnable):
@@ -916,18 +916,33 @@ class MainWindow(QMainWindow):
                     return
                 res = worker.result or {}
                 params_dict = res.get('parameters', {})
-                primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
-                if primaries_xy is None or primaries_xy.shape != (3, 2):
-                    QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
-                    self.statusBar().showMessage("光谱锐化优化完成但结果无效")
-                    return
+                
+                # 只有启用IDT优化时才处理primaries结果
+                if sharpening_config.optimize_idt_transformation:
+                    primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
+                    if primaries_xy is None or primaries_xy.shape != (3, 2):
+                        QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
+                        self.statusBar().showMessage("光谱锐化优化完成但结果无效")
+                        return
 
-                # 注册并切换到自定义输入色彩空间
-                base_name = cs_name.replace("_custom", "").replace("_preset", "")
-                custom_name = f"{base_name}_custom"
-                self.context.color_space_manager.register_custom_colorspace(custom_name, primaries_xy, None, gamma=1.0)
-                # 使用专用入口以便重建代理
-                self.context.set_input_color_space(custom_name)
+                    # 注册并切换到自定义输入色彩空间
+                    base_name = cs_name.replace("_custom", "").replace("_preset", "")
+                    custom_name = f"{base_name}_custom"
+                    self.context.color_space_manager.register_custom_colorspace(custom_name, primaries_xy, None, gamma=1.0)
+                    # 使用专用入口以便重建代理
+                    self.context.set_input_color_space(custom_name)
+                    
+                    # 更新UCS widget显示优化后的primaries
+                    from divere.core.color_space import xy_to_uv
+                    coords_uv = {}
+                    for i, key in enumerate(['R', 'G', 'B']):
+                        if i < len(primaries_xy):
+                            x, y = primaries_xy[i]
+                            u, v = xy_to_uv(x, y)
+                            coords_uv[key] = (u, v)
+                    
+                    if len(coords_uv) == 3:
+                        self.parameter_panel.ucs_widget.set_uv_coordinates(coords_uv)
 
                 # 应用其他参数更新
                 new_params = self.context.get_current_params().copy()

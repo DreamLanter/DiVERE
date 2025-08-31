@@ -2,10 +2,14 @@
     "description": "ColorChecker色块权重配置",
     "version": "1.0",
     "weights": {
-        "grayscale_weight": 100.0,
+        "grayscale_weight": 1.0,
         "skin_weight": 2.0,
         "primaries_weight": 1.0,
         "color_weight": 1.0
+    },
+    "individual_weights": {
+        "D2": 100.0,
+        "D5": 100.0
     },
     "patch_categories": {
         "grayscale": ["D1", "D2", "D3", "D4", "D5", "D6"],

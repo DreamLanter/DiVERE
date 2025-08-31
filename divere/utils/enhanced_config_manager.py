@@ -203,8 +203,8 @@ class EnhancedConfigManager:
         Returns:
             是否保存成功
         """
-        # 特殊处理：色彩空间保存到项目config目录，其他保存到用户目录
-        if config_type == "colorspace":
+        # 特殊处理：色彩空间和矩阵保存到项目config目录，其他保存到用户目录
+        if config_type in ["colorspace", "matrices"]:
             save_dir = self.app_config_dir / config_type
         else:
             save_dir = getattr(self, f"user_{config_type}_dir")

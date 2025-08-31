@@ -540,10 +540,17 @@ class ParameterPanel(QWidget):
             self.glare_compensation_spinbox.setValue(params.screen_glare_compensation * 100.0)
             
             matrix = params.density_matrix if params.density_matrix is not None else np.eye(3)
+            print(f"Debug: update_ui_from_params - matrix_name={params.density_matrix_name}, matrix shape={matrix.shape}")
+            print(f"Debug: matrix values: {matrix.tolist()}")
             for i in range(3):
                 for j in range(3):
-                    self.matrix_editor_widgets[i][j].setValue(matrix[i,j])
+                    value = float(matrix[i,j])
+                    if not np.isfinite(value):
+                        print(f"Warning: invalid matrix value at [{i},{j}]: {value}, using 0.0")
+                        value = 0.0
+                    self.matrix_editor_widgets[i][j].setValue(value)
             self._sync_combo_box(self.matrix_combo, params.density_matrix_name)
+            print(f"Debug: matrix UI update completed for {params.density_matrix_name}")
 
             curves = {'RGB': params.curve_points, 'R': params.curve_points_r, 'G': params.curve_points_g, 'B': params.curve_points_b}
             # 避免在拖动过程中反复重置内部曲线与选择状态：当曲线内容未变化时跳过写回
@@ -938,18 +945,28 @@ class ParameterPanel(QWidget):
     def _on_matrix_combo_changed(self, index: int):
         if self._is_updating_ui: return
         matrix_id = self.matrix_combo.itemData(index)
+        print(f"Debug: matrix combo changed to index={index}, matrix_id={matrix_id}")
         if matrix_id and matrix_id != "custom":
             matrix = self.context.the_enlarger.pipeline_processor.get_density_matrix_array(matrix_id)
+            print(f"Debug: loaded matrix: {matrix is not None}, shape={matrix.shape if matrix is not None else 'None'}")
             if matrix is not None:
                 self._is_updating_ui = True
                 try:
+                    print(f"Debug: updating matrix spinboxes with values: {matrix.tolist()}")
                     for i in range(3):
                         for j in range(3):
-                            self.matrix_editor_widgets[i][j].setValue(float(matrix[i, j]))
+                            value = float(matrix[i, j])
+                            if not np.isfinite(value):
+                                print(f"Warning: invalid matrix value at [{i},{j}]: {value}, using 0.0")
+                                value = 0.0
+                            self.matrix_editor_widgets[i][j].setValue(value)
                     # 选择了预设矩阵，默认自动启用
                     self.enable_density_matrix_checkbox.setChecked(True)
+                    print("Debug: matrix spinboxes updated successfully")
                 finally:
                     self._is_updating_ui = False
+            else:
+                print(f"Warning: failed to load matrix for matrix_id={matrix_id}")
         self.parameter_changed.emit()
 
     # --- IDT Gamma slots ---

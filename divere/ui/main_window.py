@@ -819,32 +819,75 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"重新加载图像失败: {str(e)}")
 
     # ===== Spectral Sharpening Hooks =====
+    def _convert_proxy_corners_to_source(self, proxy_corners, proxy_image, source_image):
+        """将代理图像的角点坐标转换为源图像坐标"""
+        if not proxy_corners or len(proxy_corners) != 4:
+            return None
+            
+        # 获取代理图像和源图像的尺寸
+        proxy_h, proxy_w = proxy_image.shape[:2]
+        source_h, source_w = source_image.shape[:2]
+        
+        # 计算缩放比例
+        scale_x = source_w / proxy_w
+        scale_y = source_h / proxy_h
+        
+        # 转换坐标
+        source_corners = []
+        for x, y in proxy_corners:
+            source_x = x * scale_x
+            source_y = y * scale_y
+            source_corners.append((source_x, source_y))
+            
+        return source_corners
+
     def _on_ccm_optimize_requested(self):
         """根据色卡执行光谱锐化优化（后台），更新输入色彩空间与参数。"""
         current_image = self.context.get_current_image()
         if not (current_image and current_image.array is not None):
             QMessageBox.warning(self, "提示", "请先打开一张图片")
             return
+        
+        # 获取源图像（original image）而不是代理图像
+        source_image = self.context._current_image  # 直接访问原图
+        if not (source_image and source_image.array is not None):
+            QMessageBox.warning(self, "提示", "无法获取源图像数据")
+            return
+            
         # 获取当前输入空间 gamma（若取不到，退化为1.0）
         cs_name = self.context.get_input_color_space()
         cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
         input_gamma = float(cs_info.get("gamma", 1.0))
 
-        # 取色卡角点
-        cc_corners = getattr(self.preview_widget, 'cc_corners', None)
-        if not cc_corners or len(cc_corners) != 4:
+        # 取色卡角点（代理图像坐标系）
+        cc_corners_proxy = getattr(self.preview_widget, 'cc_corners', None)
+        if not cc_corners_proxy or len(cc_corners_proxy) != 4:
             QMessageBox.information(self, "提示", "请在预览中启用色卡选择器并设置四角点")
             return
-
-        # 取当前密度校正矩阵
-        params = self.context.get_current_params()
-        use_mat = bool(params.enable_density_matrix)
-        corr_mat = params.density_matrix if (use_mat and params.density_matrix is not None) else None
-
-        self.statusBar().showMessage("正在根据色卡优化光谱锐化参数...（CMA-ES）")
+            
+        # 将代理图像的角点坐标转换为源图像坐标
+        cc_corners_source = self._convert_proxy_corners_to_source(
+            cc_corners_proxy, current_image.array, source_image.array
+        )
+        if not cc_corners_source:
+            QMessageBox.warning(self, "错误", "无法转换色卡坐标到源图像空间")
+            return
 
         # 获取光谱锐化配置
         sharpening_config = self.parameter_panel.get_spectral_sharpening_config()
+        
+        # 取当前密度校正矩阵
+        params = self.context.get_current_params()
+        use_mat = bool(params.enable_density_matrix)
+        
+        # 如果启用密度矩阵优化，不传递当前矩阵（避免双重应用）
+        # 优化器将从单位矩阵开始优化
+        if sharpening_config.optimize_density_matrix:
+            corr_mat = None
+        else:
+            corr_mat = params.density_matrix if (use_mat and params.density_matrix is not None) else None
+
+        self.statusBar().showMessage("正在根据色卡优化光谱锐化参数...（CMA-ES）")
         
         # 获取UI当前参数作为优化初值
         current_params = self.context.get_current_params()
@@ -906,7 +949,7 @@ class MainWindow(QMainWindow):
                     import traceback
                     self.error = f"{e}\n{traceback.format_exc()}"
 
-        worker = _CCMWorker(current_image.array, cc_corners, input_gamma, use_mat, corr_mat, sharpening_config, ui_params)
+        worker = _CCMWorker(source_image.array, cc_corners_source, input_gamma, use_mat, corr_mat, sharpening_config, ui_params)
 
         def _on_done():
             try:

@@ -1085,15 +1085,19 @@ class ParameterPanel(QWidget):
             self.colorchecker_changed.emit(filename) # 发出色卡类型变化信号
     
     def get_spectral_sharpening_config(self):
-        """获取当前的光谱锐化配置（根据胶片类型自动选择参考文件）"""
+        """获取当前的光谱锐化配置（优先使用用户选择的参考文件）"""
         from divere.core.data_types import SpectralSharpeningConfig, FILM_TYPE_COLORCHECKER_MAPPING
         
-        # 根据当前胶片类型自动选择对应的colorchecker参考文件
-        film_type = self.get_current_film_type()
-        reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
-            film_type, 
-            "colorchecker_acescg_rgb_values.json"  # 默认值
-        )
+        # 优先使用用户在dropdown中的选择
+        reference_file = self.selected_colorchecker_file
+        
+        # 如果没有用户选择，回退到胶片类型映射
+        if not reference_file:
+            film_type = self.get_current_film_type()
+            reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
+                film_type, 
+                "colorchecker_acescg_rgb_values.json"  # 默认值
+            )
         
         return SpectralSharpeningConfig(
             optimize_idt_transformation=self.optimize_idt_checkbox.isChecked(),

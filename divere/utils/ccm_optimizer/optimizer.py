@@ -10,7 +10,7 @@ CCM参数优化器
 - r_gain: R通道增益
 - b_gain: B通道增益
 
-目标：最小化24个 ColorChecker 色块的 RGB RMSE
+目标：最小化24个 ColorChecker 色块的 Delta E 1994色差
 """
 
 import numpy as np
@@ -26,14 +26,17 @@ project_root = Path(__file__).parent.parent.parent
 try:
     from divere.utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
     from divere.utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
+    from divere.utils.ccm_optimizer.RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
 except Exception:
     try:
         from .pipeline import DiVEREPipelineSimulator  # type: ignore
         from .extractor import extract_colorchecker_patches  # type: ignore
+        from .RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
     except Exception:
         try:
             from utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
             from utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
+            from utils.ccm_optimizer.RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
         except Exception as e:
             raise ImportError(f"无法导入CCM优化器依赖: {e}")
 
@@ -118,11 +121,11 @@ class CCMOptimizer:
             # 8个参数：3x3矩阵除了左上角(0,0)固定为1.0的其余8个元素
             self.bounds['density_matrix'] = [
                 # 跳过(0,0)，从(0,1)开始：第一行剩余2个
-                (-0.5, 0.5), (-0.5, 0.5),
+                (-0.2, 0.2), (-0.05, 0.05),
                 # 第二行3个
-                (-0.5, 0.5), (0.5, 2.0), (-0.5, 0.5),
+                (-0.2, 0.2), (0.7, 1.2), (-0.2, 0.2),
                 # 第三行3个
-                (-0.5, 0.5), (-0.5, 0.5), (0.5, 2.0)
+                (-0.05, 0.05), (-0.2, 0.2), (0.7, 1.2)
             ]
             # 初始为单位矩阵的8个可变元素（跳过左上角）
             self.initial_params['density_matrix'] = np.array([
@@ -152,14 +155,11 @@ class CCMOptimizer:
             self.initial_params['primaries_xy'] = np.array(ui_params['primaries_xy']).flatten()
             
         # 更新density_matrix（如果启用优化）
-        if 'density_matrix' in self._param_indices and 'density_matrix' in ui_params:
-            matrix = np.array(ui_params['density_matrix'])
-            # 提取8个可变元素作为初值（左上角固定为1.0）
-            self.initial_params['density_matrix'] = np.array([
-                matrix[0, 1], matrix[0, 2],  # 第一行剩余2个
-                matrix[1, 0], matrix[1, 1], matrix[1, 2],  # 第二行3个
-                matrix[2, 0], matrix[2, 1], matrix[2, 2]   # 第三行3个
-            ])
+        # 注意：density matrix优化是替换模式，始终从单位矩阵开始
+        # 不使用UI当前矩阵作为初值，避免双重应用的混乱
+        if 'density_matrix' in self._param_indices:
+            # 保持单位矩阵初值，不受UI当前matrix影响
+            pass
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
         """加载参考RGB值
@@ -355,14 +355,14 @@ class CCMOptimizer:
     def objective_function(self, params: np.ndarray, 
                           input_patches: Dict[str, Tuple[float, float, float]]) -> float:
         """
-        目标函数：计算RGB RMSE
+        目标函数：计算Delta E 1994色差
         
         Args:
             params: 优化参数数组
             input_patches: 输入色块RGB值
             
         Returns:
-            MSE值
+            加权平均Delta E值
         """
         # 兼容旧签名：默认不使用校正矩阵
         return self.compute_rmse(params, input_patches, correction_matrix=None)
@@ -370,7 +370,7 @@ class CCMOptimizer:
     def compute_rmse(self, params: np.ndarray,
                      input_patches: Dict[str, Tuple[float, float, float]],
                      correction_matrix: Optional[np.ndarray] = None) -> float:
-        """计算给定参数与可选密度校正矩阵下的全局RMSE。"""
+        """计算给定参数与可选密度校正矩阵下的全局Delta E 1994色差。"""
         try:
             params_dict = self._params_to_dict(params)
             
@@ -389,26 +389,18 @@ class CCMOptimizer:
                 b_gain=params_dict['b_gain'],
                 correction_matrix=actual_correction_matrix,
             )
-            total_weighted_mse = 0.0
-            total_weight = 0.0
-            for patch_id in self.reference_values.keys():
-                if patch_id in output_patches:
-                    ref_rgb = np.array(self.reference_values[patch_id])
-                    out_rgb = np.array(output_patches[patch_id])
-                    delta = ref_rgb - out_rgb
-                    # 每通道主色权重
-                    wr, wg, wb = self._channel_weights
-                    ch_denom = float(wr + wg + wb)
-                    if ch_denom > 0.0:
-                        patch_mse = float((wr * delta[0]**2 + wg * delta[1]**2 + wb * delta[2]**2) / ch_denom)
-                    else:
-                        patch_mse = float(np.mean(delta**2))
-                    w = self._get_patch_weight(patch_id)
-                    total_weighted_mse += float(w) * float(patch_mse)
-                    total_weight += float(w)
-            if total_weight <= 0.0:
-                return float('inf')
-            return float(np.sqrt(total_weighted_mse / total_weight))
+            # 使用ColorChecker专用优化函数
+            weights_dict = {patch_id: self._get_patch_weight(patch_id) 
+                           for patch_id in self.reference_values.keys()}
+            
+            weighted_avg_delta_e, _ = calculate_colorchecker_delta_e_optimized(
+                self.reference_values,
+                output_patches,
+                weights_dict,
+                'ACEScg'
+            )
+            
+            return weighted_avg_delta_e
         except Exception as e:
             print(f"目标函数计算错误: {e}")
             return float('inf')
@@ -441,7 +433,7 @@ class CCMOptimizer:
         else:
             print("使用默认初始参数（未提供UI参数）")
             
-        print(f"开始优化，目标：最小化24个色块的RGB RMSE")
+        print(f"开始优化，目标：最小化24个色块的Delta E 1994色差")
         print(f"优化方法: {method}")
         print(f"最大迭代: {max_iter}")
         print(f"收敛容差: {tolerance}")
@@ -491,9 +483,16 @@ class CCMOptimizer:
                 ref_rgb = np.array(self.reference_values[patch_id])
                 out_rgb = np.array(output_patches[patch_id])
                 
-                # 计算误差
+                # 计算Delta E 1994色差
+                delta_e = calculate_delta_e_1994(
+                    ref_rgb.tolist(), 
+                    out_rgb.tolist(), 
+                    'ACEScg', 
+                    'ACEScg'
+                )
+                
+                # 为了兼容性，也计算传统的RGB误差
                 error = ref_rgb - out_rgb
-                # 通道加权MSE
                 wr, wg, wb = self._channel_weights
                 ch_denom = float(wr + wg + wb)
                 if ch_denom > 0.0:
@@ -509,11 +508,13 @@ class CCMOptimizer:
                     'error': error.tolist(),
                     'mse': float(mse),
                     'rmse': rmse,
+                    'delta_e': float(delta_e),
                     'weight': float(w)
                 }
                 
-                total_mse += mse
-                total_weighted_mse += float(w) * float(mse)
+                # 使用Delta E进行优化目标计算
+                total_mse += delta_e  # 现在用Delta E替代MSE
+                total_weighted_mse += float(w) * float(delta_e)
                 total_weight += float(w)
                 valid_patches += 1
         

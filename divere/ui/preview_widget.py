@@ -164,7 +164,7 @@ class PreviewWidget(QWidget):
 
         # 色卡选择器状态
         self.cc_enabled: bool = False
-        self.cc_corners = None  # [(x,y) * 4]
+        self.cc_corners_norm = None  # [(x_norm, y_norm) * 4] 原图归一化坐标 [0,1]
         self.cc_drag_idx: int | None = None
         self.cc_handle_radius_disp: float = 8.0
         self.cc_ref_qcolors = None  # 24项，参考色（QColor）
@@ -482,10 +482,123 @@ class PreviewWidget(QWidget):
         self._toggle_crop_mode(True)
 
     # ===== 色卡选择器：UI与绘制 =====
+    
+    # ===== ColorChecker坐标转换方法 =====
+    def _get_source_image_size(self) -> Optional[Tuple[int, int]]:
+        """获取原图尺寸"""
+        if not self.current_image or not self.current_image.metadata:
+            return None
+        source_wh = self.current_image.metadata.get('source_wh')
+        if source_wh:
+            return int(source_wh[0]), int(source_wh[1])
+        return None
+
+    def _norm_to_display_coords(self, norm_corners) -> Optional[List[Tuple[float, float]]]:
+        """归一化坐标 → 显示像素坐标"""
+        if not norm_corners or not self.current_image:
+            return None
+            
+        source_size = self._get_source_image_size()
+        if not source_size:
+            return None
+            
+        src_w, src_h = source_size
+        
+        # 先转换为原图像素坐标
+        source_corners = []
+        for x_norm, y_norm in norm_corners:
+            source_x = x_norm * src_w
+            source_y = y_norm * src_h
+            source_corners.append((source_x, source_y))
+        
+        # 再转换为显示坐标
+        display_corners = []
+        for source_x, source_y in source_corners:
+            # 使用现有的转换逻辑（逆向）
+            md = self.current_image.metadata or {}
+            focused = md.get('crop_focused', False)
+            disp_h, disp_w = self.current_image.array.shape[:2]
+            
+            if focused:
+                # 聚焦模式：原图坐标 → crop坐标 → 显示坐标
+                crop_instance = md.get('crop_instance')
+                if crop_instance:
+                    x, y, w, h = crop_instance.rect_norm
+                    crop_left = x * src_w
+                    crop_top = y * src_h
+                    crop_width = w * src_w
+                    crop_height = h * src_h
+                    
+                    # 原图坐标 → crop坐标
+                    crop_x = (source_x - crop_left) * disp_w / crop_width
+                    crop_y = (source_y - crop_top) * disp_h / crop_height
+                    
+                    # 处理crop的独立orientation
+                    if crop_instance.orientation % 360 != 0:
+                        crop_x, crop_y = self._apply_rotate_point(
+                            crop_x, crop_y, disp_w, disp_h, crop_instance.orientation
+                        )
+                    
+                    display_corners.append((crop_x, crop_y))
+                else:
+                    display_corners.append((source_x, source_y))
+            else:
+                # 非聚焦模式：原图坐标 → 显示坐标
+                global_orientation = md.get('global_orientation', 0)
+                
+                if global_orientation % 180 == 0:  # 0°或180°
+                    img_x = source_x * disp_w / src_w
+                    img_y = source_y * disp_h / src_h
+                else:  # 90°或270°（宽高交换）
+                    img_x = source_x * disp_h / src_w
+                    img_y = source_y * disp_w / src_h
+                
+                if global_orientation % 360 != 0:
+                    img_x, img_y = self._apply_rotate_point(
+                        img_x, img_y, disp_w, disp_h, global_orientation
+                    )
+                
+                display_corners.append((img_x, img_y))
+        
+        return display_corners
+
+    def _display_to_norm_coords(self, display_point: QPoint) -> Optional[Tuple[float, float]]:
+        """显示像素坐标 → 归一化坐标"""
+        orig_point = self._display_to_original_point(display_point)
+        if not orig_point:
+            return None
+            
+        source_size = self._get_source_image_size()
+        if not source_size:
+            return None
+            
+        src_w, src_h = source_size
+        norm_x = orig_point[0] / src_w
+        norm_y = orig_point[1] / src_h
+        return (norm_x, norm_y)
+
+    def _norm_to_source_coords(self, norm_corners) -> Optional[List[Tuple[float, float]]]:
+        """归一化坐标 → 原图像素坐标"""
+        if not norm_corners:
+            return None
+            
+        source_size = self._get_source_image_size()
+        if not source_size:
+            return None
+            
+        src_w, src_h = source_size
+        source_corners = []
+        for x_norm, y_norm in norm_corners:
+            source_x = x_norm * src_w
+            source_y = y_norm * src_h
+            source_corners.append((source_x, source_y))
+        
+        return source_corners
+
     def _on_cc_toggled(self, checked: bool):
         self.cc_enabled = bool(checked)
         if self.cc_enabled and self.current_image and self.current_image.array is not None:
-            if not self.cc_corners:
+            if not self.cc_corners_norm:
                 self._init_default_colorchecker()
             self._ensure_cc_reference_colors()
         
@@ -497,24 +610,40 @@ class PreviewWidget(QWidget):
         self._update_display()
 
     def _init_default_colorchecker(self):
-        # cc_corners 始终存储在"当前显示图像数组"的像素坐标系下
-        h, w = self.current_image.array.shape[:2]
-        max_w = w * 0.6
-        max_h = h * 0.6
-        target_w = min(max_w, max_h * 1.5)
-        target_h = target_w / 1.5
-        cx = w / 2.0; cy = h / 2.0
-        x0 = cx - target_w / 2.0; y0 = cy - target_h / 2.0
-        x1 = cx + target_w / 2.0; y1 = cy + target_h / 2.0
-        self.cc_corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        # cc_corners_norm 存储原图归一化坐标 [0,1]
+        # 默认在原图中心60%区域放置色卡选择器
+        margin = 0.2  # 距离边缘20%
+        # 色卡比例为1.5:1 (6:4)，在可用区域内按比例调整
+        available_width = 1.0 - 2 * margin
+        available_height = 1.0 - 2 * margin
+        
+        # 按色卡比例计算实际尺寸
+        target_width = min(available_width, available_height * 1.5)
+        target_height = target_width / 1.5
+        
+        # 居中放置
+        center_x = 0.5
+        center_y = 0.5
+        x0 = center_x - target_width / 2.0
+        y0 = center_y - target_height / 2.0
+        x1 = center_x + target_width / 2.0
+        y1 = center_y + target_height / 2.0
+        
+        # 存储归一化坐标：左上、右上、右下、左下
+        self.cc_corners_norm = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
     def _draw_colorchecker_overlay(self, painter: QPainter):
         """绘制色卡选择器的UI覆盖层：边框、角点、网格等"""
-        if not (self.cc_enabled and self.cc_corners):
+        if not (self.cc_enabled and self.cc_corners_norm):
+            return
+        
+        # 转换归一化坐标到显示坐标
+        display_corners = self._norm_to_display_coords(self.cc_corners_norm)
+        if not display_corners:
             return
         
         # 绘制边框和角点
-        pts = [QPointF(*p) for p in self.cc_corners]
+        pts = [QPointF(*p) for p in display_corners]
         painter.setPen(QPen(QColor(255, 255, 0, 220), 2))
         painter.setBrush(Qt.NoBrush)
         
@@ -536,19 +665,21 @@ class PreviewWidget(QWidget):
 
     def _draw_colorchecker_grid(self, painter: QPainter):
         """绘制4x6色块网格，内嵌参考色块"""
-        if not self.cc_corners or not self.current_image or not self.current_image.array is not None:
+        if not self.cc_corners_norm or not self.current_image or not self.current_image.array is not None:
             return
         
         try:
             import numpy as np
             import cv2
             
-            # 获取图像尺寸
-            h, w = self.current_image.array.shape[:2]
+            # 转换归一化坐标到显示坐标
+            display_corners = self._norm_to_display_coords(self.cc_corners_norm)
+            if not display_corners:
+                return
             
             # 计算透视变换矩阵
             src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
-            dst = np.array(self.cc_corners, dtype=np.float32)
+            dst = np.array(display_corners, dtype=np.float32)
             H = cv2.getPerspectiveTransform(src, dst)
             
             # 网格参数
@@ -1633,14 +1764,17 @@ class PreviewWidget(QWidget):
                         self.image_label.setCursor(QCursor(Qt.CursorShape.CrossCursor))
                         event.accept(); return
             # 色卡角点命中测试（优先）
-            if self.cc_enabled and self.cc_corners:
-                m = event.position()
-                for idx, (ix, iy) in enumerate(self.cc_corners):
-                    dx = (ix * float(self.zoom_factor) + float(self.pan_x)) - float(m.x())
-                    dy = (iy * float(self.zoom_factor) + float(self.pan_y)) - float(m.y())
-                    if (dx*dx + dy*dy) ** 0.5 <= self.cc_handle_radius_disp:
-                        self.cc_drag_idx = idx
-                        event.accept(); return
+            if self.cc_enabled and self.cc_corners_norm:
+                # 转换归一化坐标到显示坐标进行命中测试
+                display_corners = self._norm_to_display_coords(self.cc_corners_norm)
+                if display_corners:
+                    m = event.position()
+                    for idx, (ix, iy) in enumerate(display_corners):
+                        dx = (ix * float(self.zoom_factor) + float(self.pan_x)) - float(m.x())
+                        dy = (iy * float(self.zoom_factor) + float(self.pan_y)) - float(m.y())
+                        if (dx*dx + dy*dy) ** 0.5 <= self.cc_handle_radius_disp:
+                            self.cc_drag_idx = idx
+                            event.accept(); return
             self.dragging = True
             self.last_mouse_pos = event.pos()
             self.drag_start_pos = event.pos()
@@ -1722,12 +1856,12 @@ class PreviewWidget(QWidget):
                         self._crop_current_norm = (norm_x, norm_y)
                     self._update_display(); event.accept(); return
         if (self.cc_enabled and self.cc_drag_idx is not None and 
-            self.cc_corners and 0 <= self.cc_drag_idx < len(self.cc_corners)):
-            m = event.position()
-            ix = (float(m.x()) - float(self.pan_x)) / float(self.zoom_factor)
-            iy = (float(m.y()) - float(self.pan_y)) / float(self.zoom_factor)
-            self.cc_corners[self.cc_drag_idx] = (ix, iy)
-            self._update_display(); event.accept(); return
+            self.cc_corners_norm and 0 <= self.cc_drag_idx < len(self.cc_corners_norm)):
+            # 将显示坐标转换为归一化坐标
+            norm_coords = self._display_to_norm_coords(event.position())
+            if norm_coords:
+                self.cc_corners_norm[self.cc_drag_idx] = norm_coords
+                self._update_display(); event.accept(); return
         # 聚焦模式：整体移动裁剪框（禁用；仅在原图多裁剪下允许）
         if self._moving_overlay_active and self._crop_overlay_norm and self._show_all_crops:
             orig_point = self._display_to_original_point(event.position())
@@ -1931,7 +2065,7 @@ class PreviewWidget(QWidget):
     # ===== 色卡选择器：读取24色块平均色（XYZ） =====
     def read_colorchecker_xyz(self):
         """读取当前色卡选择器24块的平均颜色（XYZ），返回 ndarray (24, 3)。行序为4行x6列。"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return None
         
         try:
@@ -1963,7 +2097,7 @@ class PreviewWidget(QWidget):
 
     def _extract_colorchecker_patches(self):
         """提取色卡选择器中的24个色块数据，返回RGB值数组"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return None
         
         try:
@@ -1980,9 +2114,14 @@ class PreviewWidget(QWidget):
             # 获取图像尺寸
             H_img, W_img = arr.shape[:2]
             
+            # 转换归一化坐标到显示坐标
+            display_corners = self._norm_to_display_coords(self.cc_corners_norm)
+            if not display_corners:
+                return None
+            
             # 计算透视变换矩阵
             src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
-            dst = np.array(self.cc_corners, dtype=np.float32)
+            dst = np.array(display_corners, dtype=np.float32)
             H = cv2.getPerspectiveTransform(src, dst)
             
             # 色块参数
@@ -2033,70 +2172,66 @@ class PreviewWidget(QWidget):
     # ===== 色卡选择器变换操作 =====
     def flip_colorchecker_horizontal(self):
         """水平翻转色卡选择器"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return
         
         try:
-            h, w = self.current_image.array.shape[:2]
+            # 在归一化空间进行水平翻转: x_norm' = 1.0 - x_norm, y_norm' = y_norm
             new_corners = []
-            for (x, y) in self.cc_corners:
-                # 水平翻转: x' = width - 1 - x, y' = y
-                new_x = w - 1.0 - x
-                new_corners.append((new_x, y))
-            self.cc_corners = new_corners
+            for (x_norm, y_norm) in self.cc_corners_norm:
+                new_x_norm = 1.0 - x_norm
+                new_corners.append((new_x_norm, y_norm))
+            self.cc_corners_norm = new_corners
             self._update_display()
         except Exception as e:
             print(f"水平翻转色卡失败: {e}")
 
     def flip_colorchecker_vertical(self):
         """竖直翻转色卡选择器"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return
         
         try:
-            h, w = self.current_image.array.shape[:2]
+            # 在归一化空间进行竖直翻转: x_norm' = x_norm, y_norm' = 1.0 - y_norm
             new_corners = []
-            for (x, y) in self.cc_corners:
-                # 竖直翻转: x' = x, y' = height - 1 - y
-                new_y = h - 1.0 - y
-                new_corners.append((x, new_y))
-            self.cc_corners = new_corners
+            for (x_norm, y_norm) in self.cc_corners_norm:
+                new_y_norm = 1.0 - y_norm
+                new_corners.append((x_norm, new_y_norm))
+            self.cc_corners_norm = new_corners
             self._update_display()
         except Exception as e:
             print(f"竖直翻转色卡失败: {e}")
 
     def rotate_colorchecker_left(self):
         """左旋转色卡选择器90度"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return
         
         try:
-            h, w = self.current_image.array.shape[:2]
+            # 在归一化空间进行左旋90度: x_norm' = y_norm, y_norm' = 1.0 - x_norm
             new_corners = []
-            for (x, y) in self.cc_corners:
-                # 左旋90度: x' = y, y' = width - 1 - x
-                new_x = y
-                new_y = w - 1.0 - x
-                new_corners.append((new_x, new_y))
-            self.cc_corners = new_corners
+            for (x_norm, y_norm) in self.cc_corners_norm:
+                new_x_norm = y_norm
+                new_y_norm = 1.0 - x_norm
+                new_corners.append((new_x_norm, new_y_norm))
+            self.cc_corners_norm = new_corners
             self._update_display()
         except Exception as e:
             print(f"左旋转色卡失败: {e}")
 
     def rotate_colorchecker_right(self):
         """右旋转色卡选择器90度"""
-        if not (self.cc_enabled and self.cc_corners and self.current_image and self.current_image.array is not None):
+        if not (self.cc_enabled and self.cc_corners_norm and self.current_image and self.current_image.array is not None):
             return
         
         try:
-            h, w = self.current_image.array.shape[:2]
+            # 在归一化空间进行右旋90度: x_norm' = 1.0 - y_norm, y_norm' = x_norm
             new_corners = []
-            for (x, y) in self.cc_corners:
-                # 右旋90度: x' = height - 1 - y, y' = x
-                new_x = h - 1.0 - y
-                new_y = x
-                new_corners.append((new_x, new_y))
-            self.cc_corners = new_corners
+            for (x_norm, y_norm) in self.cc_corners_norm:
+                new_x_norm = 1.0 - y_norm
+                new_y_norm = x_norm
+                new_corners.append((new_x_norm, new_y_norm))
+            self.cc_corners_norm = new_corners
             self._update_display()
         except Exception as e:
             print(f"右旋转色卡失败: {e}")
@@ -2145,21 +2280,7 @@ class PreviewWidget(QWidget):
                 ppy = px
             else:
                 ppx, ppy = px, py
-            # 同步更新色卡角点坐标到旋转后的显示图像坐标系（仅当存在色卡时）
-            try:
-                if self.cc_corners and isinstance(self.cc_corners, (list, tuple)):
-                    new_corners = []
-                    if direction == 1:  # 左旋 CCW: (x', y') = (y, W_old - 1 - x)
-                        for (ix, iy) in self.cc_corners:
-                            new_corners.append((float(iy), float(W_old - 1.0 - ix)))
-                    elif direction == -1:  # 右旋 CW: (x', y') = (H_old - 1 - y, x)
-                        for (ix, iy) in self.cc_corners:
-                            new_corners.append((float(H_old - 1.0 - iy), float(ix)))
-                    else:
-                        new_corners = list(self.cc_corners)
-                    self.cc_corners = new_corners
-            except Exception:
-                pass
+            # 色卡坐标使用归一化坐标，不受图像旋转影响，无需同步更新
             # 以当前视口中心求新的平移
             Wv = self._get_viewport_size().width()
             Hv = self._get_viewport_size().height()

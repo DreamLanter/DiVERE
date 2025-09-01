@@ -507,19 +507,41 @@ class ApplicationContext(QObject):
     def apply_contactsheet_to_active_crop(self) -> None:
         """将接触印像（contactsheet）的参数复制到当前活跃裁剪的参数集。"""
         try:
+            print(f"DEBUG: apply_contactsheet_to_active_crop开始执行")
             active_id = self._active_crop_id
+            print(f"DEBUG: active_id = {active_id}")
             if not active_id:
+                print("DEBUG: 没有active_crop_id，直接返回")
                 return
+            
+            # 检查contactsheet参数是否存在
+            if not self._contactsheet_params:
+                print("DEBUG: contactsheet_params为空")
+                return
+                
             # 复制参数
             cs_params = self._contactsheet_params.copy()
+            print(f"DEBUG: 复制的contactsheet参数数量: {len(vars(cs_params))}")
             self._per_crop_params[active_id] = cs_params
+            print("DEBUG: 参数已复制到per_crop_params")
+            
             # 若当前正聚焦该裁剪，同步当前参数并刷新预览
             if self._crop_focused:
+                print("DEBUG: 当前处于crop聚焦状态，同步参数")
                 self._current_params = cs_params.copy()
+                self.params_changed.emit(self._current_params)
+                print("DEBUG: params_changed信号已发射")
                 self._prepare_proxy(); self._trigger_preview_update()
+                print("DEBUG: 预览更新已触发")
+            else:
+                print("DEBUG: 当前未处于crop聚焦状态")
+                
             self._autosave_timer.start()
+            print("DEBUG: apply_contactsheet_to_active_crop执行完成")
         except Exception as e:
             print(f"沿用接触印像设置失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def export_preset_bundle(self) -> PresetBundle:
         """导出 Bundle：contactsheet + 各裁剪条目（每个带独立Preset）。"""

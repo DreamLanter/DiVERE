@@ -557,12 +557,24 @@ class MainWindow(QMainWindow):
             print(f"删除裁剪失败: {e}")
 
     def _on_apply_contactsheet_to_crop(self):
+        print("DEBUG: 沿用接触印像设置按钮被点击")
         try:
+            print(f"DEBUG: 当前active_crop_id: {getattr(self.context, '_active_crop_id', None)}")
+            print(f"DEBUG: 当前crop_focused: {getattr(self.context, '_crop_focused', False)}")
+            print(f"DEBUG: contactsheet_params存在: {bool(getattr(self.context, '_contactsheet_params', None))}")
+            
             self.context.apply_contactsheet_to_active_crop()
+            print("DEBUG: apply_contactsheet_to_active_crop调用完成")
+            
             # 同步参数面板
-            self.parameter_panel.initialize_defaults(self.context.get_current_params())
+            current_params = self.context.get_current_params()
+            print(f"DEBUG: 获取到当前参数: {bool(current_params)}")
+            self.parameter_panel.initialize_defaults(current_params)
+            print("DEBUG: 参数面板同步完成")
         except Exception as e:
             print(f"沿用接触印像设置失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _on_auto_color_requested(self):
         self.context.run_auto_color_correction(self.preview_widget.get_current_image_data)
@@ -819,27 +831,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"重新加载图像失败: {str(e)}")
 
     # ===== Spectral Sharpening Hooks =====
-    def _convert_proxy_corners_to_source(self, proxy_corners, proxy_image, source_image):
-        """将代理图像的角点坐标转换为源图像坐标"""
-        if not proxy_corners or len(proxy_corners) != 4:
-            return None
-            
-        # 获取代理图像和源图像的尺寸
-        proxy_h, proxy_w = proxy_image.shape[:2]
-        source_h, source_w = source_image.shape[:2]
-        
-        # 计算缩放比例
-        scale_x = source_w / proxy_w
-        scale_y = source_h / proxy_h
-        
-        # 转换坐标
-        source_corners = []
-        for x, y in proxy_corners:
-            source_x = x * scale_x
-            source_y = y * scale_y
-            source_corners.append((source_x, source_y))
-            
-        return source_corners
 
     def _on_ccm_optimize_requested(self):
         """根据色卡执行光谱锐化优化（后台），更新输入色彩空间与参数。"""
@@ -848,7 +839,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先打开一张图片")
             return
         
-        # 获取源图像（original image）而不是代理图像
+        # 使用原图进行优化
         source_image = self.context._current_image  # 直接访问原图
         if not (source_image and source_image.array is not None):
             QMessageBox.warning(self, "提示", "无法获取源图像数据")
@@ -859,18 +850,16 @@ class MainWindow(QMainWindow):
         cs_info = self.context.color_space_manager.get_color_space_info(cs_name) or {}
         input_gamma = float(cs_info.get("gamma", 1.0))
 
-        # 取色卡角点（代理图像坐标系）
-        cc_corners_proxy = getattr(self.preview_widget, 'cc_corners', None)
-        if not cc_corners_proxy or len(cc_corners_proxy) != 4:
+        # 取色卡角点（归一化坐标）
+        cc_corners_norm = getattr(self.preview_widget, 'cc_corners_norm', None)
+        if not cc_corners_norm or len(cc_corners_norm) != 4:
             QMessageBox.information(self, "提示", "请在预览中启用色卡选择器并设置四角点")
             return
             
-        # 将代理图像的角点坐标转换为源图像坐标
-        cc_corners_source = self._convert_proxy_corners_to_source(
-            cc_corners_proxy, current_image.array, source_image.array
-        )
+        # 直接使用归一化坐标转换为原图像素坐标
+        cc_corners_source = self.preview_widget._norm_to_source_coords(cc_corners_norm)
         if not cc_corners_source:
-            QMessageBox.warning(self, "错误", "无法转换色卡坐标到源图像空间")
+            QMessageBox.warning(self, "错误", "无法获取源图像坐标")
             return
 
         # 获取光谱锐化配置
@@ -1585,14 +1574,18 @@ class MainWindow(QMainWindow):
             pass
 
     def _update_apply_contactsheet_enabled(self):
-        """仅在 contact sheet 模式下、进入单张 crop 聚焦时才显示该按钮。"""
+        """仅在 contact sheet 模式下、进入单张 crop 聚焦时才显示并启用该按钮。"""
         try:
             focused = bool(getattr(self.context, '_crop_focused', False))
             kind = self.context.get_current_profile_kind()
-            # 只有当 kind == 'crop' 且聚焦时，显示"沿用接触印像设置"
-            visible = (kind == 'crop' and focused)
+            # 检查是否有contactsheet参数可以沿用
+            has_contactsheet_params = bool(getattr(self.context, '_contactsheet_params', None))
+            
+            # 只有当 kind == 'crop' 且聚焦且有contactsheet参数时，显示并启用"沿用接触印像设置"
+            should_enable = (kind == 'crop' and focused and has_contactsheet_params)
             try:
-                self._apply_contactsheet_action.setVisible(visible)
+                self._apply_contactsheet_action.setVisible(should_enable)
+                self._apply_contactsheet_action.setEnabled(should_enable)
             except Exception:
                 pass
         except Exception:

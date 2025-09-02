@@ -793,9 +793,11 @@ class CurveEditorWidget(QWidget):
                 
                 QMessageBox.information(self, "成功", f"曲线已保存到：\n{file_path}")
                 
-                # 重新加载曲线列表
+                # 重新加载曲线列表并自动应用刚保存的曲线
                 self._load_preset_curves()
                 self._refresh_curve_combo()
+                # 自动选择并应用刚保存的曲线
+                self._apply_saved_curve(safe_filename)
                 
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"保存曲线时出错：\n{str(e)}")
@@ -815,6 +817,18 @@ class CurveEditorWidget(QWidget):
         index = self.curve_combo.findData(current_data)
         if index >= 0:
             self.curve_combo.setCurrentIndex(index)
+
+    def _apply_saved_curve(self, curve_key: str):
+        """自动应用刚保存的曲线"""
+        try:
+            # 在下拉列表中找到对应的曲线
+            index = self.curve_combo.findData(curve_key)
+            if index >= 0:
+                self.curve_combo.setCurrentIndex(index)
+                # 触发曲线应用
+                self._on_preset_curve_selected()
+        except Exception as e:
+            print(f"自动应用保存的曲线失败: {e}")
     
     def _on_curve_changed(self, points):
         """曲线改变时的处理"""

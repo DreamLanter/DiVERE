@@ -1197,7 +1197,7 @@ class ApplicationContext(QObject):
             delta = gains * scale
 
             current_gains = np.array(self._current_params.rgb_gains)
-            new_gains = np.clip(current_gains + delta, -2.0, 2.0)
+            new_gains = np.clip(current_gains + delta, -3.0, 3.0)
             
             self._auto_color_iterations -= 1
             
@@ -1478,3 +1478,16 @@ class ApplicationContext(QObject):
             self._autosave_timer.start()
         except Exception:
             pass
+
+    def reload_all_configs(self):
+        """重新加载所有配置文件"""
+        try:
+            # 重新加载色彩空间配置
+            self.color_space_manager.reload_config()
+            
+            # 重新加载其他配置（matrices, curves等通过pipeline_processor管理）
+            # pipeline_processor会在下次访问时重新加载
+            
+            self.status_message_changed.emit("配置文件已重新加载")
+        except Exception as e:
+            self.status_message_changed.emit(f"重新加载配置失败: {e}")

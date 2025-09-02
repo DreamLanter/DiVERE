@@ -213,7 +213,7 @@ class TheEnlarger:
             gains = np.log10(original_mean / corrected_mean)
             
             # 裁剪增益值，并计算相对于G通道的调整
-            gains = -np.clip(gains, -2.0, 2.0) + gains[1]
+            gains = -np.clip(gains, -3.0, 3.0) + gains[1]
             
             # 计算光源估计（归一化的原始均值）
             illuminant = original_mean / np.sum(original_mean)

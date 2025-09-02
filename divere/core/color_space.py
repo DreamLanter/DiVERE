@@ -371,6 +371,13 @@ class ColorSpaceManager:
         """获取可用的色彩空间列表"""
         return sorted(list(self._color_spaces.keys()))
     
+    def reload_config(self):
+        """重新加载色彩空间配置文件"""
+        self._color_spaces.clear()
+        self._convert_cache.clear()
+        self._load_colorspaces_from_json()
+        self.setup_monochrome_color_space()
+    
     def validate_color_space(self, color_space_name: str) -> bool:
         """验证色彩空间名称是否有效"""
         return color_space_name in self._color_spaces

@@ -1058,6 +1058,17 @@ class MainWindow(QMainWindow):
             if ok:
                 self.statusBar().showMessage(f"已保存自定义色彩空间到项目配置: {save_name}.json")
                 QMessageBox.information(self, "保存成功", f"自定义色彩空间已保存: {save_name}")
+                
+                # 重新加载色彩空间配置并刷新UI，然后自动应用刚保存的色彩空间
+                try:
+                    self.context.reload_all_configs()
+                    self.parameter_panel._refresh_colorspace_combo()
+                    # 自动选择并应用刚保存的色彩空间
+                    self.context.set_input_color_space(save_name)
+                    self.parameter_panel._refresh_colorspace_combo()  # 再次刷新以显示选中状态
+                except AttributeError:
+                    # 如果没有刷新方法，用户需要重启应用来看到新色彩空间
+                    pass
             else:
                 QMessageBox.warning(self, "保存失败", "无法保存到项目配置目录")
         except Exception as e:
@@ -1104,10 +1115,17 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"已保存密度矩阵到项目配置: {save_name}.json")
                 QMessageBox.information(self, "保存成功", f"密度矩阵已保存: {save_name}")
                 
-                # 重新加载矩阵列表（如果parameter_panel有更新方法）
+                # 重新加载矩阵列表并自动应用刚保存的矩阵
                 try:
                     # 刷新parameter_panel的矩阵下拉列表
                     self.parameter_panel._refresh_matrix_combo()
+                    # 自动选择并应用刚保存的矩阵
+                    new_params = self.context.get_current_params().copy()
+                    new_params.density_matrix = matrix
+                    new_params.density_matrix_name = save_name
+                    new_params.enable_density_matrix = True
+                    self.context.update_params(new_params)
+                    self.parameter_panel._refresh_matrix_combo()  # 再次刷新以显示选中状态
                 except AttributeError:
                     # 如果没有刷新方法，用户需要重启应用来看到新矩阵
                     pass

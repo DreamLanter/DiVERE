@@ -416,6 +416,7 @@ class ConfigManagerDialog(QDialog):
             
             if enhanced_config_manager.save_user_config("colorspace", name, default_config):
                 self._load_colorspace_configs()
+                self._notify_parent_reload_configs("colorspace", name)
                 QMessageBox.information(self, "成功", f"已创建色彩空间配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "创建配置失败")
@@ -438,6 +439,7 @@ class ConfigManagerDialog(QDialog):
             
             if enhanced_config_manager.save_user_config("curves", name, default_config):
                 self._load_curves_configs()
+                self._notify_parent_reload_configs("curves", name)
                 QMessageBox.information(self, "成功", f"已创建曲线配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "创建配置失败")
@@ -459,6 +461,7 @@ class ConfigManagerDialog(QDialog):
             
             if enhanced_config_manager.save_user_config("matrices", name, default_config):
                 self._load_matrices_configs()
+                self._notify_parent_reload_configs("matrices", name)
                 QMessageBox.information(self, "成功", f"已创建矩阵配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "创建配置失败")
@@ -614,6 +617,7 @@ class ConfigManagerDialog(QDialog):
             data = json.loads(content)
             
             if enhanced_config_manager.save_user_config("colorspace", name, data):
+                self._notify_parent_reload_configs("colorspace", name)
                 QMessageBox.information(self, "成功", f"已保存配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "保存配置失败")
@@ -641,6 +645,7 @@ class ConfigManagerDialog(QDialog):
             data = json.loads(content)
             
             if enhanced_config_manager.save_user_config("curves", name, data):
+                self._notify_parent_reload_configs("curves", name)
                 QMessageBox.information(self, "成功", f"已保存配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "保存配置失败")
@@ -668,6 +673,7 @@ class ConfigManagerDialog(QDialog):
             data = json.loads(content)
             
             if enhanced_config_manager.save_user_config("matrices", name, data):
+                self._notify_parent_reload_configs("matrices", name)
                 QMessageBox.information(self, "成功", f"已保存配置: {name}")
             else:
                 QMessageBox.critical(self, "错误", "保存配置失败")
@@ -703,3 +709,59 @@ class ConfigManagerDialog(QDialog):
             QMessageBox.information(self, "成功", "配置备份完成")
         else:
             QMessageBox.critical(self, "错误", "配置备份失败")
+
+    def _notify_parent_reload_configs(self, config_type: str = None, config_name: str = None):
+        """通知父窗口重新加载配置并可选地自动应用"""
+        try:
+            parent_window = self.parent()
+            if parent_window and hasattr(parent_window, 'context'):
+                # 重新加载ApplicationContext中的配置
+                parent_window.context.reload_all_configs()
+                
+                # 刷新UI组件
+                if hasattr(parent_window, 'parameter_panel'):
+                    parent_window.parameter_panel.refresh_all_combos()
+                    
+                # 通知curve editor刷新（如果存在）
+                if hasattr(parent_window, 'curve_editor'):
+                    curve_editor = getattr(parent_window, 'curve_editor', None)
+                    if curve_editor and hasattr(curve_editor, '_load_preset_curves'):
+                        curve_editor._load_preset_curves()
+                        if hasattr(curve_editor, '_refresh_curve_combo'):
+                            curve_editor._refresh_curve_combo()
+                
+                # 自动应用刚保存的配置（如果指定了类型和名称）
+                if config_type and config_name:
+                    self._auto_apply_saved_config(parent_window, config_type, config_name)
+                            
+        except Exception as e:
+            print(f"通知父窗口重新加载配置失败: {e}")
+    
+    def _auto_apply_saved_config(self, parent_window, config_type: str, config_name: str):
+        """自动应用刚保存的配置"""
+        try:
+            if config_type == "colorspace":
+                # 自动切换到刚保存的色彩空间
+                parent_window.context.set_input_color_space(config_name)
+                parent_window.parameter_panel._refresh_colorspace_combo()
+                
+            elif config_type == "matrices":
+                # 自动应用刚保存的矩阵
+                new_params = parent_window.context.get_current_params().copy()
+                matrix = parent_window.context.the_enlarger.pipeline_processor.get_density_matrix_array(config_name)
+                if matrix is not None:
+                    new_params.density_matrix = matrix
+                    new_params.density_matrix_name = config_name
+                    new_params.enable_density_matrix = True
+                    parent_window.context.update_params(new_params)
+                    parent_window.parameter_panel._refresh_matrix_combo()
+                    
+            elif config_type == "curves":
+                # 自动应用刚保存的曲线（通过curve editor）
+                if hasattr(parent_window, 'curve_editor'):
+                    curve_editor = getattr(parent_window, 'curve_editor', None)
+                    if curve_editor and hasattr(curve_editor, '_apply_saved_curve'):
+                        curve_editor._apply_saved_curve(config_name)
+                        
+        except Exception as e:
+            print(f"自动应用保存的配置失败: {e}")

@@ -1140,6 +1140,33 @@ class ParameterPanel(QWidget):
         if index >= 0:
             self.matrix_combo.setCurrentIndex(index)
 
+    def _refresh_colorspace_combo(self):
+        """刷新色彩空间下拉列表（保存后调用）"""
+        # 保存当前选择
+        current_data = self.input_colorspace_combo.currentData()
+        
+        # 清空并重新填充
+        self.input_colorspace_combo.clear()
+        spaces = self.context.color_space_manager.get_available_color_spaces()
+        for space in spaces:
+            self.input_colorspace_combo.addItem(space, space)
+        
+        # 恢复选择
+        index = self.input_colorspace_combo.findData(current_data)
+        if index >= 0:
+            self.input_colorspace_combo.setCurrentIndex(index)
+
+    def refresh_all_combos(self):
+        """刷新所有下拉列表"""
+        try:
+            self._refresh_colorspace_combo()
+        except AttributeError:
+            pass
+        try:
+            self._refresh_matrix_combo()
+        except AttributeError:
+            pass
+
     def _on_curve_changed(self, curve_name, points):
         if self._is_updating_ui: return
         self.parameter_changed.emit()

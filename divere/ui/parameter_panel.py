@@ -52,6 +52,8 @@ class ParameterPanel(QWidget):
     glare_compensation_interaction_started = Signal(float)  # 当前补偿值
     glare_compensation_interaction_ended = Signal()
     glare_compensation_realtime_update = Signal(float)  # 实时更新补偿值
+    # 读取并保存色卡颜色信号
+    save_colorchecker_colors_requested = Signal()
     
     def __init__(self, context: ApplicationContext):
         super().__init__()
@@ -116,7 +118,7 @@ class ParameterPanel(QWidget):
         colorspace_layout.addWidget(self.idt_gamma_slider, 0, 1)
         colorspace_layout.addWidget(self.idt_gamma_spinbox, 0, 2)
         self.input_colorspace_combo = QComboBox()
-        spaces = self.context.color_space_manager.get_available_color_spaces()
+        spaces = self.context.color_space_manager.get_idt_color_spaces()
         for space in spaces:
             self.input_colorspace_combo.addItem(space, space)
         colorspace_layout.addWidget(QLabel("色彩空间:"), 1, 0)
@@ -173,6 +175,13 @@ class ParameterPanel(QWidget):
         cc_selector_layout.addWidget(self.colorchecker_combo)
         
         layout.addLayout(cc_selector_layout)
+
+        # 读取并保存色卡颜色按钮
+        self.save_colorchecker_colors_button = QPushButton("读取并保存色卡颜色")
+        self.save_colorchecker_colors_button.setToolTip("从当前色卡选择器中读取24个色块的平均颜色并保存为JSON文件")
+        self.save_colorchecker_colors_button.setVisible(False)
+        self.save_colorchecker_colors_button.setEnabled(False)
+        layout.addWidget(self.save_colorchecker_colors_button)
 
         # 光谱锐化优化配置开关
         spectral_config_layout = QHBoxLayout()
@@ -239,9 +248,11 @@ class ParameterPanel(QWidget):
         if not colorchecker_dir.exists():
             return
             
-        # 扫描*_rgb_values.json文件
+        # 扫描色卡文件（两种格式）
         chart_files = []
         for file_path in colorchecker_dir.glob("*_rgb_values.json"):
+            chart_files.append(file_path.name)
+        for file_path in colorchecker_dir.glob("*_colorchecker_format.json"):
             chart_files.append(file_path.name)
         
         # 排序并添加到下拉菜单
@@ -258,7 +269,7 @@ class ParameterPanel(QWidget):
     def _format_colorchecker_display_name(self, filename: str) -> str:
         """将文件名格式化为显示名称"""
         # 移除后缀
-        name = filename.replace("_rgb_values.json", "")
+        name = filename.replace("_rgb_values.json", "").replace("_colorchecker_format.json", "")
         
         # 处理特殊情况
         if name == "colorchecker_acescg":
@@ -288,7 +299,7 @@ class ParameterPanel(QWidget):
         self.density_gamma_spinbox = QDoubleSpinBox()
         self.density_dmax_slider = QSlider(Qt.Orientation.Horizontal)
         self.density_dmax_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 50, 400, 0.5, 4.0, 0.01)
+        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 30, 300, 0.3, 3.0, 0.01)
         self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01)
         inversion_layout.addWidget(QLabel("密度反差:"), 0, 0)
         inversion_layout.addWidget(self.density_gamma_slider, 0, 1)
@@ -503,6 +514,7 @@ class ParameterPanel(QWidget):
         self.cc_rotate_r_button.clicked.connect(self._on_cc_rotate_right)
         self.ccm_optimize_button.clicked.connect(self.ccm_optimize_requested.emit)
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
+        self.save_colorchecker_colors_button.clicked.connect(self.save_colorchecker_colors_requested.emit)
         self.colorchecker_combo.currentTextChanged.connect(self._on_colorchecker_changed)
 
     def update_ui_from_params(self):
@@ -1004,6 +1016,7 @@ class ParameterPanel(QWidget):
         self.cc_rotate_l_button.setVisible(checked)
         self.cc_rotate_r_button.setVisible(checked)
         self.colorchecker_combo.setVisible(checked)
+        self.save_colorchecker_colors_button.setVisible(checked)
         self.optimize_idt_checkbox.setVisible(checked)
         self.optimize_density_matrix_checkbox.setVisible(checked)
         self.ccm_optimize_button.setVisible(checked)
@@ -1048,6 +1061,7 @@ class ParameterPanel(QWidget):
 
     def _on_cc_selector_toggled(self, checked: bool):
         self.ccm_optimize_button.setEnabled(checked)
+        self.save_colorchecker_colors_button.setEnabled(checked)
         self.toggle_color_checker_requested.emit(checked)
 
     def _on_save_input_colorspace_clicked(self):
@@ -1145,9 +1159,9 @@ class ParameterPanel(QWidget):
         # 保存当前选择
         current_data = self.input_colorspace_combo.currentData()
         
-        # 清空并重新填充
+        # 清空并重新填充，只显示IDT色彩空间
         self.input_colorspace_combo.clear()
-        spaces = self.context.color_space_manager.get_available_color_spaces()
+        spaces = self.context.color_space_manager.get_idt_color_spaces()
         for space in spaces:
             self.input_colorspace_combo.addItem(space, space)
         

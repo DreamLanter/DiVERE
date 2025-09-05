@@ -3,8 +3,8 @@
     "version": "1.0",
     "weights": {
         "grayscale_weight": 1.0,
-        "skin_weight": 2.0,
-        "primaries_weight": 1.0,
+        "skin_weight": 3.0,
+        "primaries_weight": 3.0,
         "color_weight": 1.0
     },
     "individual_weights": {

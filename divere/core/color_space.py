@@ -371,6 +371,29 @@ class ColorSpaceManager:
         """获取可用的色彩空间列表"""
         return sorted(list(self._color_spaces.keys()))
     
+    def get_idt_color_spaces(self) -> list:
+        """获取IDT色彩空间列表（type包含'IDT'的色彩空间）"""
+        idt_spaces = []
+        for name, space in self._color_spaces.items():
+            space_type = space.get("type", [])
+            if isinstance(space_type, str):
+                space_type = [space_type]
+            if "IDT" in space_type:
+                idt_spaces.append(name)
+        return sorted(idt_spaces)
+    
+    def get_regular_color_spaces_with_icc(self) -> list:
+        """获取regular色彩空间列表（type包含'regular'且有icc_profile的色彩空间）"""
+        regular_spaces = []
+        for name, space in self._color_spaces.items():
+            space_type = space.get("type", [])
+            if isinstance(space_type, str):
+                space_type = [space_type]
+            icc_profile = space.get("icc_profile", "")
+            if "regular" in space_type and icc_profile:
+                regular_spaces.append(name)
+        return sorted(regular_spaces)
+    
     def reload_config(self):
         """重新加载色彩空间配置文件"""
         self._color_spaces.clear()

@@ -14,16 +14,21 @@ from pathlib import Path
 class SaveImageDialog(QDialog):
     """保存图像对话框"""
     
-    def __init__(self, parent=None, color_spaces=None, is_bw_mode=False):
+    def __init__(self, parent=None, color_spaces=None, is_bw_mode=False, color_space_manager=None):
         super().__init__(parent)
         self.setWindowTitle("保存图像设置")
         self.setModal(True)
         self.setMinimumWidth(400)
         self._save_mode = 'single'  # 'single' | 'all'
         self._is_bw_mode = is_bw_mode
+        self._color_space_manager = color_space_manager
         
         # 可用的色彩空间
-        self.color_spaces = color_spaces or ["sRGB", "AdobeRGB", "ProPhotoRGB"]
+        if color_spaces is None and color_space_manager:
+            # 使用过滤后的regular色彩空间（有ICC文件的）
+            self.color_spaces = color_space_manager.get_regular_color_spaces_with_icc()
+        else:
+            self.color_spaces = color_spaces or ["sRGB", "AdobeRGB", "ProPhotoRGB"]
         
         # 创建UI
         self._create_ui()

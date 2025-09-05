@@ -33,7 +33,10 @@ class CropLayoutManager:
         self.min_crop_size = 0.1  # 最小裁剪尺寸（归一化）
         self.max_crop_size = 0.5  # 最大裁剪尺寸（归一化）
         self.default_crop_size = 0.25  # 默认裁剪尺寸（归一化）
-        self.margin = 0.02  # 裁剪框之间的间距
+        self.margin = 0.02  # 边界间距
+        self.item_spacing_ratio = 0.0555  # 同行/同列内部间距比例（相对于crop长边）
+        self.row_spacing = 0.05  # 行与行之间间距（较大）
+        self.column_spacing = 0.03  # 列与列之间间距（较大）
         
     def get_layout_direction(self, image_aspect_ratio: float) -> str:
         """根据图片宽高比决定布局方向
@@ -50,6 +53,24 @@ class CropLayoutManager:
             return 'vertical'
         else:  # 接近正方形
             return 'horizontal'
+    
+    def _calculate_item_spacing(self, crop_w: float, crop_h: float, layout_direction: str) -> float:
+        """根据crop尺寸和布局方向计算实际的item间距
+        
+        Args:
+            crop_w: 裁剪框宽度
+            crop_h: 裁剪框高度
+            layout_direction: 布局方向 ('horizontal' 或 'vertical')
+            
+        Returns:
+            实际的间距值（归一化坐标）
+        """
+        if layout_direction == 'horizontal':
+            # 横向布局：间距相对于crop宽度（水平方向的长边）
+            return crop_w * self.item_spacing_ratio
+        else:
+            # 纵向布局：间距相对于crop高度（垂直方向的长边）
+            return crop_h * self.item_spacing_ratio
     
     def find_next_position(self, 
                           existing_crops: List[Tuple[float, float, float, float]],
@@ -111,16 +132,20 @@ class CropLayoutManager:
         
         if direction == 'horizontal':
             # 横向布局：从左到右，然后换行
-            return self._find_horizontal_position(existing_rects, crop_w, crop_h)
+            return self._find_horizontal_position(existing_rects, crop_w, crop_h, direction)
         else:
             # 纵向布局：从上到下，然后换列
-            return self._find_vertical_position(existing_rects, crop_w, crop_h)
+            return self._find_vertical_position(existing_rects, crop_w, crop_h, direction)
     
     def _find_horizontal_position(self, 
                                  existing_rects: List[CropRect],
                                  crop_w: float, 
-                                 crop_h: float) -> CropRect:
+                                 crop_h: float,
+                                 layout_direction: str) -> CropRect:
         """横向布局查找位置"""
+        # 计算动态间距：横向布局使用crop宽度作为参考
+        item_spacing = self._calculate_item_spacing(crop_w, crop_h, layout_direction)
+        
         # 按行组织现有裁剪
         rows = self._group_by_rows(existing_rects)
         
@@ -128,20 +153,25 @@ class CropLayoutManager:
         if rows:
             last_row = rows[-1]
             rightmost = max(last_row, key=lambda r: r.x + r.width)
-            new_x = rightmost.x + rightmost.width + self.margin
+            new_x = rightmost.x + rightmost.width + item_spacing
             new_y = rightmost.y
             
-            # 检查是否超出边界
-            if new_x + crop_w <= 1.0 - self.margin:
+            # 改进的空间判定逻辑：检查剩余空间是否足够，并添加安全边距
+            min_required_space = crop_w + self.margin  # 裁剪框宽度 + 右边距
+            available_space = 1.0 - new_x  # 从new_x到右边界的可用空间
+            safety_margin = 0.005  # 额外的安全边距
+            
+            if available_space >= min_required_space + safety_margin:
                 new_rect = CropRect(new_x, new_y, crop_w, crop_h)
-                # 检查是否与其他裁剪重叠
-                if not any(new_rect.overlaps_with(r) for r in existing_rects):
+                # 检查是否与其他裁剪重叠，并验证边界
+                if (not any(new_rect.overlaps_with(r, margin=0.005) for r in existing_rects) and
+                    new_rect.x + new_rect.width <= 1.0 - self.margin):
                     return new_rect
         
         # 需要新开一行
         if rows:
             bottommost = max(existing_rects, key=lambda r: r.y + r.height)
-            new_y = bottommost.y + bottommost.height + self.margin
+            new_y = bottommost.y + bottommost.height + self.row_spacing
         else:
             new_y = self.margin
         
@@ -161,8 +191,12 @@ class CropLayoutManager:
     def _find_vertical_position(self, 
                                existing_rects: List[CropRect],
                                crop_w: float, 
-                               crop_h: float) -> CropRect:
+                               crop_h: float,
+                               layout_direction: str) -> CropRect:
         """纵向布局查找位置"""
+        # 计算动态间距：纵向布局使用crop高度作为参考
+        item_spacing = self._calculate_item_spacing(crop_w, crop_h, layout_direction)
+        
         # 按列组织现有裁剪
         columns = self._group_by_columns(existing_rects)
         
@@ -171,19 +205,24 @@ class CropLayoutManager:
             last_column = columns[-1]
             bottommost = max(last_column, key=lambda r: r.y + r.height)
             new_x = bottommost.x
-            new_y = bottommost.y + bottommost.height + self.margin
+            new_y = bottommost.y + bottommost.height + item_spacing
             
-            # 检查是否超出边界
-            if new_y + crop_h <= 1.0 - self.margin:
+            # 改进的空间判定逻辑：检查剩余空间是否足够，并添加安全边距
+            min_required_space = crop_h + self.margin  # 裁剪框高度 + 下边距
+            available_space = 1.0 - new_y  # 从new_y到下边界的可用空间
+            safety_margin = 0.005  # 额外的安全边距
+            
+            if available_space >= min_required_space + safety_margin:
                 new_rect = CropRect(new_x, new_y, crop_w, crop_h)
-                # 检查是否与其他裁剪重叠
-                if not any(new_rect.overlaps_with(r) for r in existing_rects):
+                # 检查是否与其他裁剪重叠，并验证边界
+                if (not any(new_rect.overlaps_with(r, margin=0.005) for r in existing_rects) and
+                    new_rect.y + new_rect.height <= 1.0 - self.margin):
                     return new_rect
         
         # 需要新开一列
         if columns:
             rightmost = max(existing_rects, key=lambda r: r.x + r.width)
-            new_x = rightmost.x + rightmost.width + self.margin
+            new_x = rightmost.x + rightmost.width + self.column_spacing
         else:
             new_x = self.margin
         

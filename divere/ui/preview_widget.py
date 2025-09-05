@@ -345,15 +345,15 @@ class PreviewWidget(QWidget):
             self._crop_buttons_container.setSpacing(6)
             row.addLayout(self._crop_buttons_container)
             
-            # 新增按钮
+            # 添加拉伸将"+"按钮推到最右侧
+            row.addStretch()
+            
+            # 新增按钮（固定在最右侧）
             self.btn_add_crop = QPushButton("+")
             self.btn_add_crop.setMaximumWidth(32)
             self.btn_add_crop.setToolTip("添加新裁剪")
             self.btn_add_crop.clicked.connect(self._emit_request_new_crop)
             row.addWidget(self.btn_add_crop)
-            
-            # 添加拉伸以居中
-            row.addStretch()
             
             # 放到底部
             self.layout().addLayout(row)
@@ -2919,6 +2919,26 @@ class PreviewWidget(QWidget):
         except Exception:
             pass
         return None
+
+    def _apply_rotate_point(self, x: float, y: float, img_w: int, img_h: int, orientation: int) -> Tuple[float, float]:
+        """正向旋转点坐标"""
+        if orientation % 360 == 0:
+            return (x, y)
+            
+        # 标准化旋转角度
+        k = (orientation // 90) % 4
+        if k == 0:
+            return (x, y)
+        elif k == 1:  # 正向90°旋转（CCW 90°）
+            # 原图(W_o,H_o) → 显示(H_o,W_o): (x_d, y_d) = (y_o, W_o - 1 - x_o)
+            return (y, img_w - 1 - x)
+        elif k == 2:  # 正向180°旋转
+            return (img_w - 1 - x, img_h - 1 - y)
+        elif k == 3:  # 正向270°旋转（CCW 270°/CW 90°）
+            # 原图(W_o,H_o) → 显示(H_o,W_o): (x_d, y_d) = (H_o - 1 - y_o, x_o)
+            return (img_h - 1 - y, x)
+        else:
+            return (x, y)
 
     def _reverse_rotate_point(self, x: float, y: float, img_w: int, img_h: int, orientation: int) -> Tuple[float, float]:
         """逆向旋转点坐标"""

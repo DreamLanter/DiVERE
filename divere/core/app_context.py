@@ -103,6 +103,9 @@ class ApplicationContext(QObject):
         # AI自动校色迭代状态
         self._auto_color_iterations = 0
         self._get_preview_for_auto_color_callback = None
+        
+        # 色卡优化状态管理
+        self._ccm_optimization_active = False
 
         # 防抖自动保存
         self._autosave_timer = QTimer()
@@ -1384,9 +1387,21 @@ class ApplicationContext(QObject):
 
 
     def _on_preview_error(self, message: str):
-        self.status_message_changed.emit(f"预览更新失败: {message}")
+        # 在色卡优化期间不发送预览错误消息，避免覆盖优化状态
+        if not self._ccm_optimization_active:
+            self.status_message_changed.emit(f"预览更新失败: {message}")
+        else:
+            print(f"[DEBUG] 色卡优化期间忽略预览错误: {message}")
         self._auto_color_iterations = 0 # Stop iteration on error
         self._get_preview_for_auto_color_callback = None
+        
+    def set_ccm_optimization_active(self, active: bool):
+        """设置色卡优化状态"""
+        self._ccm_optimization_active = active
+        if active:
+            print(f"[DEBUG] CCM优化已激活，将忽略预览错误消息")
+        else:
+            print(f"[DEBUG] CCM优化已结束，恢复正常状态消息")
 
     def _on_preview_finished(self):
         self._preview_busy = False

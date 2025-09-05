@@ -139,44 +139,30 @@ class EnhancedConfigManager:
     
     def get_config_files(self, config_type: str) -> List[Path]:
         """
-        获取指定类型的配置文件列表（用户配置优先）
+        获取指定类型的配置文件列表（仅从项目配置目录）
         
         Args:
             config_type: 配置类型 ("colorspace", "curves", "matrices")
             
         Returns:
-            配置文件路径列表，用户配置在前
+            配置文件路径列表，仅包含项目配置目录中的文件
         """
         info(f"Getting config files for type: {config_type}", "EnhancedConfigManager")
         
-        user_dir = getattr(self, f"user_{config_type}_dir")
         app_dir = self.app_config_dir / config_type
         
-        debug(f"User dir: {user_dir} (exists: {user_dir.exists()})", "EnhancedConfigManager")
         debug(f"App dir: {app_dir} (exists: {app_dir.exists()})", "EnhancedConfigManager")
         
         config_files = []
-        search_paths = [str(user_dir), str(app_dir)]
+        search_paths = [str(app_dir)]
         
-        # 首先添加用户配置文件
-        if user_dir.exists():
-            user_files = list(user_dir.glob("*.json"))
-            debug(f"Found {len(user_files)} user config files", "EnhancedConfigManager")
-            for json_file in user_files:
-                config_files.append(json_file)
-                debug(f"Added user config: {json_file}", "EnhancedConfigManager")
-        
-        # 然后添加应用内置配置文件（如果用户没有同名文件）
+        # 仅从项目配置目录加载配置文件
         if app_dir.exists():
             app_files = list(app_dir.glob("*.json"))
             debug(f"Found {len(app_files)} app config files", "EnhancedConfigManager")
             for json_file in app_files:
-                user_file = user_dir / json_file.name
-                if not user_file.exists():  # 用户没有同名文件时才添加
-                    config_files.append(json_file)
-                    debug(f"Added app config: {json_file}", "EnhancedConfigManager")
-                else:
-                    debug(f"Skipped app config (user override exists): {json_file}", "EnhancedConfigManager")
+                config_files.append(json_file)
+                debug(f"Added app config: {json_file}", "EnhancedConfigManager")
         
         log_path_search(f"get_config_files({config_type})", search_paths, f"{len(config_files)} files found", "EnhancedConfigManager")
         
@@ -203,11 +189,8 @@ class EnhancedConfigManager:
         Returns:
             是否保存成功
         """
-        # 特殊处理：色彩空间和矩阵保存到项目config目录，其他保存到用户目录
-        if config_type in ["colorspace", "matrices"]:
-            save_dir = self.app_config_dir / config_type
-        else:
-            save_dir = getattr(self, f"user_{config_type}_dir")
+        # 所有配置都保存到项目config目录
+        save_dir = self.app_config_dir / config_type
         
         file_path = save_dir / f"{name}.json"
         
@@ -221,65 +204,53 @@ class EnhancedConfigManager:
             return False
     
     def delete_user_config(self, config_type: str, name: str) -> bool:
-        """删除用户配置文件"""
-        user_dir = getattr(self, f"user_{config_type}_dir")
-        file_path = user_dir / f"{name}.json"
+        """删除配置文件（从项目配置目录）"""
+        config_dir = self.app_config_dir / config_type
+        file_path = config_dir / f"{name}.json"
         
         if file_path.exists():
             try:
                 file_path.unlink()
-                print(f"用户配置已删除: {file_path}")
+                print(f"配置文件已删除: {file_path}")
                 return True
             except Exception as e:
-                print(f"删除用户配置失败: {e}")
+                print(f"删除配置文件失败: {e}")
                 return False
         return False
     
     def copy_default_to_user(self, config_type: str, name: str) -> bool:
-        """将默认配置复制到用户配置目录"""
-        app_dir = self.app_config_dir / config_type
-        user_dir = getattr(self, f"user_{config_type}_dir")
-        
-        source_file = app_dir / f"{name}.json"
-        target_file = user_dir / f"{name}.json"
-        
-        if source_file.exists() and not target_file.exists():
-            try:
-                shutil.copy2(source_file, target_file)
-                print(f"默认配置已复制到用户目录: {target_file}")
-                return True
-            except Exception as e:
-                print(f"复制配置失败: {e}")
-                return False
-        return False
+        """此方法已废弃，所有配置都在项目配置目录中"""
+        # 由于所有配置都在项目目录中，不需要复制操作
+        print("注意：所有配置都已统一在项目配置目录中，无需复制操作")
+        return True
     
     def get_user_config_dir_path(self) -> str:
-        """获取用户配置目录路径（用于显示给用户）"""
-        return str(self.user_config_dir)
+        """获取项目配置目录路径（用于显示给用户）"""
+        return str(self.app_config_dir)
     
     def open_user_config_dir(self):
-        """打开用户配置目录"""
+        """打开项目配置目录"""
         try:
             if platform.system() == "Darwin":  # macOS
-                os.system(f"open '{self.user_config_dir}'")
+                os.system(f"open '{self.app_config_dir}'")
             elif platform.system() == "Windows":
-                os.system(f"explorer '{self.user_config_dir}'")
+                os.system(f"explorer '{self.app_config_dir}'")
             elif platform.system() == "Linux":
-                os.system(f"xdg-open '{self.user_config_dir}'")
+                os.system(f"xdg-open '{self.app_config_dir}'")
         except Exception as e:
             print(f"打开配置目录失败: {e}")
     
     def backup_user_configs(self) -> bool:
-        """备份用户配置"""
-        backup_dir = self.user_config_dir / "backup" / f"backup_{int(time.time())}"
+        """备份项目配置"""
+        backup_dir = self.app_config_dir.parent / "backup" / f"backup_{int(time.time())}"
         
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(self.user_config_dir / "config", backup_dir / "config", dirs_exist_ok=True)
-            print(f"用户配置已备份到: {backup_dir}")
+            shutil.copytree(self.app_config_dir, backup_dir / "config", dirs_exist_ok=True)
+            print(f"项目配置已备份到: {backup_dir}")
             return True
         except Exception as e:
-            print(f"备份用户配置失败: {e}")
+            print(f"备份项目配置失败: {e}")
             return False
     
     # 应用设置相关方法

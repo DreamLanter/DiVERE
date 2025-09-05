@@ -1,6 +1,8 @@
 {
     "name": "Gray Gamma 2.2",
-    "type": "grayscale",
+    "type": ["regular"],
+    "icc_profile": "Gray Gamma 2.2.icc",
+    "color_type": "grayscale",
     "gamma": 2.2,
     "white_point": [0.3127, 0.3290],
     "description": "Grayscale color space with gamma 2.2 curve"

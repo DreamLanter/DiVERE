@@ -1,5 +1,7 @@
 {
     "name": "CCFLGeneric_Linear",
+    "type": ["IDT", "regular"],
+    "icc_profile": "sRGB Profile.icc",
     "primaries": {
         "R": [0.6400, 0.3300],
         "G": [0.2100, 0.7100],

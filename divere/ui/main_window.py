@@ -27,6 +27,7 @@ from .preview_widget import PreviewWidget
 from .save_dialog import SaveImageDialog
 from .parameter_panel import ParameterPanel
 from .theme import apply_theme, current_theme
+from .cmaes_progress_dialog import CMAESProgressDialog
 
 
 class MainWindow(QMainWindow):
@@ -169,6 +170,7 @@ class MainWindow(QMainWindow):
         self.parameter_panel.ccm_optimize_requested.connect(self._on_ccm_optimize_requested)
         self.parameter_panel.save_custom_colorspace_requested.connect(self._on_save_custom_colorspace_requested)
         self.parameter_panel.save_density_matrix_requested.connect(self._on_save_density_matrix_requested)
+        self.parameter_panel.save_colorchecker_colors_requested.connect(self._on_save_colorchecker_colors_requested)
         self.parameter_panel.toggle_color_checker_requested.connect(self.preview_widget.toggle_color_checker)
         # 色卡变换信号连接
         self.parameter_panel.cc_flip_horizontal_requested.connect(self.preview_widget.flip_colorchecker_horizontal)
@@ -876,7 +878,16 @@ class MainWindow(QMainWindow):
         else:
             corr_mat = params.density_matrix if (use_mat and params.density_matrix is not None) else None
 
-        self.statusBar().showMessage("正在根据色卡优化光谱锐化参数...（CMA-ES）")
+        # 创建并显示进度对话框
+        progress_dialog = CMAESProgressDialog(self)
+        progress_dialog.set_max_iterations(sharpening_config.max_iter)
+        progress_dialog.start_optimization()  # 立即启动优化状态
+        progress_dialog.show()
+        progress_dialog.raise_()  # 确保对话框在前台
+        
+        # 激活优化状态，避免其他状态消息干扰
+        self.context.set_ccm_optimization_active(True)
+        self.statusBar().showMessage("正在进行光谱锐化优化...")
         
         # 获取UI当前参数作为优化初值
         current_params = self.context.get_current_params()
@@ -908,7 +919,7 @@ class MainWindow(QMainWindow):
 
         # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
         class _CCMWorker(QRunnable):
-            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params):
+            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params, status_callback=None):
                 super().__init__()
                 self.image_array = image_array
                 self.corners = corners
@@ -917,6 +928,7 @@ class MainWindow(QMainWindow):
                 self.mat = mat
                 self.config = config
                 self.ui_params = ui_params
+                self.status_callback = status_callback
                 self.result = None
                 self.error = None
             @Slot()
@@ -933,16 +945,41 @@ class MainWindow(QMainWindow):
                         reference_file=self.config.reference_file,
                         sharpening_config=self.config,
                         ui_params=self.ui_params,
+                        status_callback=self.status_callback,
                     )
                 except Exception as e:
                     import traceback
                     self.error = f"{e}\n{traceback.format_exc()}"
 
-        worker = _CCMWorker(source_image.array, cc_corners_source, input_gamma, use_mat, corr_mat, sharpening_config, ui_params)
+        # 创建线程安全的状态回调，使用信号/槽机制
+        def thread_safe_status_callback(message: str):
+            print(f"[DEBUG] 收到状态回调: '{message}'")
+            
+            # 使用线程安全的信号机制更新进度对话框
+            # 这确保所有UI更新都在主线程中执行
+            try:
+                progress_dialog.request_update_progress(message)
+                print(f"[DEBUG] 通过信号更新进度对话框")
+            except Exception as e:
+                print(f"[DEBUG] 信号更新失败，使用QTimer备用方案: {e}")
+                # 备用方案：使用QTimer确保主线程执行
+                def update_progress_dialog(msg=message):
+                    try:
+                        if progress_dialog and progress_dialog.isVisible():
+                            progress_dialog.request_update_progress(msg)
+                    except Exception as ex:
+                        print(f"[DEBUG] 备用方案也失败: {ex}")
+                
+                QTimer.singleShot(0, update_progress_dialog)
+        
+        worker = _CCMWorker(source_image.array, cc_corners_source, input_gamma, use_mat, corr_mat, sharpening_config, ui_params, thread_safe_status_callback)
 
         def _on_done():
             try:
                 if worker.error:
+                    # 结束优化状态
+                    self.context.set_ccm_optimization_active(False)
+                    progress_dialog.finish_optimization(False)
                     QMessageBox.critical(self, "优化失败", worker.error)
                     self.statusBar().showMessage("光谱锐化优化失败")
                     return
@@ -953,6 +990,9 @@ class MainWindow(QMainWindow):
                 if sharpening_config.optimize_idt_transformation:
                     primaries_xy = np.asarray(params_dict.get('primaries_xy'), dtype=float)
                     if primaries_xy is None or primaries_xy.shape != (3, 2):
+                        # 结束优化状态
+                        self.context.set_ccm_optimization_active(False)
+                        progress_dialog.finish_optimization(False)
                         QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
                         self.statusBar().showMessage("光谱锐化优化完成但结果无效")
                         return
@@ -992,19 +1032,32 @@ class MainWindow(QMainWindow):
                     new_params.density_matrix_name = "optimized_custom"
 
                 self.context.update_params(new_params)
-                self.statusBar().showMessage(
-                    f"光谱锐化完成：RMSE={float(res.get('rmse', 0.0)):.4f}, 已应用到自定义输入色彩变换"
-                )
+                final_delta_e = float(res.get('rmse', 0.0))
+                
+                # 结束优化状态
+                self.context.set_ccm_optimization_active(False)
+                progress_dialog.finish_optimization(True, final_delta_e)
+                
+                completion_message = f"光谱锐化完成：最终Delta E={final_delta_e:.4f}"
+                self.statusBar().showMessage(completion_message)
+                print(f"[DEBUG] 优化完成，显示消息: '{completion_message}'")
             finally:
                 pass
 
         # 轮询检测任务完成（简化型）。
         def _poll():
-            if getattr(worker, 'result', None) is not None or getattr(worker, 'error', None) is not None:
-                _on_done(); return
+            has_result = getattr(worker, 'result', None) is not None
+            has_error = getattr(worker, 'error', None) is not None
+            print(f"[DEBUG] _poll: has_result={has_result}, has_error={has_error}")
+            if has_result or has_error:
+                print(f"[DEBUG] Worker完成，调用_on_done")
+                _on_done()
+                return
             QTimer.singleShot(150, _poll)
 
+        print(f"[DEBUG] 启动Worker线程")
         self.context.thread_pool.start(worker)
+        print(f"[DEBUG] 启动轮询检查")
         QTimer.singleShot(150, _poll)
 
     def _on_save_custom_colorspace_requested(self, primaries_dict: dict):
@@ -1042,6 +1095,7 @@ class MainWindow(QMainWindow):
             # 构建保存数据
             data = {
                 "name": save_name,
+                "type": ["IDT"],
                 "description": description,
                 "primaries": {
                     "R": [float(primaries_dict['R'][0]), float(primaries_dict['R'][1])],
@@ -1117,6 +1171,8 @@ class MainWindow(QMainWindow):
                 
                 # 重新加载矩阵列表并自动应用刚保存的矩阵
                 try:
+                    # 重新加载所有配置
+                    self.context.reload_all_configs()
                     # 刷新parameter_panel的矩阵下拉列表
                     self.parameter_panel._refresh_matrix_combo()
                     # 自动选择并应用刚保存的矩阵
@@ -1134,6 +1190,190 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存密度矩阵时出错：\n{str(e)}")
+    
+    def _on_save_colorchecker_colors_requested(self):
+        """保存色卡颜色到JSON文件"""
+        try:
+            from PySide6.QtWidgets import QInputDialog, QMessageBox, QFileDialog
+            import json
+            from datetime import datetime
+            
+            # 检查色卡选择器是否启用
+            if not self.preview_widget.cc_enabled:
+                QMessageBox.warning(self, "警告", "请先启用色卡选择器")
+                return
+            
+            # 从原图像中直接读取色卡颜色数据（假设为ACEScg）
+            rgb_patches = self._extract_original_colorchecker_patches()
+            if rgb_patches is None or rgb_patches.shape[0] != 24:
+                QMessageBox.warning(self, "警告", "无法读取色卡数据，请检查色卡选择器位置是否正确")
+                return
+            
+            # 输入文件名
+            save_name, ok = QInputDialog.getText(
+                self,
+                "保存色卡颜色",
+                "请输入色卡文件名称:",
+                text="custom_colorchecker"
+            )
+            
+            if not ok or not save_name.strip():
+                return
+            
+            save_name = save_name.strip()
+            
+            # 输入描述信息
+            description, ok = QInputDialog.getText(
+                self,
+                "色卡描述",
+                "请输入色卡描述信息:",
+                text=f"从图像中提取的色卡数据 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+            
+            if not ok:
+                description = "用户自定义色卡数据"
+            
+            # 构造保存数据
+            colorchecker_data = {
+                "description": description,
+                "color_space": "ACEScg (AP1 primaries, D60 white point)",
+                "conversion_path": "直接从原图像读取RGB值（假设为ACEScg）",
+                "data": {}
+            }
+            
+            # 将24个色块数据按A1-D6格式整理
+            patch_ids = []
+            for row in ['A', 'B', 'C', 'D']:
+                for col in range(1, 7):
+                    patch_ids.append(f"{row}{col}")
+            
+            for i, patch_id in enumerate(patch_ids):
+                if i < rgb_patches.shape[0]:
+                    r, g, b = rgb_patches[i]
+                    colorchecker_data["data"][patch_id] = [float(r), float(g), float(b)]
+            
+            # 选择保存位置
+            try:
+                from divere.utils.app_paths import resolve_data_path
+                default_dir = str(resolve_data_path("config", "colorchecker"))
+            except Exception:
+                from pathlib import Path
+                default_dir = str(Path(__file__).parent.parent / "config" / "colorchecker")
+            
+            filename = f"{save_name}_rgb_values.json"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "保存色卡颜色文件",
+                f"{default_dir}/{filename}",
+                "JSON文件 (*.json)"
+            )
+            
+            if file_path:
+                # 确保文件扩展名正确
+                if not file_path.endswith('.json'):
+                    file_path += '.json'
+                
+                # 写入JSON文件
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(colorchecker_data, f, indent=4, ensure_ascii=False)
+                
+                QMessageBox.information(self, "保存成功", f"色卡颜色已保存到：\n{file_path}")
+                
+                # 刷新色卡下拉列表
+                try:
+                    self.parameter_panel._populate_colorchecker_combo()
+                except AttributeError:
+                    pass
+                    
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"保存色卡颜色时出错：\n{str(e)}")
+    
+    def _extract_original_colorchecker_patches(self):
+        """从原图像中直接读取色卡区域的RGB值，假设为ACEScg色彩空间"""
+        try:
+            import numpy as np
+            import cv2
+            
+            # 检查必要条件
+            if not (self.preview_widget.cc_enabled and 
+                    self.preview_widget.cc_corners_norm and 
+                    self.context.get_current_image()):
+                return None
+            
+            # 获取原图像数据
+            original_image = self.context.get_current_image()
+            original_array = original_image.array
+            if original_array is None:
+                return None
+            
+            # 确保数据为float32格式
+            if original_array.dtype == np.uint8:
+                original_array = original_array.astype(np.float32) / 255.0
+            else:
+                original_array = np.clip(original_array, 0.0, 1.0).astype(np.float32)
+            
+            # 获取图像尺寸
+            H_img, W_img = original_array.shape[:2]
+            
+            # 获取色卡角点的归一化坐标
+            cc_corners_norm = self.preview_widget.cc_corners_norm
+            
+            # 转换归一化坐标到原图像坐标
+            corners_img = []
+            for x_norm, y_norm in cc_corners_norm:
+                x_img = x_norm * W_img
+                y_img = y_norm * H_img
+                corners_img.append([x_img, y_img])
+            
+            # 计算透视变换矩阵
+            src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+            dst = np.array(corners_img, dtype=np.float32)
+            H = cv2.getPerspectiveTransform(src, dst)
+            
+            # 提取24个色块
+            margin = 0.18  # 边距，避免边界污染
+            rgb_list = []
+            
+            # 按4行6列提取色块
+            for r in range(4):
+                for c in range(6):
+                    # 计算色块在归一化坐标系中的位置
+                    gx0 = c / 6.0
+                    gx1 = (c + 1) / 6.0
+                    gy0 = r / 4.0
+                    gy1 = (r + 1) / 4.0
+                    
+                    # 应用边距
+                    sx0 = gx0 + margin * (gx1 - gx0)
+                    sx1 = gx1 - margin * (gx1 - gx0)
+                    sy0 = gy0 + margin * (gy1 - gy0)
+                    sy1 = gy1 - margin * (gy1 - gy0)
+                    
+                    # 变换到图像坐标系
+                    rect = np.array([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]], dtype=np.float32)
+                    rect_h = np.hstack([rect, np.ones((4, 1), dtype=np.float32)])
+                    poly = (H @ rect_h.T).T
+                    poly = poly[:, :2] / poly[:, 2:3]
+                    
+                    # 转换为整数坐标并创建掩码
+                    poly_int = np.round(poly).astype(np.int32)
+                    mask = np.zeros((H_img, W_img), dtype=np.uint8)
+                    cv2.fillPoly(mask, [poly_int], 255)
+                    
+                    # 提取色块的平均RGB值（直接假设为ACEScg）
+                    m = mask.astype(bool)
+                    if not np.any(m):
+                        rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                    else:
+                        rgb = original_array[m].reshape(-1, original_array.shape[2]).mean(axis=0)
+                    
+                    rgb_list.append(rgb.astype(np.float32))
+            
+            return np.stack(rgb_list, axis=0)
+            
+        except Exception as e:
+            print(f"提取原图色卡色块失败: {e}")
+            return None
     
     def _initialize_color_space_info(self):
         """初始化色彩空间信息"""
@@ -1175,7 +1415,7 @@ class MainWindow(QMainWindow):
                 available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
         # 打开保存设置对话框
-        save_dialog = SaveImageDialog(self, available_spaces, is_bw_mode)
+        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         
@@ -1206,7 +1446,7 @@ class MainWindow(QMainWindow):
             if not available_spaces:
                 available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
-        save_dialog = SaveImageDialog(self, available_spaces, is_bw_mode)
+        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
             
@@ -1266,9 +1506,14 @@ class MainWindow(QMainWindow):
                 return
             else:
                 # 保存单张
-                if crops and active_id:
+                if not crops:
+                    # 没有crops：single模式，不加"接触印像"
+                    default_filename = _default_name_single()
+                elif active_id:
+                    # 有crops且有激活crop：按编号命名
                     default_filename = _default_name_contactsheet_single()
                 elif has_contactsheet_single:
+                    # 有crops但没激活crop：接触印像命名
                     default_filename = _default_name_contactsheet_single()
                 else:
                     default_filename = _default_name_single()

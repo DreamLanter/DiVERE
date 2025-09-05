@@ -51,6 +51,7 @@ def run(
     reference_file: str = "colorchecker_acescg_rgb_values.json",
     sharpening_config: Optional[Any] = None,  # SpectralSharpeningConfig
     ui_params: Optional[Dict] = None,  # 来自UI的当前参数
+    status_callback: Optional[callable] = None,  # 状态回调函数
 ) -> Dict[str, Any]:
     """
     执行光谱锐化优化，返回优化结果（不改动核心算法）。
@@ -94,13 +95,14 @@ def run(
     if sharpening_config is not None:
         optimizer = CCMOptimizer(
             reference_file=sharpening_config.reference_file,
-            sharpening_config=sharpening_config
+            sharpening_config=sharpening_config,
+            status_callback=status_callback
         )
         max_iter = sharpening_config.max_iter
         tolerance = sharpening_config.tolerance
     else:
         # 向后兼容：使用传统参数
-        optimizer = CCMOptimizer(reference_file=reference_file)
+        optimizer = CCMOptimizer(reference_file=reference_file, status_callback=status_callback)
         max_iter = optimizer_max_iter
         tolerance = optimizer_tolerance
 
@@ -111,6 +113,7 @@ def run(
         tolerance=float(tolerance),
         correction_matrix=cm,
         ui_params=ui_params,
+        status_callback=status_callback,
     )
 
     # 附加评估

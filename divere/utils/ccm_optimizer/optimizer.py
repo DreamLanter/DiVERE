@@ -46,7 +46,8 @@ class CCMOptimizer:
     def __init__(self, reference_file: str = "colorchecker_acescg_rgb_values.json",
                  weights_config_path: Optional[str] = None,
                  bounds_config_path: Optional[str] = None,
-                 sharpening_config: Optional['SpectralSharpeningConfig'] = None):
+                 sharpening_config: Optional['SpectralSharpeningConfig'] = None,
+                 status_callback: Optional[callable] = None):
         """
         初始化优化器
         
@@ -77,6 +78,9 @@ class CCMOptimizer:
         self._channel_weights = self._load_channel_weights(self._weights_config)
         # 加载参数边界配置
         self._bounds_config = self._load_optimization_bounds(bounds_config_path)
+        
+        # 状态回调函数
+        self.status_callback = status_callback
         
         # 根据配置构建参数映射
         self._build_parameter_mapping()
@@ -527,7 +531,8 @@ class CCMOptimizer:
                  max_iter: int = 1000,
                  tolerance: float = 1e-8,
                  correction_matrix: Optional[np.ndarray] = None,
-                 ui_params: Optional[Dict] = None) -> Dict:
+                 ui_params: Optional[Dict] = None,
+                 status_callback: Optional[callable] = None) -> Dict:
         """
         执行优化
         
@@ -542,21 +547,28 @@ class CCMOptimizer:
         Returns:
             优化结果字典
         """
+        # 使用传入的回调或实例回调
+        callback = status_callback or self.status_callback
+        
         # 如果提供了UI参数，使用它们作为初值
         if ui_params:
-            print(f"使用UI参数作为初值: {ui_params}")
+            if callback:
+                callback(f"使用UI参数作为初值: {ui_params}")
             self._update_initial_params_from_ui(ui_params)
-            print(f"更新后的初始参数: {self.initial_params}")
+            if callback:
+                callback(f"更新后的初始参数: {self.initial_params}")
         else:
-            print("使用默认初始参数（未提供UI参数）")
+            if callback:
+                callback("使用默认初始参数（未提供UI参数）")
             
-        print(f"开始优化，目标：最小化24个色块的Delta E 1994色差")
-        print(f"优化方法: {method}")
-        print(f"最大迭代: {max_iter}")
-        print(f"收敛容差: {tolerance}")
+        if callback:
+            callback(f"开始优化，目标：最小化24个色块的Delta E 1994色差")
+            callback(f"优化方法: {method}")
+            callback(f"最大迭代: {max_iter}")
+            callback(f"收敛容差: {tolerance}")
         
         # 统一使用 CMA-ES
-        return self._optimize_cma(input_patches, max_iter=max_iter, tolerance=tolerance, correction_matrix=correction_matrix)
+        return self._optimize_cma(input_patches, max_iter=max_iter, tolerance=tolerance, correction_matrix=correction_matrix, status_callback=callback)
     
     def evaluate_parameters(self, params_dict: Dict,
                            input_patches: Dict[str, Tuple[float, float, float]],
@@ -689,7 +701,8 @@ class CCMOptimizer:
                       input_patches: Dict[str, Tuple[float, float, float]],
                       max_iter: int = 1000,
                       tolerance: float = 1e-8,
-                      correction_matrix: Optional[np.ndarray] = None) -> Dict:
+                      correction_matrix: Optional[np.ndarray] = None,
+                      status_callback: Optional[callable] = None) -> Dict:
         try:
             import cma
         except Exception as e:
@@ -704,34 +717,49 @@ class CCMOptimizer:
             'scaling_of_variables': span.tolist(),
             'maxiter': int(max_iter),
             'ftarget': float(tolerance),
-            'verb_disp': 1,
-            'verbose': 1,
+            'verb_disp': 0,  # 禁用CMA-ES内置显示
+            'verbose': -1,   # 禁用详细输出
             'popsize': int(8 + 4 * np.log(len(x0))),
         }
 
         es = cma.CMAEvolutionStrategy(x0, sigma0, opts)
-        best_rmse = float('inf')
+        best_delta_e = float('inf')
         while not es.stop():
             xs = es.ask()
             fs = [float(self.compute_rmse(x, input_patches, correction_matrix=correction_matrix)) for x in xs]
             es.tell(xs, fs)
-            es.disp()
+            # es.disp()  # 禁用CMA-ES内置显示，使用我们自己的状态回调
             gen_best = float(np.min(fs))
-            if gen_best < best_rmse:
-                best_rmse = gen_best
-            print(f"迭代 {es.countiter:3d}: RMSE={gen_best:.6f}  (累计最优={best_rmse:.6f})")
+            if gen_best < best_delta_e:
+                best_delta_e = gen_best
+            message = f"迭代 {es.countiter:3d}: Delta E={gen_best:.6f}  (累计最优={best_delta_e:.6f})"
+            if status_callback:
+                status_callback(message)
+            else:
+                print(message)
 
         res = es.result  # type: ignore[attr-defined]
         xbest = np.array(res.xbest, dtype=float)
         fbest = float(res.fbest)
         nit = int(es.countiter)
         optimal_params = self._params_to_dict(xbest)
-        print("✓ 优化成功完成")
-        print(f"最终RMSE: {fbest:.6f}")
-        print(f"迭代次数: {nit}")
+        
+        completion_message = "✓ 优化成功完成"
+        final_message = f"最终Delta E: {fbest:.6f}"
+        iterations_message = f"迭代次数: {nit}"
+        
+        if status_callback:
+            status_callback(completion_message)
+            status_callback(final_message)
+            status_callback(iterations_message)
+        else:
+            print(completion_message)
+            print(final_message)
+            print(iterations_message)
+            
         return {
             'success': True,
-            'rmse': fbest,
+            'rmse': fbest,  # 保持字段名为rmse以兼容现有代码，但实际是Delta E
             'iterations': nit,
             'parameters': optimal_params,
             'raw_result': res,
@@ -754,16 +782,28 @@ def optimize_from_image(image_array: np.ndarray,
         优化结果字典
     """
     # 提取色块
-    print("提取ColorChecker色块...")
+    # status_callback 已经在上面被 pop 出来了
+    
+    message = "提取ColorChecker色块..."
+    if status_callback:
+        status_callback(message)
+    else:
+        print(message)
+        
     input_patches = extract_colorchecker_patches(image_array, corners)
     
     if not input_patches:
         raise ValueError("无法提取色块数据")
     
-    print(f"成功提取 {len(input_patches)} 个色块")
+    message = f"成功提取 {len(input_patches)} 个色块"
+    if status_callback:
+        status_callback(message)
+    else:
+        print(message)
     
     # 创建优化器并执行优化
-    optimizer = CCMOptimizer(reference_file)
+    status_callback = optimizer_kwargs.pop('status_callback', None)
+    optimizer = CCMOptimizer(reference_file, status_callback=status_callback)
     result = optimizer.optimize(input_patches, **optimizer_kwargs)
     
     # 评估最终结果
@@ -788,10 +828,10 @@ if __name__ == "__main__":
     # 测试目标函数
     test_params = optimizer._dict_to_params(optimizer.initial_params)
     rmse = optimizer.objective_function(test_params, test_patches)
-    print(f"初始参数RMSE: {rmse:.6f}")
+    print(f"初始参数Delta E: {rmse:.6f}")
     
     # 测试优化
     print("\n开始测试优化...")
     result = optimizer.optimize(test_patches, max_iter=10)
     print(f"优化结果: {result['success']}")
-    print(f"最终RMSE: {result['rmse']:.6f}")
+    print(f"最终Delta E: {result['rmse']:.6f}")

@@ -1,5 +1,7 @@
 {
     "name": "DisplayP3",
+    "type": ["regular"],
+    "icc_profile": "Display P3.icc",
     "primaries": {
         "R": [0.6800, 0.3200],
         "G": [0.2650, 0.6900],

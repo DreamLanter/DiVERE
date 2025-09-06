@@ -299,7 +299,7 @@ class ParameterPanel(QWidget):
         self.density_gamma_spinbox = QDoubleSpinBox()
         self.density_dmax_slider = QSlider(Qt.Orientation.Horizontal)
         self.density_dmax_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 30, 300, 0.3, 3.0, 0.01)
+        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 10, 400, 0.1, 4.0, 0.01)
         self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01)
         inversion_layout.addWidget(QLabel("密度反差:"), 0, 0)
         inversion_layout.addWidget(self.density_gamma_slider, 0, 1)

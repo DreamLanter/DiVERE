@@ -3,15 +3,15 @@
     "version": "1.0",
     "parameter_bounds": {
         "gamma": {
-            "min": 1.99,
-            "max": 2.01,
+            "min": 1.9,
+            "max": 2.1,
             "default": 2.0,
             "description": "密度反差参数"
         },
         "dmax": {
-            "min": 0.5,
-            "max": 4.0,
-            "default": 2.0,
+            "min": 1.5,
+            "max": 3.5,
+            "default": 2.5,
             "description": "最大密度参数"
         },
         "r_gain": {

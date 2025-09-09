@@ -186,7 +186,7 @@ class FilmMathOps:
     # =======================
     
     def density_inversion(self, image_array: np.ndarray, gamma: float, dmax: float, 
-                         pivot: float = 0.9, use_optimization: bool = True,
+                         pivot: float = 0.7, use_optimization: bool = True,
                          use_parallel: bool = True, use_gpu: bool = True) -> np.ndarray:
         """
         密度反相操作（支持GPU加速、多线程并行）
@@ -370,7 +370,7 @@ class FilmMathOps:
     # =======================
     
     def gamma_dmax_adjustment(self, image_array: np.ndarray, gamma: float, dmax: float,
-                             pivot: float = 0.9) -> np.ndarray:
+                             pivot: float = 0.7) -> np.ndarray:
         """
         Gamma和Dmax调整（作为图片级别调整）
         
@@ -391,7 +391,7 @@ class FilmMathOps:
     # =======================
     
     def apply_density_matrix(self, density_array: np.ndarray, matrix: np.ndarray,
-                               dmax: float, pivot: float = 0.9, 
+                               dmax: float, pivot: float = 4.8-0.7,
                                use_parallel: bool = True) -> np.ndarray:
         """
         应用密度校正矩阵

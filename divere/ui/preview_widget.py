@@ -2297,6 +2297,8 @@ class PreviewWidget(QWidget):
             self._rotate_direction = 0
             self._rotate_anchor_p = None
             self._rotate_old_wh = None
+            # 旋转完成后自动适应窗口
+            self.fit_to_window()
         
     def rotate_left(self):
         """左旋90度"""

@@ -694,6 +694,16 @@ class ColorGradingParams:
         if "screen_glare_compensation" in data:
             params.screen_glare_compensation = float(data["screen_glare_compensation"])
         
+        # Pipeline控制标志（新增：支持folder_default保存的启用状态）
+        if "enable_density_matrix" in data:
+            params.enable_density_matrix = bool(data["enable_density_matrix"])
+        if "enable_density_curve" in data:
+            params.enable_density_curve = bool(data["enable_density_curve"])
+        if "enable_rgb_gains" in data:
+            params.enable_rgb_gains = bool(data["enable_rgb_gains"])
+        if "enable_density_inversion" in data:
+            params.enable_density_inversion = bool(data["enable_density_inversion"])
+        
         # Backward compatibility for matrix
         if 'density_matrix' in data:
             params.density_matrix = np.array(data['density_matrix'])

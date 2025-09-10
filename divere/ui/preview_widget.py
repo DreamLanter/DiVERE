@@ -116,7 +116,7 @@ class PreviewWidget(QWidget):
     request_focus_crop = Signal(str)  # 请求聚焦某个裁剪
     request_restore_crop = Signal()  # 返回原图模式
     request_smart_add_crop = Signal()  # 智能添加裁剪
-    request_focus_contactsheet = Signal()  # 单张/接触印像的裁剪聚焦
+    request_focus_contactsheet = Signal()  # 单张/接触印相的裁剪聚焦
     
     def __init__(self, context=None):
         super().__init__()
@@ -370,10 +370,10 @@ class PreviewWidget(QWidget):
                 if w:
                     w.setParent(None)
             
-            # 文案：原图/接触印像
+            # 文案：原图/接触印相
             has_crops = isinstance(crops, list) and len(crops) > 0
             try:
-                self.btn_contactsheet.setText("接触印像" if has_crops else "原图")
+                self.btn_contactsheet.setText("接触印相" if has_crops else "原图")
             except Exception:
                 pass
 
@@ -386,7 +386,7 @@ class PreviewWidget(QWidget):
             else:
                 self.btn_contactsheet.setChecked(active_crop_id is None and not is_focused)
 
-            # 裁剪聚焦开关：仅在"原图/接触印像"模式（active_crop_id 为 None）显示
+            # 裁剪聚焦开关：仅在"原图/接触印相"模式（active_crop_id 为 None）显示
             try:
                 show_focus_toggle = (active_crop_id is None)
                 self.btn_focus_toggle.setVisible(bool(show_focus_toggle))
@@ -443,7 +443,7 @@ class PreviewWidget(QWidget):
             print(f"刷新裁剪选择条失败: {e}")
 
     def _on_focus_toggle_toggled(self, checked: bool):
-        """左侧裁剪聚焦开关：仅在原图/接触印像模式出现。"""
+        """左侧裁剪聚焦开关：仅在原图/接触印相模式出现。"""
         try:
             if checked:
                 self.request_focus_contactsheet.emit()

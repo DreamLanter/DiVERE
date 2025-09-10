@@ -5,7 +5,7 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from divere.core.data_types import Preset, ColorGradingParams
 
@@ -62,6 +62,82 @@ class PresetManager:
             raise ValueError(f"解析预设文件失败 {file_path}: {e}")
         except IOError as e:
             raise IOError(f"无法加载预设文件 {file_path}: {e}")
+
+    @staticmethod
+    def save_folder_default(preset_path: str, idt_data: Dict[str, Any], cc_params_data: Dict[str, Any]) -> None:
+        """
+        在divere_presets.json中保存文件夹默认设置。
+
+        Args:
+            preset_path: divere_presets.json文件路径
+            idt_data: 输入变换数据
+            cc_params_data: 色彩校正参数数据
+        
+        Raises:
+            IOError: 如果文件读写失败。
+        """
+        try:
+            path = Path(preset_path)
+            
+            # 读取现有数据，如果文件不存在则创建空字典
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            else:
+                data = {}
+            
+            # 添加或更新folder_default条目
+            data['folder_default'] = {
+                'idt': idt_data,
+                'cc_params': cc_params_data
+            }
+            
+            # 确保目录存在
+            path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 保存更新后的数据
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                
+        except IOError as e:
+            raise IOError(f"无法保存文件夹默认设置到 {preset_path}: {e}")
+
+    @staticmethod
+    def load_folder_default(preset_path: str) -> Optional[Dict[str, Any]]:
+        """
+        从divere_presets.json中加载文件夹默认设置。
+
+        Args:
+            preset_path: divere_presets.json文件路径
+
+        Returns:
+            包含'idt'和'cc_params'的字典，如果不存在则返回None。
+        """
+        try:
+            path = Path(preset_path)
+            if not path.exists():
+                return None
+            
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            return data.get('folder_default')
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    @staticmethod
+    def has_folder_default(preset_path: str) -> bool:
+        """
+        检查divere_presets.json中是否存在文件夹默认设置。
+
+        Args:
+            preset_path: divere_presets.json文件路径
+
+        Returns:
+            如果存在folder_default字段则返回True，否则返回False。
+        """
+        folder_default = PresetManager.load_folder_default(preset_path)
+        return folder_default is not None
 
 
 def apply_preset_to_params(preset: Preset, params: ColorGradingParams) -> None:

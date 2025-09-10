@@ -403,15 +403,34 @@ class MainWindow(QMainWindow):
         reset_action = QAction("重置", self)
         reset_action.triggered.connect(self._reset_parameters)
         toolbar.addAction(reset_action)
-        # 沿用接触印像设置（只在聚焦裁剪时可用）
-        apply_contactsheet_action = QAction("沿用接触印像设置", self)
-        apply_contactsheet_action.setToolTip("将接触印像的调色参数复制到当前裁剪")
+        
+        # 设为当前文件夹默认
+        set_folder_default_action = QAction("设为当前文件夹默认", self)
+        set_folder_default_action.setToolTip("将当前参数设置保存为当前文件夹的默认设置")
+        set_folder_default_action.triggered.connect(self._set_folder_default)
+        toolbar.addAction(set_folder_default_action)
+        
+        # 沿用接触印相设置（只在聚焦裁剪时可用）
+        apply_contactsheet_action = QAction("沿用接触印相设置", self)
+        apply_contactsheet_action.setToolTip("将接触印相的调色参数复制到当前裁剪")
         apply_contactsheet_action.triggered.connect(self._on_apply_contactsheet_to_crop)
         toolbar.addAction(apply_contactsheet_action)
         self._apply_contactsheet_action = apply_contactsheet_action
         # 初始禁用，进入聚焦模式后启用
         try:
             self._apply_contactsheet_action.setEnabled(False)
+        except Exception:
+            pass
+
+        # 应用当前设置到接触印相（只在聚焦裁剪时可用）
+        apply_to_contactsheet_action = QAction("应用当前设置到接触印相", self)
+        apply_to_contactsheet_action.setToolTip("将当前裁剪的调色参数复制到接触印相")
+        apply_to_contactsheet_action.triggered.connect(self._on_apply_to_contactsheet)
+        toolbar.addAction(apply_to_contactsheet_action)
+        self._apply_to_contactsheet_action = apply_to_contactsheet_action
+        # 初始禁用，进入聚焦模式后启用
+        try:
+            self._apply_to_contactsheet_action.setEnabled(False)
         except Exception:
             pass
         
@@ -559,7 +578,7 @@ class MainWindow(QMainWindow):
             print(f"删除裁剪失败: {e}")
 
     def _on_apply_contactsheet_to_crop(self):
-        print("DEBUG: 沿用接触印像设置按钮被点击")
+        print("DEBUG: 沿用接触印相设置按钮被点击")
         try:
             print(f"DEBUG: 当前active_crop_id: {getattr(self.context, '_active_crop_id', None)}")
             print(f"DEBUG: 当前crop_focused: {getattr(self.context, '_crop_focused', False)}")
@@ -574,7 +593,28 @@ class MainWindow(QMainWindow):
             self.parameter_panel.initialize_defaults(current_params)
             print("DEBUG: 参数面板同步完成")
         except Exception as e:
-            print(f"沿用接触印像设置失败: {e}")
+            print(f"沿用接触印相设置失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_apply_to_contactsheet(self):
+        print("DEBUG: 应用当前设置到接触印相按钮被点击")
+        try:
+            print(f"DEBUG: 当前active_crop_id: {getattr(self.context, '_active_crop_id', None)}")
+            print(f"DEBUG: 当前crop_focused: {getattr(self.context, '_crop_focused', False)}")
+            print(f"DEBUG: current_params存在: {bool(self.context.get_current_params())}")
+            
+            self.context.apply_active_crop_to_contactsheet()
+            print("DEBUG: apply_active_crop_to_contactsheet调用完成")
+            
+            # 如果当前在contactsheet模式，同步参数面板
+            if self.context.get_current_profile_kind() == 'contactsheet':
+                current_params = self.context.get_current_params()
+                print(f"DEBUG: 获取到contactsheet当前参数: {bool(current_params)}")
+                self.parameter_panel.initialize_defaults(current_params)
+                print("DEBUG: contactsheet参数面板同步完成")
+        except Exception as e:
+            print(f"应用当前设置到接触印相失败: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1171,17 +1211,17 @@ class MainWindow(QMainWindow):
                 
                 # 重新加载矩阵列表并自动应用刚保存的矩阵
                 try:
-                    # 重新加载所有配置
+                    # 1. 重新加载所有配置
                     self.context.reload_all_configs()
-                    # 刷新parameter_panel的矩阵下拉列表
+                    # 2. 刷新parameter_panel的矩阵下拉列表，确保新保存的矩阵出现在列表中
                     self.parameter_panel._refresh_matrix_combo()
-                    # 自动选择并应用刚保存的矩阵
+                    # 3. 更新当前参数以应用刚保存的矩阵
                     new_params = self.context.get_current_params().copy()
                     new_params.density_matrix = matrix
                     new_params.density_matrix_name = save_name
                     new_params.enable_density_matrix = True
+                    # 4. 更新参数，这会触发UI更新，包括下拉框选择状态
                     self.context.update_params(new_params)
-                    self.parameter_panel._refresh_matrix_combo()  # 再次刷新以显示选中状态
                 except AttributeError:
                     # 如果没有刷新方法，用户需要重启应用来看到新矩阵
                     pass
@@ -1481,14 +1521,14 @@ class MainWindow(QMainWindow):
                 return f"CC-{original_filename}{extension}"
 
             def _default_name_contactsheet_single():
-                # contactsheet 的接触印像：固定中文后缀
+                # contactsheet 的接触印相：固定中文后缀
                 if active_id and crops:
                     # 若为正式裁剪聚焦，仍按编号命名
                     for i, c in enumerate(crops, start=1):
                         if getattr(c, 'id', None) == active_id:
                             return f"CC-{original_filename}-{i:02d}{extension}"
-                # 非正式单裁剪：接触印像
-                return f"CC-{original_filename}-接触印像{extension}"
+                # 非正式单裁剪：接触印相
+                return f"CC-{original_filename}-接触印相{extension}"
 
             if save_mode == 'all':
                 # 仅选择"目录"和"基名"，不真正返回 file_path（批量保存时逐个拼接）
@@ -1507,13 +1547,13 @@ class MainWindow(QMainWindow):
             else:
                 # 保存单张
                 if not crops:
-                    # 没有crops：single模式，不加"接触印像"
+                    # 没有crops：single模式，不加"接触印相"
                     default_filename = _default_name_single()
                 elif active_id:
                     # 有crops且有激活crop：按编号命名
                     default_filename = _default_name_contactsheet_single()
                 elif has_contactsheet_single:
-                    # 有crops但没激活crop：接触印像命名
+                    # 有crops但没激活crop：接触印相命名
                     default_filename = _default_name_contactsheet_single()
                 else:
                     default_filename = _default_name_single()
@@ -1757,6 +1797,10 @@ class MainWindow(QMainWindow):
         """重置调色参数"""
         self.context.reset_params()
     
+    def _set_folder_default(self):
+        """设为当前文件夹默认"""
+        self.context.set_current_as_folder_default()
+    
     def _load_default_curves(self):
         """加载默认曲线（Kodak Endura Paper）"""
         # 逻辑已迁移或将在Context中重新实现
@@ -1837,18 +1881,29 @@ class MainWindow(QMainWindow):
             pass
 
     def _update_apply_contactsheet_enabled(self):
-        """仅在 contact sheet 模式下、进入单张 crop 聚焦时才显示并启用该按钮。"""
+        """仅在 contact sheet 模式下、进入单张 crop 聚焦时才显示并启用这两个按钮。"""
         try:
             focused = bool(getattr(self.context, '_crop_focused', False))
             kind = self.context.get_current_profile_kind()
             # 检查是否有contactsheet参数可以沿用
             has_contactsheet_params = bool(getattr(self.context, '_contactsheet_params', None))
+            # 检查是否有active crop参数可以应用到contactsheet
+            has_active_crop = bool(getattr(self.context, '_active_crop_id', None))
             
-            # 只有当 kind == 'crop' 且聚焦且有contactsheet参数时，显示并启用"沿用接触印像设置"
-            should_enable = (kind == 'crop' and focused and has_contactsheet_params)
+            # 只有当 kind == 'crop' 且聚焦且有contactsheet参数时，显示并启用"沿用接触印相设置"
+            should_enable_apply_from = (kind == 'crop' and focused and has_contactsheet_params)
+            # 只有当 kind == 'crop' 且聚焦且有active crop时，显示并启用"应用当前设置到接触印相"
+            should_enable_apply_to = (kind == 'crop' and focused and has_active_crop)
+            
             try:
-                self._apply_contactsheet_action.setVisible(should_enable)
-                self._apply_contactsheet_action.setEnabled(should_enable)
+                self._apply_contactsheet_action.setVisible(should_enable_apply_from)
+                self._apply_contactsheet_action.setEnabled(should_enable_apply_from)
+            except Exception:
+                pass
+                
+            try:
+                self._apply_to_contactsheet_action.setVisible(should_enable_apply_to)
+                self._apply_to_contactsheet_action.setEnabled(should_enable_apply_to)
             except Exception:
                 pass
         except Exception:
@@ -1960,7 +2015,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_request_focus_contactsheet(self):
-        """进入接触印像/单张裁剪聚焦。"""
+        """进入接触印相/单张裁剪聚焦。"""
         try:
             # 若 Context 尚未记录 contactsheet 裁剪，但元数据里有 overlay，则先回写一份
             try:
@@ -1981,7 +2036,7 @@ class MainWindow(QMainWindow):
             self._fit_after_next_preview = True
             self._update_apply_contactsheet_enabled()
         except Exception as e:
-            print(f"接触印像聚焦失败: {e}")
+            print(f"接触印相聚焦失败: {e}")
 
     def _on_custom_primaries_changed(self, primaries_xy: dict):
         """当用户在 UCS 三角拖动完成后，基于 primaries_xy 注册并切换到临时输入空间。

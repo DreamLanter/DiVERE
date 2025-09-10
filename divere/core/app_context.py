@@ -197,7 +197,7 @@ class ApplicationContext(QObject):
         return self._current_params.input_color_space_name
 
     def get_contactsheet_crop_rect(self) -> Optional[tuple[float, float, float, float]]:
-        """获取接触印像/原图的单张裁剪矩形（归一化），可能为 None。"""
+        """获取接触印相/原图的单张裁剪矩形（归一化），可能为 None。"""
         return self._contactsheet_crop_rect
 
     # =================
@@ -308,12 +308,12 @@ class ApplicationContext(QObject):
         self._autosave_timer.start()
 
     def focus_on_contactsheet_crop(self) -> None:
-        """在原图/接触印像模式下聚焦 contactsheet 裁剪（若存在）。"""
+        """在原图/接触印相模式下聚焦 contactsheet 裁剪（若存在）。"""
         try:
             if not self._current_image:
                 return
             if self._active_crop_id is not None:
-                return  # 仅在原图/接触印像模式下允许
+                return  # 仅在原图/接触印相模式下允许
             if self._contactsheet_crop_rect is None:
                 return
             self._crop_focused = True
@@ -371,11 +371,11 @@ class ApplicationContext(QObject):
             # 参数集
             params = self._per_crop_params.get(crop_id)
             if params is None:
-                # 优先继承接触印像设置
+                # 优先继承接触印相设置
                 if self._contactsheet_params:
                     params = self._contactsheet_params.copy()
                 else:
-                    # 没有接触印像设置时，使用智能分类默认
+                    # 没有接触印相设置时，使用智能分类默认
                     if self._current_image:
                         self._load_smart_default_preset(self._current_image.file_path)
                         params = self._current_params.copy()
@@ -508,7 +508,7 @@ class ApplicationContext(QObject):
             print(f"删除裁剪失败: {e}")
 
     def apply_contactsheet_to_active_crop(self) -> None:
-        """将接触印像（contactsheet）的参数复制到当前活跃裁剪的参数集。"""
+        """将接触印相（contactsheet）的参数复制到当前活跃裁剪的参数集。"""
         try:
             print(f"DEBUG: apply_contactsheet_to_active_crop开始执行")
             active_id = self._active_crop_id
@@ -542,7 +542,55 @@ class ApplicationContext(QObject):
             self._autosave_timer.start()
             print("DEBUG: apply_contactsheet_to_active_crop执行完成")
         except Exception as e:
-            print(f"沿用接触印像设置失败: {e}")
+            print(f"沿用接触印相设置失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def apply_active_crop_to_contactsheet(self) -> None:
+        """将当前活跃裁剪的参数复制到接触印相（contactsheet）的参数集。"""
+        try:
+            print(f"DEBUG: apply_active_crop_to_contactsheet开始执行")
+            active_id = self._active_crop_id
+            print(f"DEBUG: active_id = {active_id}")
+            
+            # 获取当前crop的参数
+            crop_params = None
+            if self._crop_focused and active_id:
+                # 如果当前在crop聚焦状态，使用当前参数
+                crop_params = self._current_params.copy()
+                print("DEBUG: 从当前参数获取crop参数（聚焦状态）")
+            elif active_id and active_id in self._per_crop_params:
+                # 如果不在聚焦状态，从per_crop_params获取
+                crop_params = self._per_crop_params[active_id].copy()
+                print("DEBUG: 从per_crop_params获取crop参数（非聚焦状态）")
+            else:
+                print("DEBUG: 没有有效的crop参数可复制")
+                return
+                
+            if not crop_params:
+                print("DEBUG: crop参数为空")
+                return
+                
+            print(f"DEBUG: 复制的crop参数数量: {len(vars(crop_params))}")
+            # 复制参数到contactsheet
+            self._contactsheet_params = crop_params.copy()
+            print("DEBUG: 参数已复制到contactsheet_params")
+            
+            # 如果当前处于contactsheet模式，同步当前参数并刷新预览
+            if self._current_profile_kind == 'contactsheet':
+                print("DEBUG: 当前处于contactsheet模式，同步参数")
+                self._current_params = crop_params.copy()
+                self.params_changed.emit(self._current_params)
+                print("DEBUG: params_changed信号已发射")
+                self._prepare_proxy(); self._trigger_preview_update()
+                print("DEBUG: 预览更新已触发")
+            else:
+                print("DEBUG: 当前未处于contactsheet模式")
+                
+            self._autosave_timer.start()
+            print("DEBUG: apply_active_crop_to_contactsheet执行完成")
+        except Exception as e:
+            print(f"应用当前设置到接触印相失败: {e}")
             import traceback
             traceback.print_exc()
 
@@ -773,6 +821,10 @@ class ApplicationContext(QObject):
                         new_params.enable_density_curve = True
                 except Exception:
                     pass
+        
+        # 确保在更新参数前先准备好proxy，避免使用旧proxy导致预览暗淡
+        if self._current_image:
+            self._prepare_proxy()
         
         self.update_params(new_params)
         self._contactsheet_params = self._current_params.copy()
@@ -1116,6 +1168,70 @@ class ApplicationContext(QObject):
                 self.params_changed.emit(self._current_params)
                 self.status_message_changed.emit("参数已重置（回退内部默认）")
 
+    def set_current_as_folder_default(self):
+        """将当前参数设置为文件夹默认设置"""
+        if not self._current_image:
+            self.status_message_changed.emit("请先加载图像")
+            return
+        
+        try:
+            from pathlib import Path
+            
+            # 获取当前图像的目录
+            image_path = Path(self._current_image.file_path)
+            
+            # 获取当前色彩空间的完整信息
+            cs_info = self.color_space_manager.get_color_space_info(self._current_params.input_color_space_name)
+            if not cs_info:
+                cs_info = {"gamma": 1.0}
+            
+            # 提取当前的idt数据
+            idt_data = {
+                "name": self._current_params.input_color_space_name,
+                "gamma": cs_info.get("gamma", 1.0),
+            }
+            
+            # 添加白点和基色信息（如果存在）
+            if "white" in cs_info:
+                idt_data["white"] = cs_info["white"]
+            if "primitives" in cs_info:
+                idt_data["primitives"] = cs_info["primitives"]
+            
+            # 提取当前的cc_params数据
+            cc_params_data = {
+                "density_gamma": self._current_params.density_gamma,
+                "density_dmax": self._current_params.density_dmax,
+                "rgb_gains": list(self._current_params.rgb_gains),
+                "density_matrix": {
+                    "name": self._current_params.density_matrix_name,
+                    "values": self._current_params.density_matrix.tolist() if self._current_params.density_matrix is not None else None
+                },
+                "density_curve": {
+                    "name": self._current_params.density_curve_name,
+                    "points": {
+                        "rgb": self._current_params.curve_points,
+                        "r": self._current_params.curve_points_r,
+                        "g": self._current_params.curve_points_g,
+                        "b": self._current_params.curve_points_b
+                    }
+                },
+                "screen_glare_compensation": self._current_params.screen_glare_compensation,
+                # 新增：保存pipeline控制状态，这些对于folder_default至关重要
+                "enable_density_matrix": self._current_params.enable_density_matrix,
+                "enable_density_curve": self._current_params.enable_density_curve,
+                "enable_rgb_gains": self._current_params.enable_rgb_gains,
+                "enable_density_inversion": self._current_params.enable_density_inversion
+            }
+            
+            # 通过AutoPresetManager保存folder_default
+            self.auto_preset_manager.set_active_directory(str(image_path.parent))
+            self.auto_preset_manager.save_folder_default(idt_data, cc_params_data)
+            
+            self.status_message_changed.emit(f"已将当前设置保存为文件夹默认设置")
+            
+        except Exception as e:
+            self.status_message_changed.emit(f"保存文件夹默认设置失败: {e}")
+
     def run_auto_color_correction(self, get_preview_callback):
         """执行AI自动白平衡"""
         # 黑白模式下跳过RGB gains调整
@@ -1247,7 +1363,7 @@ class ApplicationContext(QObject):
                     src_image = src_image.copy_with_new_array(cropped_arr)
                 except Exception:
                     pass
-            # 接触印像聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
+            # 接触印相聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
             elif (self._active_crop_id is None and self._contactsheet_crop_rect is not None and src_image.array is not None):
                 try:
                     x, y, w, h = self._contactsheet_crop_rect
@@ -1323,12 +1439,12 @@ class ApplicationContext(QObject):
             else:
                 # 无正式裁剪时，传递 contactsheet 裁剪（若有）
                 md['crop_overlay'] = self._contactsheet_crop_rect
-                # 若此时处于"接触印像聚焦"，为坐标换算提供一个临时的 CropInstance
+                # 若此时处于"接触印相聚焦"，为坐标换算提供一个临时的 CropInstance
                 if self._crop_focused and self._contactsheet_crop_rect is not None:
                     try:
                         md['crop_instance'] = CropInstance(
                             id='contactsheet_focus',
-                            name='接触印像聚焦',
+                            name='接触印相聚焦',
                             rect_norm=self._contactsheet_crop_rect,
                             orientation=int(self._current_orientation) % 360
                         )
@@ -1500,8 +1616,10 @@ class ApplicationContext(QObject):
             # 重新加载色彩空间配置
             self.color_space_manager.reload_config()
             
-            # 重新加载其他配置（matrices, curves等通过pipeline_processor管理）
-            # pipeline_processor会在下次访问时重新加载
+            # 重新加载矩阵配置
+            self.the_enlarger.pipeline_processor.reload_matrices()
+            
+            # TODO: 如需要，可以在此添加curves等其他配置的重新加载
             
             self.status_message_changed.emit("配置文件已重新加载")
         except Exception as e:

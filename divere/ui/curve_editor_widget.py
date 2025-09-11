@@ -802,6 +802,13 @@ class CurveEditorWidget(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"保存曲线时出错：\n{str(e)}")
     
+    def reload_curves_config(self):
+        """重新加载curves配置（响应配置文件变化）"""
+        # 重新加载preset curves
+        self._load_preset_curves()
+        # 刷新UI
+        self._refresh_curve_combo()
+
     def _refresh_curve_combo(self):
         """刷新曲线下拉列表"""
         # 保存当前选择

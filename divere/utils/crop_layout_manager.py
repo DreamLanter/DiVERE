@@ -33,26 +33,28 @@ class CropLayoutManager:
         self.min_crop_size = 0.1  # 最小裁剪尺寸（归一化）
         self.max_crop_size = 0.5  # 最大裁剪尺寸（归一化）
         self.default_crop_size = 0.25  # 默认裁剪尺寸（归一化）
-        self.margin = 0.02  # 边界间距
+        self.margin = 0.00  # 边界间距 可以允许没有边距。
         self.item_spacing_ratio = 0.0555  # 同行/同列内部间距比例（相对于crop长边）
         self.row_spacing = 0.05  # 行与行之间间距（较大）
         self.column_spacing = 0.03  # 列与列之间间距（较大）
         
     def get_layout_direction(self, image_aspect_ratio: float) -> str:
-        """根据图片宽高比决定布局方向
+        """根据视觉宽高比决定布局方向
         
         Args:
-            image_aspect_ratio: 图片宽度/高度
+            image_aspect_ratio: 视觉宽度/视觉高度（已考虑orientation的显示宽高比）
             
         Returns:
             'horizontal' 或 'vertical'
+            
+        Note:
+            此方法接收的应该是用户看到的图片宽高比，而不是原始文件的物理宽高比。
+            调用方应确保传入的aspect_ratio已经考虑了contact sheet的orientation。
         """
-        if image_aspect_ratio > 1.2:  # 横图
+        if image_aspect_ratio >= 1.0:  # 横图或正方形
             return 'horizontal'
-        elif image_aspect_ratio < 0.8:  # 竖图
+        else:  # 竖图 (aspect_ratio < 1.0)
             return 'vertical'
-        else:  # 接近正方形
-            return 'horizontal'
     
     def _calculate_item_spacing(self, crop_w: float, crop_h: float, layout_direction: str) -> float:
         """根据crop尺寸和布局方向计算实际的item间距
@@ -79,12 +81,17 @@ class CropLayoutManager:
         """找到下一个裁剪的最佳位置
         
         Args:
-            existing_crops: 现有裁剪列表 [(x, y, w, h), ...]
-            template_size: 模板尺寸 (w, h)，如果为None则使用默认值
-            image_aspect_ratio: 图片宽高比
+            existing_crops: 现有裁剪列表 [(x, y, w, h), ...]（归一化坐标）
+            template_size: 模板尺寸 (w, h)，如果为None则使用最后一个裁剪的尺寸或默认值
+            image_aspect_ratio: 视觉宽高比（已考虑contact sheet orientation的显示宽高比）
             
         Returns:
-            新裁剪位置 (x, y, w, h)
+            新裁剪位置 (x, y, w, h)（归一化坐标）
+            
+        Note:
+            布局方向基于image_aspect_ratio确定：
+            - 横图或正方形(aspect_ratio >= 1.0): 从左到右，然后换行
+            - 竖图(aspect_ratio < 1.0): 从上到下，然后换列
         """
         # 转换现有裁剪为CropRect对象
         existing_rects = [CropRect(x, y, w, h) for x, y, w, h in existing_crops]
@@ -159,7 +166,7 @@ class CropLayoutManager:
             # 改进的空间判定逻辑：检查剩余空间是否足够，并添加安全边距
             min_required_space = crop_w + self.margin  # 裁剪框宽度 + 右边距
             available_space = 1.0 - new_x  # 从new_x到右边界的可用空间
-            safety_margin = 0.005  # 额外的安全边距
+            safety_margin = 0.01 * crop_w  # 额外的安全边距
             
             if available_space >= min_required_space + safety_margin:
                 new_rect = CropRect(new_x, new_y, crop_w, crop_h)
@@ -210,7 +217,7 @@ class CropLayoutManager:
             # 改进的空间判定逻辑：检查剩余空间是否足够，并添加安全边距
             min_required_space = crop_h + self.margin  # 裁剪框高度 + 下边距
             available_space = 1.0 - new_y  # 从new_y到下边界的可用空间
-            safety_margin = 0.005  # 额外的安全边距
+            safety_margin = 0.01 * crop_h  # 额外的安全边距
             
             if available_space >= min_required_space + safety_margin:
                 new_rect = CropRect(new_x, new_y, crop_w, crop_h)
@@ -255,6 +262,7 @@ class CropLayoutManager:
             if abs(rect.y - current_y) < 0.05:
                 current_row.append(rect)
             else:
+                # 对当前行按x坐标排序
                 rows.append(current_row)
                 current_row = [rect]
                 current_y = rect.y

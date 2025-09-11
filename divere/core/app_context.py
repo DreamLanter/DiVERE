@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
 
-from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig
+from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig, ContactsheetProfile
 from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
@@ -68,6 +68,8 @@ class ApplicationContext(QObject):
     crop_changed = Signal(object)
     # 胶片类型变化信号
     film_type_changed = Signal(str)
+    # curves配置重载信号
+    curves_config_reloaded = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,8 +89,6 @@ class ApplicationContext(QObject):
         self._current_image: Optional[ImageData] = None
         self._current_proxy: Optional[ImageData] = None # 应用输入变换和工作空间变换后的代理
         self._current_params: ColorGradingParams = self._create_default_params()
-        # 图像朝向（以90度为步进，取值 {0,90,180,270}），统一放在Context
-        self._current_orientation: int = 0
         # 当前胶片类型
         self._current_film_type: str = "color_negative_c41"
         
@@ -126,14 +126,15 @@ class ApplicationContext(QObject):
         self._crops: list = []  # list[CropInstance]
         self._active_crop_id: Optional[str] = None
         self._crop_focused: bool = False
-        # 原图 contactsheet 的临时裁剪（不视为正式 crop 列表项）
-        self._contactsheet_crop_rect: Optional[tuple[float, float, float, float]] = None
         
         # 预设 Profile：contactsheet 与 per-crop 参数集
         self._current_profile_kind: str = 'contactsheet'  # 'contactsheet' | 'crop'
-        self._contactsheet_params: ColorGradingParams = self._current_params.copy()
+        self._contactsheet_profile: ContactsheetProfile = ContactsheetProfile(
+            params=self._current_params.copy(),
+            orientation=0,
+            crop_rect=None
+        )
         self._per_crop_params: dict = {}
-        self._contactsheet_orientation: int = 0
 
     def _create_default_params(self) -> ColorGradingParams:
         params = ColorGradingParams()
@@ -198,7 +199,7 @@ class ApplicationContext(QObject):
 
     def get_contactsheet_crop_rect(self) -> Optional[tuple[float, float, float, float]]:
         """获取接触印相/原图的单张裁剪矩形（归一化），可能为 None。"""
-        return self._contactsheet_crop_rect
+        return self._contactsheet_profile.crop_rect
 
     # =================
     # 裁剪（Crops）API - 支持新的CropInstance模型
@@ -285,7 +286,7 @@ class ApplicationContext(QObject):
         self._crops = []
         self._active_crop_id = None
         self._crop_focused = False
-        self._contactsheet_crop_rect = None
+        self._contactsheet_profile.crop_rect = None
         self.crop_changed.emit(None)
         self._autosave_timer.start()
         # 若无任何裁剪，回到 contactsheet（single 语义）
@@ -314,7 +315,7 @@ class ApplicationContext(QObject):
                 return
             if self._active_crop_id is not None:
                 return  # 仅在原图/接触印相模式下允许
-            if self._contactsheet_crop_rect is None:
+            if self._contactsheet_profile.crop_rect is None:
                 return
             self._crop_focused = True
             self._prepare_proxy()
@@ -327,14 +328,13 @@ class ApplicationContext(QObject):
     # Profile 切换与裁剪管理（Bundle 支持）
     # =================
     def switch_to_contactsheet(self) -> None:
-        """切换到原图 Profile（不自动聚焦）。"""
+        """切换到原图 Profile（不自动聚焦）- 无orientation同步"""
         try:
             self._current_profile_kind = 'contactsheet'
-            self._current_params = self._contactsheet_params.copy()
+            self._current_params = self._contactsheet_profile.params.copy()
             self._crop_focused = False
             self._active_crop_id = None
-            # 同步 orientation
-            self._current_orientation = self._contactsheet_orientation
+            # 移除orientation同步 - UI将直接读取contactsheet的orientation
             # 发送参数变更信号
             self.params_changed.emit(self._current_params)
             self._prepare_proxy(); self._trigger_preview_update()
@@ -342,21 +342,18 @@ class ApplicationContext(QObject):
             pass
 
     def switch_to_crop(self, crop_id: str) -> None:
-        """切换到指定裁剪的 Profile（不自动聚焦）。"""
+        """切换到指定裁剪的 Profile（不自动聚焦）- 无orientation同步"""
         try:
             self._current_profile_kind = 'crop'
             self._active_crop_id = crop_id
             params = self._per_crop_params.get(crop_id)
             if params is None:
                 # 如果不存在，使用 contactsheet 复制一份初始化
-                params = self._contactsheet_params.copy()
+                params = self._contactsheet_profile.params.copy()
                 self._per_crop_params[crop_id] = params
             self._current_params = params.copy()
             self._crop_focused = False
-            # 同步 orientation （从裁剪实例获取）
-            crop_instance = self.get_active_crop_instance()
-            if crop_instance:
-                self._current_orientation = crop_instance.orientation
+            # 移除orientation同步 - UI将直接读取crop的orientation
             # 发送参数变更信号
             self.params_changed.emit(self._current_params)
             self._prepare_proxy(); self._trigger_preview_update()
@@ -372,8 +369,8 @@ class ApplicationContext(QObject):
             params = self._per_crop_params.get(crop_id)
             if params is None:
                 # 优先继承接触印相设置
-                if self._contactsheet_params:
-                    params = self._contactsheet_params.copy()
+                if self._contactsheet_profile.params:
+                    params = self._contactsheet_profile.params.copy()
                 else:
                     # 没有接触印相设置时，使用智能分类默认
                     if self._current_image:
@@ -386,10 +383,7 @@ class ApplicationContext(QObject):
                 
                 self._per_crop_params[crop_id] = params
             self._current_params = params.copy()
-            # 使用该裁剪的 orientation
-            crop_instance = self.get_active_crop_instance()
-            if crop_instance:
-                self._current_orientation = crop_instance.orientation
+            # 移除orientation同步 - UI将直接读取crop的orientation
             # 直接进入聚焦
             self._crop_focused = True
             # 一次性刷新
@@ -398,35 +392,123 @@ class ApplicationContext(QObject):
         except Exception:
             pass
 
+    def _apply_inverse_orientation_to_rect(self, x: float, y: float, w: float, h: float, orientation: int) -> tuple:
+        """应用orientation的逆变换，将显示坐标转换为标准坐标系
+        
+        这与PreviewWidget._apply_orientation_to_rect()互为逆操作，
+        用于将经过orientation变换的坐标转换回标准坐标系。
+        
+        Args:
+            x, y, w, h: 显示坐标系下的矩形（经过orientation变换的）
+            orientation: orientation角度
+            
+        Returns:
+            标准坐标系下的矩形 (x, y, w, h)
+        """
+        if orientation % 360 == 0:
+            return (x, y, w, h)
+        
+        k = (orientation // 90) % 4
+
+        if k == 1:  # 90° CCW的逆变换 = 270° CCW = 90° CW
+            # 逆变换：(x,y,w,h) → (1-y-h, x, h, w)
+            return (1.0 - y - h, x, h, w)
+        elif k == 2:  # 180°的逆变换 = 180°
+            # 逆变换：(x,y,w,h) → (1-x-w, 1-y-h, w, h)
+            return (1.0 - x - w, 1.0 - y - h, w, h)
+        elif k == 3:  # 270° CCW的逆变换 = 90° CCW
+            # 逆变换：(x,y,w,h) → (y, 1-x-w, h, w)
+            return (y, 1.0 - x - w, h, w)
+        else:
+            return (x, y, w, h)
+
+    def _calculate_visual_aspect_ratio(self, orientation: int) -> float:
+        """计算考虑orientation的视觉宽高比（用户看到的宽高比）
+        
+        Args:
+            orientation: contact sheet的orientation角度
+            
+        Returns:
+            视觉宽高比（视觉宽度/视觉高度）
+        """
+        if not self._current_image or self._current_image.array is None:
+            return 1.0
+            
+        h, w = self._current_image.array.shape[:2]
+        
+        # 根据orientation计算视觉宽高比
+        if orientation % 180 == 90:  # 90°或270°
+            # 宽高互换
+            return h / w if w > 0 else 1.0
+        else:  # 0°或180°
+            # 保持原始宽高比
+            return w / h if h > 0 else 1.0
+
+    def _apply_orientation_to_rect(self, x: float, y: float, w: float, h: float, orientation: int) -> tuple:
+        """应用orientation正变换，将标准坐标转换为显示坐标系
+        
+        这与PreviewWidget._apply_orientation_to_rect()保持一致，
+        用于将标准坐标系的坐标转换为显示坐标系。
+        
+        Args:
+            x, y, w, h: 标准坐标系下的矩形
+            orientation: orientation角度
+            
+        Returns:
+            显示坐标系下的矩形 (x, y, w, h)
+        """
+        if orientation % 360 == 0:
+            return (x, y, w, h)
+        
+        k = (orientation // 90) % 4
+        
+        if k == 1:  # 90° CCW
+            return (y, 1.0 - x - w, h, w)
+        elif k == 2:  # 180°
+            return (1.0 - x - w, 1.0 - y - h, w, h)
+        elif k == 3:  # 270° CCW
+            return (1.0 - y - h, x, h, w)
+        else:
+            return (x, y, w, h)
+
     def smart_add_crop(self) -> str:
-        """智能添加裁剪：根据现有裁剪自动计算最佳位置"""
+        """智能添加裁剪：根据现有裁剪自动计算最佳位置（考虑orientation坐标变换）"""
         try:
             from divere.utils.crop_layout_manager import CropLayoutManager
             
-            # 获取图片宽高比
-            aspect_ratio = 1.0
-            if self._current_image and self._current_image.array is not None:
-                h, w = self._current_image.array.shape[:2]
-                aspect_ratio = w / h if h > 0 else 1.0
+            # 获取contact sheet的orientation
+            cs_orientation = self._contactsheet_profile.orientation
             
-            # 获取现有裁剪
-            existing_crops = [crop.rect_norm for crop in self._crops]
+            # 1. 将现有crops坐标逆变换到标准坐标系
+            existing_crops_std = []
+            for crop in self._crops:
+                x, y, w, h = crop.rect_norm
+                x_std, y_std, w_std, h_std = self._apply_inverse_orientation_to_rect(x, y, w, h, cs_orientation)
+                existing_crops_std.append((x_std, y_std, w_std, h_std))
             
-            # 使用布局管理器找到最佳位置
+            # 2. 计算视觉宽高比（用户看到的宽高比）
+            visual_aspect_ratio = self._calculate_visual_aspect_ratio(cs_orientation)
+
+            # 3. 在标准坐标系中使用布局管理器计算最佳位置
             layout_manager = CropLayoutManager()
-            new_rect = layout_manager.find_next_position(
-                existing_crops=existing_crops,
+            new_rect_std = layout_manager.find_next_position(
+                existing_crops=existing_crops_std,
                 template_size=None,  # 使用最后一个裁剪的尺寸或默认值
-                image_aspect_ratio=aspect_ratio
+                image_aspect_ratio=visual_aspect_ratio
             )
             
-            # 创建新裁剪
-            return self.add_crop(new_rect, self._current_orientation)
+            # 4. 将计算结果正变换到显示坐标系
+            x_std, y_std, w_std, h_std = new_rect_std
+            new_rect = self._apply_orientation_to_rect(x_std, y_std, w_std, h_std, cs_orientation)
+            
+            # 创建新裁剪 - 继承contactsheet的orientation
+            return self.add_crop(new_rect, cs_orientation)
             
         except Exception as e:
             print(f"智能添加裁剪失败: {e}")
             # 失败时使用默认位置
-            return self.add_crop((0.1, 0.1, 0.25, 0.25), self._current_orientation)
+            cs_orientation = self._contactsheet_profile.orientation
+            return self.add_crop((0.1, 0.1, 0.25, 0.25), cs_orientation)
     
     def add_crop(self, rect_norm: Tuple[float, float, float, float], orientation: int) -> str:
         """新增一个裁剪：复制 contactsheet 的参数作为初始值，返回 crop_id。"""
@@ -439,7 +521,7 @@ class ApplicationContext(QObject):
             self._crops.append(crop)
             self._active_crop_id = crop_id
             # 初始化该裁剪的参数集（深拷贝 contactsheet）
-            self._per_crop_params[crop_id] = self._contactsheet_params.copy()
+            self._per_crop_params[crop_id] = self._contactsheet_profile.params.copy()
             # 切到该裁剪 Profile（不聚焦）
             self.switch_to_crop(crop_id)
             # 发信号
@@ -518,12 +600,12 @@ class ApplicationContext(QObject):
                 return
             
             # 检查contactsheet参数是否存在
-            if not self._contactsheet_params:
+            if not self._contactsheet_profile.params:
                 print("DEBUG: contactsheet_params为空")
                 return
                 
             # 复制参数
-            cs_params = self._contactsheet_params.copy()
+            cs_params = self._contactsheet_profile.params.copy()
             print(f"DEBUG: 复制的contactsheet参数数量: {len(vars(cs_params))}")
             self._per_crop_params[active_id] = cs_params
             print("DEBUG: 参数已复制到per_crop_params")
@@ -573,7 +655,7 @@ class ApplicationContext(QObject):
                 
             print(f"DEBUG: 复制的crop参数数量: {len(vars(crop_params))}")
             # 复制参数到contactsheet
-            self._contactsheet_params = crop_params.copy()
+            self._contactsheet_profile.params = crop_params.copy()
             print("DEBUG: 参数已复制到contactsheet_params")
             
             # 如果当前处于contactsheet模式，同步当前参数并刷新预览
@@ -597,8 +679,8 @@ class ApplicationContext(QObject):
     def export_preset_bundle(self) -> PresetBundle:
         """导出 Bundle：contactsheet + 各裁剪条目（每个带独立Preset）。"""
         # 1) contactsheet preset
-        cs_preset = self._create_preset_from_params(self._contactsheet_params, name="contactsheet")
-        cs_preset.orientation = self._contactsheet_orientation  # 保存原图的 orientation
+        cs_preset = self._create_preset_from_params(self._contactsheet_profile.params, name="contactsheet")
+        cs_preset.orientation = self._contactsheet_profile.orientation  # 保存原图的 orientation
         # 写入原图文件名，满足 v3 metadata.raw_file 必填
         try:
             if self._current_image and getattr(self._current_image, 'file_path', ''):
@@ -606,12 +688,12 @@ class ApplicationContext(QObject):
         except Exception:
             pass
         # 写入 contactsheet 裁剪（旧字段，用于兼容）
-        if self._contactsheet_crop_rect is not None:
-            cs_preset.crop = tuple(self._contactsheet_crop_rect)
+        if self._contactsheet_profile.crop_rect is not None:
+            cs_preset.crop = tuple(self._contactsheet_profile.crop_rect)
         # 2) crops
         entries: list[CropPresetEntry] = []
         for crop in self._crops:
-            params = self._per_crop_params.get(crop.id, self._contactsheet_params)
+            params = self._per_crop_params.get(crop.id, self._contactsheet_profile.params)
             crop_preset = self._create_preset_from_params(params, name=crop.name)
             # 将 crop 的 orientation 写入 crop 或 preset（preset.orientation 用于 BWC）
             crop_preset.orientation = crop.orientation
@@ -624,11 +706,11 @@ class ApplicationContext(QObject):
         使用 contactsheet 参数作为单预设的基础；包含 raw_file、orientation 与可选的 contactsheet 裁剪。
         """
         try:
-            preset = self._create_preset_from_params(self._contactsheet_params, name="single")
+            preset = self._create_preset_from_params(self._contactsheet_profile.params, name="single")
             # orientation 与裁剪（若存在）
-            preset.orientation = self._contactsheet_orientation
-            if self._contactsheet_crop_rect is not None:
-                preset.crop = tuple(self._contactsheet_crop_rect)
+            preset.orientation = self._contactsheet_profile.orientation
+            if self._contactsheet_profile.crop_rect is not None:
+                preset.crop = tuple(self._contactsheet_profile.crop_rect)
             # 写入文件名（v3 必填）
             if self._current_image and getattr(self._current_image, 'file_path', ''):
                 preset.raw_file = Path(self._current_image.file_path).name
@@ -638,7 +720,7 @@ class ApplicationContext(QObject):
             preset = Preset(name="single")
             if self._current_image and getattr(self._current_image, 'file_path', ''):
                 preset.raw_file = Path(self._current_image.file_path).name
-            preset.grading_params = self._contactsheet_params.to_dict()
+            preset.grading_params = self._contactsheet_profile.params.to_dict()
             return preset
 
     def _create_preset_from_params(self, params: ColorGradingParams, name: str = "Preset") -> Preset:
@@ -683,13 +765,13 @@ class ApplicationContext(QObject):
                 self.set_current_film_type(target_film_type, apply_defaults=True)
                 self.status_message_changed.emit(f"检测到单色图像，已自动切换为黑白模式")
             
-            # 重置朝向
-            self._current_orientation = 0
+            # 重置contactsheet朝向和裁剪
+            self._contactsheet_profile.orientation = 0
+            self._contactsheet_profile.crop_rect = None
             # 重置裁剪
             self._crops = []
             self._active_crop_id = None
             self._crop_focused = False
-            self._contactsheet_crop_rect = None
             self.crop_changed.emit(None)
             
             # 检查并应用自动预设
@@ -827,12 +909,12 @@ class ApplicationContext(QObject):
             self._prepare_proxy()
         
         self.update_params(new_params)
-        self._contactsheet_params = self._current_params.copy()
+        self._contactsheet_profile.params = self._current_params.copy()
 
         # 4. 加载crop和orientation（完全分离模型）
         try:
-            # 先设置全局orientation
-            self._current_orientation = preset.orientation
+            # 设置contactsheet的orientation
+            self._contactsheet_profile.orientation = preset.orientation
             
             # 再加载crop（使用新的CropInstance接口）
             crop_instances = preset.get_crop_instances()
@@ -847,14 +929,14 @@ class ApplicationContext(QObject):
                 try:
                     x, y, w, h = [float(max(0.0, min(1.0, v))) for v in tuple(preset.crop)]
                     w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
-                    self._contactsheet_crop_rect = (x, y, w, h)
+                    self._contactsheet_profile.crop_rect = (x, y, w, h)
                     self._crop_focused = False
-                    self.crop_changed.emit(self._contactsheet_crop_rect)
+                    self.crop_changed.emit(self._contactsheet_profile.crop_rect)
                 except Exception:
-                    self._contactsheet_crop_rect = None
+                    self._contactsheet_profile.crop_rect = None
         except Exception:
-            # 最终回退：只设置全局orientation
-            self._current_orientation = preset.orientation
+            # 最终回退：只设置contactsheet的orientation
+            self._contactsheet_profile.orientation = preset.orientation
         
         # 切换到 contactsheet profile
         self._current_profile_kind = 'contactsheet'
@@ -1011,7 +1093,7 @@ class ApplicationContext(QObject):
         # 同步到当前 profile 存根
         try:
             if self._current_profile_kind == 'contactsheet':
-                self._contactsheet_params = new_params.copy()
+                self._contactsheet_profile.params = new_params.copy()
             elif self._current_profile_kind == 'crop' and self._active_crop_id is not None:
                 self._per_crop_params[self._active_crop_id] = new_params.copy()
         except Exception:
@@ -1154,7 +1236,7 @@ class ApplicationContext(QObject):
                     self.status_message_changed.emit("参数已重置为通用默认预设")
                 except Exception:
                     self._current_params = self._create_default_params()
-                    self._contactsheet_params = self._current_params.copy()
+                    self._contactsheet_profile.params = self._current_params.copy()
                     self.params_changed.emit(self._current_params)
                     self.status_message_changed.emit("参数已重置（回退内部默认）")
         else:
@@ -1164,7 +1246,7 @@ class ApplicationContext(QObject):
                 self.status_message_changed.emit("参数已重置为通用默认预设")
             except Exception:
                 self._current_params = self._create_default_params()
-                self._contactsheet_params = self._current_params.copy()
+                self._contactsheet_profile.params = self._current_params.copy()
                 self.params_changed.emit(self._current_params)
                 self.status_message_changed.emit("参数已重置（回退内部默认）")
 
@@ -1364,9 +1446,9 @@ class ApplicationContext(QObject):
                 except Exception:
                     pass
             # 接触印相聚焦：无激活 crop，但存在 contactsheet 裁剪矩形
-            elif (self._active_crop_id is None and self._contactsheet_crop_rect is not None and src_image.array is not None):
+            elif (self._active_crop_id is None and self._contactsheet_profile.crop_rect is not None and src_image.array is not None):
                 try:
-                    x, y, w, h = self._contactsheet_crop_rect
+                    x, y, w, h = self._contactsheet_profile.crop_rect
                     x0 = int(round(x * orig_w)); y0 = int(round(y * orig_h))
                     x1 = int(round((x + w) * orig_w)); y1 = int(round((y + h) * orig_h))
                     x0 = max(0, min(orig_w - 1, x0)); x1 = max(x0 + 1, min(orig_w, x1))
@@ -1404,8 +1486,8 @@ class ApplicationContext(QObject):
         # Monochrome转换现在在pipeline processor的IDT阶段进行
 
         # === 标准变换链：Step 5 - 旋转 ===
-        # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用全局orientation
-        effective_orientation = self._current_orientation  # 默认使用全局orientation
+        # 分离的旋转逻辑：crop focused时使用crop的orientation，否则使用contactsheet orientation
+        effective_orientation = self.get_current_orientation()  # 获取当前profile的orientation
         
         if self._crop_focused:
             # 聚焦状态：使用crop的独立orientation
@@ -1438,15 +1520,15 @@ class ApplicationContext(QObject):
                 md['crop_instance'] = crop_instance  # 传递完整的crop实例
             else:
                 # 无正式裁剪时，传递 contactsheet 裁剪（若有）
-                md['crop_overlay'] = self._contactsheet_crop_rect
+                md['crop_overlay'] = self._contactsheet_profile.crop_rect
                 # 若此时处于"接触印相聚焦"，为坐标换算提供一个临时的 CropInstance
-                if self._crop_focused and self._contactsheet_crop_rect is not None:
+                if self._crop_focused and self._contactsheet_profile.crop_rect is not None:
                     try:
                         md['crop_instance'] = CropInstance(
                             id='contactsheet_focus',
                             name='接触印相聚焦',
-                            rect_norm=self._contactsheet_crop_rect,
-                            orientation=int(self._current_orientation) % 360
+                            rect_norm=self._contactsheet_profile.crop_rect,
+                            orientation=int(self._contactsheet_profile.orientation) % 360
                         )
                     except Exception:
                         md['crop_instance'] = None
@@ -1455,7 +1537,7 @@ class ApplicationContext(QObject):
                 
             md['crop_focused'] = bool(self._crop_focused)
             md['active_crop_id'] = self._active_crop_id
-            md['global_orientation'] = int(self._current_orientation)  # 全局orientation
+            md['global_orientation'] = int(self._contactsheet_profile.orientation)  # contactsheet orientation
         except Exception:
             pass
 
@@ -1529,27 +1611,34 @@ class ApplicationContext(QObject):
     # 方向与旋转（UI调用）
     # =================
     def get_current_orientation(self) -> int:
-        return int(self._current_orientation)
+        """根据当前profile返回对应的orientation"""
+        if self._current_profile_kind == 'contactsheet':
+            return self._contactsheet_profile.orientation
+        elif self._active_crop_id:
+            crop = self.get_active_crop_instance()
+            return crop.orientation if crop else 0
+        return 0
 
     def set_orientation(self, degrees: int):
+        """设置当前profile的orientation"""
         try:
             deg = int(degrees) % 360
             # 规范到 0/90/180/270
             choices = [0, 90, 180, 270]
-            closest = min(choices, key=lambda x: abs(x - deg))
-            self._current_orientation = closest
-            # 同步到当前 Profile 的 orientation
+            normalized = min(choices, key=lambda x: abs(x - deg))
+            
+            # 直接写入对应的数据源
             if self._current_profile_kind == 'contactsheet':
-                self._contactsheet_orientation = closest
-            elif self._current_profile_kind == 'crop':
+                self._contactsheet_profile.orientation = normalized
+            elif self._active_crop_id:
                 crop = self.get_active_crop_instance()
                 if crop:
-                    # 仅更新当前裁剪的方向，保留裁剪列表
-                    self.update_active_crop_orientation(closest)
+                    crop.orientation = normalized
+            
+            # 触发预览更新
             if self._current_image:
                 self._prepare_proxy()
                 self._trigger_preview_update()
-                # 方向修改触发自动保存
                 self._autosave_timer.start()
         except Exception:
             pass
@@ -1581,8 +1670,9 @@ class ApplicationContext(QObject):
                     self._trigger_preview_update()
                     self._autosave_timer.start()
             else:
-                # 非聚焦状态：只旋转全局orientation（不影响crop）
-                new_deg = (self._current_orientation + step) % 360
+                # 非聚焦状态：只旋转contactsheet orientation（不影响crop）
+                current_orientation = self.get_current_orientation()
+                new_deg = (current_orientation + step) % 360
                 self.set_orientation(new_deg)
                 # 注意：不同步crop的orientation，保持完全分离
         except Exception:
@@ -1603,12 +1693,20 @@ class ApplicationContext(QObject):
             x, y, w, h = [float(max(0.0, min(1.0, v))) for v in rect_norm]
             w = max(0.0, min(1.0 - x, w))
             h = max(0.0, min(1.0 - y, h))
-            self._contactsheet_crop_rect = (x, y, w, h)
+            self._contactsheet_profile.crop_rect = (x, y, w, h)
             # 不改变 profile 与聚焦，仅发出 overlay 的变更
-            self.crop_changed.emit(self._contactsheet_crop_rect)
+            self.crop_changed.emit(self._contactsheet_profile.crop_rect)
             self._autosave_timer.start()
         except Exception:
             pass
+
+    def reload_curves_config(self):
+        """重新加载curves配置"""
+        try:
+            # 发出curves配置重载信号，通知所有相关UI组件刷新
+            self.curves_config_reloaded.emit()
+        except Exception as e:
+            self.status_message_changed.emit(f"重新加载curves配置失败: {e}")
 
     def reload_all_configs(self):
         """重新加载所有配置文件"""
@@ -1619,7 +1717,8 @@ class ApplicationContext(QObject):
             # 重新加载矩阵配置
             self.the_enlarger.pipeline_processor.reload_matrices()
             
-            # TODO: 如需要，可以在此添加curves等其他配置的重新加载
+            # 重新加载curves配置
+            self.reload_curves_config()
             
             self.status_message_changed.emit("配置文件已重新加载")
         except Exception as e:

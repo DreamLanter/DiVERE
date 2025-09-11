@@ -27,6 +27,13 @@ class CurveDefinition:
     points: List[Tuple[float, float]] = field(default_factory=list)
 
 @dataclass
+class ContactsheetProfile:
+    """接触印相配置档案 - 包含独立的orientation和临时裁剪"""
+    params: Optional['ColorGradingParams'] = None  # 延迟初始化，在ApplicationContext中设置
+    orientation: int = 0  # 相对于原图的绝对角度 (0, 90, 180, 270)
+    crop_rect: Optional[Tuple[float, float, float, float]] = None  # 临时裁剪矩形 (x,y,w,h) 0-1
+
+@dataclass
 class CropInstance:
     """单个裁剪实例，包含独立的几何变换"""
     id: str

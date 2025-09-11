@@ -1354,19 +1354,20 @@ class PreviewWidget(QWidget):
 
     def _draw_crop_label(self, painter: QPainter, x: int, y: int, text: str, color: QColor):
         """绘制裁剪框的序号标签"""
-        # 背景矩形
+        # 设置更大的字体
         font = painter.font()
-        font.setPixelSize(14)
+        font.setPixelSize(18)  # 从14增加到18像素
         font.setBold(True)
         painter.setFont(font)
         
         metrics = painter.fontMetrics()
         text_rect = metrics.boundingRect(text)
-        padding = 3
+        padding = 5  # 从3增加到5像素，增强视觉效果
         
+        # 将标号放在crop框内部的左上角
         label_rect = QRect(
-            x - padding,
-            y - text_rect.height() - padding * 2,
+            x + padding,  # 在crop框内部，左边留padding
+            y + padding,  # 在crop框内部，上边留padding
             text_rect.width() + padding * 2,
             text_rect.height() + padding * 2
         )

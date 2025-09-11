@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self.context.status_message_changed.connect(self.statusBar().showMessage)
         self.context.image_loaded.connect(self._on_image_loaded)
         self.context.autosave_requested.connect(self._on_autosave_requested)
+        # 连接curves配置重载信号
+        self.context.curves_config_reloaded.connect(self._on_curves_config_reloaded)
         try:
             self.context.preview_updated.connect(lambda _: self._update_apply_contactsheet_enabled())
         except Exception:
@@ -505,6 +507,15 @@ class MainWindow(QMainWindow):
         if preset_file_path:
             self.statusBar().showMessage(f"参数已自动保存到: {preset_file_path.name}")
 
+    def _on_curves_config_reloaded(self):
+        """响应curves配置重载信号"""
+        try:
+            # 刷新parameter_panel中的curve_editor组件
+            if hasattr(self.parameter_panel, 'curve_editor') and self.parameter_panel.curve_editor:
+                self.parameter_panel.curve_editor.reload_curves_config()
+        except Exception as e:
+            print(f"Failed to reload curves config in UI: {e}")
+
     def _on_request_switch_profile(self, kind: str, crop_id: object):
         """处理切换Profile请求"""
         try:
@@ -582,7 +593,7 @@ class MainWindow(QMainWindow):
         try:
             print(f"DEBUG: 当前active_crop_id: {getattr(self.context, '_active_crop_id', None)}")
             print(f"DEBUG: 当前crop_focused: {getattr(self.context, '_crop_focused', False)}")
-            print(f"DEBUG: contactsheet_params存在: {bool(getattr(self.context, '_contactsheet_params', None))}")
+            print(f"DEBUG: contactsheet_params存在: {bool(getattr(self.context._contactsheet_profile, 'params', None))}")
             
             self.context.apply_contactsheet_to_active_crop()
             print("DEBUG: apply_contactsheet_to_active_crop调用完成")
@@ -1886,7 +1897,7 @@ class MainWindow(QMainWindow):
             focused = bool(getattr(self.context, '_crop_focused', False))
             kind = self.context.get_current_profile_kind()
             # 检查是否有contactsheet参数可以沿用
-            has_contactsheet_params = bool(getattr(self.context, '_contactsheet_params', None))
+            has_contactsheet_params = bool(getattr(self.context._contactsheet_profile, 'params', None))
             # 检查是否有active crop参数可以应用到contactsheet
             has_active_crop = bool(getattr(self.context, '_active_crop_id', None))
             

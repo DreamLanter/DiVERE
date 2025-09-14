@@ -489,12 +489,26 @@ class ApplicationContext(QObject):
             # 2. 计算视觉宽高比（用户看到的宽高比）
             visual_aspect_ratio = self._calculate_visual_aspect_ratio(cs_orientation)
 
-            # 3. 在标准坐标系中使用布局管理器计算最佳位置
+            # 3. 根据orientation选择正确的布局方向
+            if cs_orientation % 360 == 90:
+                # 90°：使用纵向布局（y递增 → 显示坐标系x递增，实现从左到右）
+                adjusted_aspect_ratio = 0.5  # < 1.0 强制纵向布局
+            elif cs_orientation % 360 == 270:
+                # 270°：需要验证，暂时也使用纵向布局
+                adjusted_aspect_ratio = 0.5  # < 1.0 强制纵向布局
+            elif cs_orientation % 360 == 180:
+                # 180°：可能需要特殊处理，暂时使用原始逻辑
+                adjusted_aspect_ratio = visual_aspect_ratio
+            else:  # 0°
+                # 正常根据visual_aspect_ratio选择
+                adjusted_aspect_ratio = visual_aspect_ratio
+            
+            # 在标准坐标系中使用布局管理器计算最佳位置
             layout_manager = CropLayoutManager()
             new_rect_std = layout_manager.find_next_position(
                 existing_crops=existing_crops_std,
                 template_size=None,  # 使用最后一个裁剪的尺寸或默认值
-                image_aspect_ratio=visual_aspect_ratio
+                image_aspect_ratio=adjusted_aspect_ratio
             )
             
             # 4. 将计算结果正变换到显示坐标系

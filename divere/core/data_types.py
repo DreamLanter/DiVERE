@@ -4,7 +4,20 @@
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any, Optional
+from enum import Enum
 import numpy as np
+
+
+class CropAddDirection(Enum):
+    """裁剪添加方向枚举"""
+    DOWN_RIGHT = "down_right"  # ↓→ 优先向下，边缘时向右
+    DOWN_LEFT = "down_left"    # ↓← 优先向下，边缘时向左  
+    RIGHT_DOWN = "right_down"  # →↓ 优先向右，边缘时向下
+    RIGHT_UP = "right_up"      # →↑ 优先向右，边缘时向上
+    UP_LEFT = "up_left"        # ↑← 优先向上，边缘时向左
+    UP_RIGHT = "up_right"      # ↑→ 优先向上，边缘时向右
+    LEFT_UP = "left_up"        # ←↑ 优先向左，边缘时向上
+    LEFT_DOWN = "left_down"    # ←↓ 优先向左，边缘时向下
 
 
 @dataclass

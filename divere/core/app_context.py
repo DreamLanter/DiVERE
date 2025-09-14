@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
 
-from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig, ContactsheetProfile
+from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig, ContactsheetProfile, CropAddDirection
 from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
@@ -471,8 +471,12 @@ class ApplicationContext(QObject):
         else:
             return (x, y, w, h)
 
-    def smart_add_crop(self) -> str:
-        """智能添加裁剪：根据现有裁剪自动计算最佳位置（考虑orientation坐标变换）"""
+    def smart_add_crop(self, direction: CropAddDirection = CropAddDirection.DOWN_RIGHT) -> str:
+        """智能添加裁剪：根据现有裁剪自动计算最佳位置（考虑orientation坐标变换）
+        
+        Args:
+            direction: 指定的添加方向
+        """
         try:
             from divere.utils.crop_layout_manager import CropLayoutManager
             
@@ -486,32 +490,16 @@ class ApplicationContext(QObject):
                 x_std, y_std, w_std, h_std = self._apply_inverse_orientation_to_rect(x, y, w, h, cs_orientation)
                 existing_crops_std.append((x_std, y_std, w_std, h_std))
             
-            # 2. 计算视觉宽高比（用户看到的宽高比）
-            visual_aspect_ratio = self._calculate_visual_aspect_ratio(cs_orientation)
-
-            # 3. 根据orientation选择正确的布局方向
-            if cs_orientation % 360 == 90:
-                # 90°：使用纵向布局（y递增 → 显示坐标系x递增，实现从左到右）
-                adjusted_aspect_ratio = 0.5  # < 1.0 强制纵向布局
-            elif cs_orientation % 360 == 270:
-                # 270°：需要验证，暂时也使用纵向布局
-                adjusted_aspect_ratio = 0.5  # < 1.0 强制纵向布局
-            elif cs_orientation % 360 == 180:
-                # 180°：可能需要特殊处理，暂时使用原始逻辑
-                adjusted_aspect_ratio = visual_aspect_ratio
-            else:  # 0°
-                # 正常根据visual_aspect_ratio选择
-                adjusted_aspect_ratio = visual_aspect_ratio
-            
-            # 在标准坐标系中使用布局管理器计算最佳位置
+            # 在标准坐标系中使用布局管理器计算最佳位置（传递orientation用于方向转换）
             layout_manager = CropLayoutManager()
             new_rect_std = layout_manager.find_next_position(
                 existing_crops=existing_crops_std,
                 template_size=None,  # 使用最后一个裁剪的尺寸或默认值
-                image_aspect_ratio=adjusted_aspect_ratio
+                direction=direction,  # 用户视觉方向
+                orientation=cs_orientation  # 传递orientation用于方向转换
             )
             
-            # 4. 将计算结果正变换到显示坐标系
+            # 将计算结果正变换到显示坐标系
             x_std, y_std, w_std, h_std = new_rect_std
             new_rect = self._apply_orientation_to_rect(x_std, y_std, w_std, h_std, cs_orientation)
             

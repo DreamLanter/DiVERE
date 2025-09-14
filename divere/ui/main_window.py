@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction, QKeySequence
 import numpy as np
 
 from divere.core.app_context import ApplicationContext
-from divere.core.data_types import ImageData, ColorGradingParams, Preset, InputTransformationDefinition, MatrixDefinition, CurveDefinition
+from divere.core.data_types import ImageData, ColorGradingParams, Preset, InputTransformationDefinition, MatrixDefinition, CurveDefinition, CropAddDirection
 from divere.utils.enhanced_config_manager import enhanced_config_manager
 from divere.utils.preset_manager import PresetManager, apply_preset_to_params
 from divere.utils.auto_preset_manager import AutoPresetManager
@@ -546,16 +546,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"切换Profile失败: {e}")
 
-    def _on_request_new_crop(self):
+    def _on_request_new_crop(self, direction: CropAddDirection):
         """响应新增裁剪请求
         - 若已有 >=1 个裁剪：智能新增（复制相同大小并布局），不进入鼠标框选
         - 若没有裁剪：保持现有逻辑，由预览进入手动框选
+        
+        Args:
+            direction: 指定的添加方向
         """
         try:
             crops = self.context.get_all_crops()
             if isinstance(crops, list) and len(crops) >= 1:
                 # 调用智能新增：复制尺寸、按长宽比布局
-                new_id = self.context.smart_add_crop()
+                new_id = self.context.smart_add_crop(direction)
                 if new_id:
                     # 切回原图显示所有裁剪（不聚焦），并显示编号按钮
                     self.context.switch_to_contactsheet()

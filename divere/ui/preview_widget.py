@@ -8,11 +8,11 @@ from typing import Optional, Tuple, List, Dict
 from enum import Enum
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton, QCheckBox
-from PySide6.QtWidgets import QFrame, QApplication
+from PySide6.QtWidgets import QFrame, QApplication, QComboBox
 from PySide6.QtCore import Qt, QTimer, Signal, QPoint, QPointF, QRect, QEvent
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor, QPolygonF
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QCursor, QPolygonF, QAction
 
-from divere.core.data_types import ImageData, CropInstance
+from divere.core.data_types import ImageData, CropInstance, CropAddDirection
 
 
 class CropEditMode(Enum):
@@ -352,13 +352,54 @@ class PreviewWidget(QWidget):
             self.btn_add_crop = QPushButton("+")
             self.btn_add_crop.setMaximumWidth(32)
             self.btn_add_crop.setToolTip("添加新裁剪")
-            self.btn_add_crop.clicked.connect(self._emit_request_new_crop)
+            self.btn_add_crop.clicked.connect(self._on_add_crop_clicked)
             row.addWidget(self.btn_add_crop)
+            
+            # 方向选择下拉框
+            self.combo_direction = QComboBox()
+            self.combo_direction.setMaximumWidth(100)
+            self.combo_direction.setToolTip("选择添加方向")
+            
+            # 添加8个方向选项
+            directions = [
+                ("↓→", CropAddDirection.DOWN_RIGHT, "优先向下，边缘时向右"),
+                ("↓←", CropAddDirection.DOWN_LEFT, "优先向下，边缘时向左"),
+                ("→↓", CropAddDirection.RIGHT_DOWN, "优先向右，边缘时向下"),
+                ("→↑", CropAddDirection.RIGHT_UP, "优先向右，边缘时向上"),
+                ("↑←", CropAddDirection.UP_LEFT, "优先向上，边缘时向左"),
+                ("↑→", CropAddDirection.UP_RIGHT, "优先向上，边缘时向右"),
+                ("←↑", CropAddDirection.LEFT_UP, "优先向左，边缘时向上"),
+                ("←↓", CropAddDirection.LEFT_DOWN, "优先向左，边缘时向下")
+            ]
+            
+            for display_text, direction_value, tooltip in directions:
+                self.combo_direction.addItem(display_text)
+                # 设置每个项目的用户数据为对应的方向值
+                self.combo_direction.setItemData(self.combo_direction.count() - 1, direction_value)
+            
+            # 默认选择第一个方向（DOWN_RIGHT）
+            self.combo_direction.setCurrentIndex(0)
+            row.addWidget(self.combo_direction)
             
             # 放到底部
             self.layout().addLayout(row)
         except Exception as e:
             print(f"创建裁剪选择条失败: {e}")
+            
+    def _get_selected_direction(self) -> CropAddDirection:
+        """获取当前选择的添加方向"""
+        try:
+            current_index = self.combo_direction.currentIndex()
+            direction = self.combo_direction.itemData(current_index)
+            return direction if direction is not None else CropAddDirection.DOWN_RIGHT
+        except AttributeError:
+            # 如果combo_direction还没有初始化，返回默认方向
+            return CropAddDirection.DOWN_RIGHT
+            
+    def _on_add_crop_clicked(self):
+        """处理+按钮点击，使用选择的方向添加裁剪"""
+        selected_direction = self._get_selected_direction()
+        self._emit_request_new_crop(selected_direction)
 
     def refresh_crop_selector(self, crops: list, active_crop_id: str | None, is_focused: bool = False):
         """根据 Context 的裁剪列表刷新按钮。crops: list[CropInstance]"""
@@ -454,7 +495,7 @@ class PreviewWidget(QWidget):
 
     # 供 MainWindow 连接到 Context 的信号
     request_switch_profile = Signal(str, object)  # kind, crop_id
-    request_new_crop = Signal()
+    request_new_crop = Signal(object)  # direction (CropAddDirection)
     request_delete_crop = Signal(str)  # 删除指定裁剪
 
     def _emit_switch_profile(self, kind: str, crop_id: object):
@@ -466,11 +507,11 @@ class PreviewWidget(QWidget):
         self._crop_current_norm = None
         self.request_switch_profile.emit(kind, crop_id)
 
-    def _emit_request_new_crop(self):
+    def _emit_request_new_crop(self, direction: CropAddDirection):
         # 若已存在至少一个正式裁剪，则交给主窗口执行"智能新增"，不进入手动框选
         try:
             if isinstance(self._all_crops, list) and len(self._all_crops) >= 1:
-                self.request_new_crop.emit()
+                self.request_new_crop.emit(direction)
                 return
         except Exception:
             pass

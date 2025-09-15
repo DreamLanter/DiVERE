@@ -4,7 +4,23 @@ DiVERE 主应用程序入口
 
 import sys
 import os
+import platform
 from pathlib import Path
+
+# Windows控制台附加：检测是否从命令行运行
+if platform.system() == 'Windows':
+    import ctypes
+    
+    # 尝试附加到父进程的控制台（如果从cmd/PowerShell运行）
+    # ATTACH_PARENT_PROCESS = -1
+    kernel32 = ctypes.windll.kernel32
+    if kernel32.AttachConsole(-1):
+        # 成功附加到父控制台，重定向标准输出
+        import io
+        sys.stdout = io.TextIOWrapper(open('CONOUT$', 'wb'), encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(open('CONOUT$', 'wb'), encoding='utf-8')
+        # 输出空行以确保从新行开始
+        print()
 
 # 将工作目录切换到可执行文件所在目录（适配 .app/Contents/MacOS 与独立二进制）
 try:

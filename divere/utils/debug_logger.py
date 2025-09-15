@@ -142,9 +142,14 @@ class DiVEREDebugLogger:
             except Exception as e:
                 print(f"Warning: Could not set up file logging: {e}")
         
-        # Console handler (only for ERROR and above to avoid spam)
+        # Console handler
+        # Windows: show INFO level when running from console
+        # Other platforms: only show ERROR to avoid spam
         console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(logging.ERROR)
+        if platform.system() == 'Windows':
+            console_handler.setLevel(logging.INFO)  # Windows显示更多信息
+        else:
+            console_handler.setLevel(logging.ERROR)
         console_handler.setFormatter(formatter)
         self._logger.addHandler(console_handler)
         

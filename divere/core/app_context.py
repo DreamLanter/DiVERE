@@ -768,7 +768,7 @@ class ApplicationContext(QObject):
             preserve_film_type: 是否保留当前胶片类型，不被预设覆盖
         """
         # 1. 清理当前状态
-        self.clear_crop()
+        # self.clear_crop() # 不清理裁剪，允许预设仅更新参数
         
         # Load film type (optionally preserve current film type)  
         old_film_type = self._current_film_type
@@ -850,32 +850,33 @@ class ApplicationContext(QObject):
         self.update_params(new_params)
         self._contactsheet_profile.params = self._current_params.copy()
 
-        # 4. 加载crop和orientation（完全分离模型）
-        try:
-            # 设置contactsheet的orientation
-            self._contactsheet_profile.orientation = preset.orientation
-            
-            # 再加载crop（使用新的CropInstance接口）
-            crop_instances = preset.get_crop_instances()
-            if crop_instances:
-                # 当前阶段：仅支持单crop，取第一个
-                crop_instance = crop_instances[0] 
-                # 保持crop的独立orientation
-                self.set_single_crop(crop_instance.rect_norm, crop_instance.orientation, preserve_focus=False)
-                self._crop_focused = False
-            elif preset.crop and len(preset.crop) == 4:
-                # 回退：旧字段作为 contactsheet 临时裁剪
-                try:
-                    x, y, w, h = [float(max(0.0, min(1.0, v))) for v in tuple(preset.crop)]
-                    w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
-                    self._contactsheet_profile.crop_rect = (x, y, w, h)
-                    self._crop_focused = False
-                    self.crop_changed.emit(self._contactsheet_profile.crop_rect)
-                except Exception:
-                    self._contactsheet_profile.crop_rect = None
-        except Exception:
-            # 最终回退：只设置contactsheet的orientation
-            self._contactsheet_profile.orientation = preset.orientation
+        # 这里注释掉，因为重置参数不需要影响metadata
+        # # 4. 加载crop和orientation（完全分离模型）
+        # try:
+        #     # 设置contactsheet的orientation
+        #     self._contactsheet_profile.orientation = preset.orientation
+        #
+        #     # 再加载crop（使用新的CropInstance接口）
+        #     crop_instances = preset.get_crop_instances()
+        #     if crop_instances:
+        #         # 当前阶段：仅支持单crop，取第一个
+        #         crop_instance = crop_instances[0]
+        #         # 保持crop的独立orientation
+        #         self.set_single_crop(crop_instance.rect_norm, crop_instance.orientation, preserve_focus=False)
+        #         self._crop_focused = False
+        #     elif preset.crop and len(preset.crop) == 4:
+        #         # 回退：旧字段作为 contactsheet 临时裁剪
+        #         try:
+        #             x, y, w, h = [float(max(0.0, min(1.0, v))) for v in tuple(preset.crop)]
+        #             w = max(0.0, min(1.0 - x, w)); h = max(0.0, min(1.0 - y, h))
+        #             self._contactsheet_profile.crop_rect = (x, y, w, h)
+        #             self._crop_focused = False
+        #             self.crop_changed.emit(self._contactsheet_profile.crop_rect)
+        #         except Exception:
+        #             self._contactsheet_profile.crop_rect = None
+        # except Exception:
+        #     # 最终回退：只设置contactsheet的orientation
+        #     self._contactsheet_profile.orientation = preset.orientation
         
         # 切换到 contactsheet profile
         self._current_profile_kind = 'contactsheet'

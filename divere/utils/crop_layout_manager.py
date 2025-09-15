@@ -8,30 +8,11 @@ from .orientation_direction_mapper import convert_visual_to_standard_direction
 
 @dataclass
 class DirectionConfig:
-    """方向配置 - 定义每个方向的行为参数"""
-    layout_direction: str  # 'horizontal' 或 'vertical' - 决定间距计算方式
-    grouping_method: str  # 'rows' 或 'columns' - 决定分组方式
+    """简化的方向配置 - 仅定义核心移动方向"""
     primary_axis: str  # 'x' 或 'y' - 主要移动轴
-    secondary_axis: str  # 'x' 或 'y' - 回退移动轴
-    primary_selector: str  # 'max' 或 'min' - 选择极值的方法
-    use_edge_for_primary: bool  # True表示在主轴上使用边界（如x+width），False使用起始点
-    primary_direction_positive: bool  # True表示正向移动，False表示负向移动
-    secondary_direction_positive: bool  # True表示正向移动，False表示负向移动
-    new_group_align_to_edge: bool  # True表示新行/列从边界开始，False表示与参考crop对齐
-    
-    def get_spacing_calculator(self, manager: 'CropLayoutManager') -> Callable[[float, float], float]:
-        """根据布局方向返回间距计算函数"""
-        if self.layout_direction == 'horizontal':
-            return manager._calculate_item_spacing
-        else:
-            return manager._calculate_item_spacing
-    
-    def get_grouping_function(self, manager: 'CropLayoutManager') -> Callable[[List], List[List]]:
-        """根据分组方法返回分组函数"""
-        if self.grouping_method == 'rows':
-            return manager._group_by_rows
-        else:
-            return manager._group_by_columns
+    primary_positive: bool  # True表示正向移动，False表示负向移动
+    secondary_axis: str  # 'x' 或 'y' - 次要移动轴（开新行/列时使用）
+    secondary_positive: bool  # True表示正向移动，False表示负向移动
 
 
 @dataclass
@@ -64,99 +45,60 @@ class CropLayoutManager:
         self.max_crop_size = 0.5  # 最大裁剪尺寸（归一化）
         self.default_crop_size = 0.25  # 默认裁剪尺寸（归一化）
         self.margin = 0.00  # 边界间距 可以允许没有边距。
-        self.item_spacing_ratio = 0.0555  # 同行/同列内部间距比例（相对于crop长边）
-        self.row_spacing_ratio = 0.20  # 行与行之间间距比例（相对于crop高度）
+        self.item_spacing_ratio = 0.0555  # 同行/同列内部间距比例（相对于crop长边）0.555
+        self.row_spacing_ratio = 0.12  # 行与行之间间距比例（相对于crop高度）
         self.column_spacing_ratio = 0.12  # 列与列之间间距比例（相对于crop宽度）
         
         # 完整的8个方向配置映射
+        # 简化的8种方向配置 - 仅定义核心移动方向
         self.direction_configs = {
             CropAddDirection.DOWN_RIGHT: DirectionConfig(
-                layout_direction='vertical',
-                grouping_method='columns',
-                primary_axis='y',
-                secondary_axis='x',
-                primary_selector='max',
-                use_edge_for_primary=True,
-                primary_direction_positive=True,
-                secondary_direction_positive=True,
-                new_group_align_to_edge=True  # 新列从顶部开始
+                primary_axis='y',           # 主要向下移动
+                primary_positive=True,      # 向下（正向）
+                secondary_axis='x',         # 次要向右移动
+                secondary_positive=True     # 向右（正向）
             ),
             CropAddDirection.DOWN_LEFT: DirectionConfig(
-                layout_direction='vertical',
-                grouping_method='columns',
-                primary_axis='y',
-                secondary_axis='x',
-                primary_selector='max',
-                use_edge_for_primary=True,
-                primary_direction_positive=True,
-                secondary_direction_positive=False,
-                new_group_align_to_edge=True  # 新列从顶部开始
+                primary_axis='y',           # 主要向下移动
+                primary_positive=True,      # 向下（正向）
+                secondary_axis='x',         # 次要向左移动
+                secondary_positive=False    # 向左（负向）
             ),
             CropAddDirection.RIGHT_DOWN: DirectionConfig(
-                layout_direction='horizontal',
-                grouping_method='rows',
-                primary_axis='x',
-                secondary_axis='y',
-                primary_selector='max',
-                use_edge_for_primary=True,
-                primary_direction_positive=True,
-                secondary_direction_positive=True,
-                new_group_align_to_edge=True  # 新行从左边开始
+                primary_axis='x',           # 主要向右移动
+                primary_positive=True,      # 向右（正向）
+                secondary_axis='y',         # 次要向下移动
+                secondary_positive=True     # 向下（正向）
             ),
             CropAddDirection.RIGHT_UP: DirectionConfig(
-                layout_direction='horizontal',
-                grouping_method='rows',
-                primary_axis='x',
-                secondary_axis='y',
-                primary_selector='max',
-                use_edge_for_primary=True,
-                primary_direction_positive=True,
-                secondary_direction_positive=False,
-                new_group_align_to_edge=True  # 新行从左边开始
+                primary_axis='x',           # 主要向右移动
+                primary_positive=True,      # 向右（正向）
+                secondary_axis='y',         # 次要向上移动
+                secondary_positive=False    # 向上（负向）
             ),
             CropAddDirection.UP_LEFT: DirectionConfig(
-                layout_direction='vertical',
-                grouping_method='columns',
-                primary_axis='y',
-                secondary_axis='x',
-                primary_selector='min',
-                use_edge_for_primary=False,
-                primary_direction_positive=False,
-                secondary_direction_positive=False,
-                new_group_align_to_edge=True  # 新列从底部开始
+                primary_axis='y',           # 主要向上移动
+                primary_positive=False,     # 向上（负向）
+                secondary_axis='x',         # 次要向左移动
+                secondary_positive=False    # 向左（负向）
             ),
             CropAddDirection.UP_RIGHT: DirectionConfig(
-                layout_direction='vertical',
-                grouping_method='columns',
-                primary_axis='y',
-                secondary_axis='x',
-                primary_selector='min',
-                use_edge_for_primary=False,
-                primary_direction_positive=False,
-                secondary_direction_positive=True,
-                new_group_align_to_edge=True  # 新列从底部开始
+                primary_axis='y',           # 主要向上移动
+                primary_positive=False,     # 向上（负向）
+                secondary_axis='x',         # 次要向右移动
+                secondary_positive=True     # 向右（正向）
             ),
             CropAddDirection.LEFT_UP: DirectionConfig(
-                layout_direction='horizontal',
-                grouping_method='rows',
-                primary_axis='x',
-                secondary_axis='y',
-                primary_selector='min',
-                use_edge_for_primary=False,
-                primary_direction_positive=False,
-                secondary_direction_positive=False,
-                new_group_align_to_edge=True  # 新行从右边开始
+                primary_axis='x',           # 主要向左移动
+                primary_positive=False,     # 向左（负向）
+                secondary_axis='y',         # 次要向上移动
+                secondary_positive=False    # 向上（负向）
             ),
             CropAddDirection.LEFT_DOWN: DirectionConfig(
-                layout_direction='horizontal',
-                grouping_method='rows',
-                primary_axis='x',
-                secondary_axis='y',
-                primary_selector='min',
-                use_edge_for_primary=False,
-                primary_direction_positive=False,
-                secondary_direction_positive=True,
-                new_group_align_to_edge=True  # 新行从右边开始
+                primary_axis='x',           # 主要向左移动
+                primary_positive=False,     # 向左（负向）
+                secondary_axis='y',         # 次要向下移动
+                secondary_positive=True     # 向下（正向）
             )
         }
         
@@ -292,257 +234,129 @@ class CropLayoutManager:
                        crop_h: float,
                        direction: CropAddDirection,
                        orientation: int) -> CropRect:
-        """统一的位置查找函数 - 使用orientation_direction_mapper进行方向转换"""
-        # 使用orientation_direction_mapper转换方向
-        actual_direction = convert_visual_to_standard_direction(direction, orientation)
-        
-        # 获取转换后方向的配置
-        config = self.direction_configs[actual_direction]
-        
-        # 计算间距
-        item_spacing = self._calculate_item_spacing(crop_w, crop_h, config.layout_direction)
-        
-        # 分组现有裁剪
-        grouping_func = config.get_grouping_function(self)
-        groups = grouping_func(existing_rects)
-        
-        # 尝试在主方向添加
-        if groups:
-            new_rect = self._try_primary_direction(
-                groups, crop_w, crop_h, config, item_spacing
-            )
-            if new_rect:
-                return new_rect
-        
-        # 主方向失败，尝试回退方向
-        return self._create_new_group(
-            existing_rects, crop_w, crop_h, config
-        )
-    
-    def _try_primary_direction(self, 
-                              groups: List[List[CropRect]], 
-                              crop_w: float, 
-                              crop_h: float,
-                              config: DirectionConfig,
-                              item_spacing: float) -> Optional[CropRect]:
-        """尝试在主方向添加新裁剪"""
-        # 选择目标组
-        if config.primary_selector == 'max':
-            if config.grouping_method == 'columns':
-                target_group = groups[-1]  # 最右边的列
-            else:  # rows
-                target_group = groups[-1]  # 最下面的行
-        else:  # min
-            target_group = groups[0]  # 最左边的列或最上面的行
-            
-        # 选择组内目标裁剪
-        if config.primary_selector == 'max':
-            if config.primary_axis == 'y':
-                if config.use_edge_for_primary:
-                    target_crop = max(target_group, key=lambda r: r.y + r.height)
-                else:
-                    target_crop = max(target_group, key=lambda r: r.y)
-            else:  # x axis
-                if config.use_edge_for_primary:
-                    target_crop = max(target_group, key=lambda r: r.x + r.width)
-                else:
-                    target_crop = max(target_group, key=lambda r: r.x)
-        else:  # min
-            if config.primary_axis == 'y':
-                target_crop = min(target_group, key=lambda r: r.y)
-            else:  # x axis
-                target_crop = min(target_group, key=lambda r: r.x)
-        
-        # 计算新位置
-        new_x, new_y = self._calculate_primary_position(
-            target_crop, crop_w, crop_h, config, item_spacing
-        )
-        
-        # 检查是否有足够空间
-        if self._check_primary_space(new_x, new_y, crop_w, crop_h, config):
-            new_rect = CropRect(new_x, new_y, crop_w, crop_h)
-            # 检查重叠
-            if not any(new_rect.overlaps_with(r, margin=0.005) for group in groups for r in group):
-                return new_rect
-                
-        return None
-    
-    def _calculate_primary_position(self, 
-                                   target_crop: CropRect,
-                                   crop_w: float, 
-                                   crop_h: float,
-                                   config: DirectionConfig,
-                                   item_spacing: float) -> Tuple[float, float]:
-        """计算主方向的新位置"""
-        if config.primary_axis == 'y':
-            # 垂直移动
-            if config.primary_direction_positive:
-                # 向下
-                base_y = target_crop.y + target_crop.height if config.use_edge_for_primary else target_crop.y
-                new_y = base_y + item_spacing
-                new_x = target_crop.x
-            else:
-                # 向上
-                base_y = target_crop.y if not config.use_edge_for_primary else target_crop.y
-                new_y = base_y - crop_h - item_spacing
-                new_x = target_crop.x
-        else:
-            # 水平移动
-            if config.primary_direction_positive:
-                # 向右
-                base_x = target_crop.x + target_crop.width if config.use_edge_for_primary else target_crop.x
-                new_x = base_x + item_spacing
-                new_y = target_crop.y
-            else:
-                # 向左
-                base_x = target_crop.x if not config.use_edge_for_primary else target_crop.x
-                new_x = base_x - crop_w - item_spacing
-                new_y = target_crop.y
-                
-        return new_x, new_y
-    
-    def _check_primary_space(self, 
-                            new_x: float, 
-                            new_y: float, 
-                            crop_w: float, 
-                            crop_h: float,
-                            config: DirectionConfig) -> bool:
-        """检查主方向是否有足够空间"""
-        safety_margin = 0.01 * (crop_w if config.primary_axis == 'x' else crop_h)
-        
-        if config.primary_axis == 'y':
-            if config.primary_direction_positive:
-                # 向下，检查底部边界
-                required_space = crop_h + self.margin
-                available_space = 1.0 - new_y
-                return available_space >= required_space + safety_margin
-            else:
-                # 向上，检查顶部边界
-                return new_y >= self.margin + safety_margin
-        else:
-            if config.primary_direction_positive:
-                # 向右，检查右边界
-                required_space = crop_w + self.margin
-                available_space = 1.0 - new_x
-                return available_space >= required_space + safety_margin
-            else:
-                # 向左，检查左边界
-                return new_x >= self.margin + safety_margin
-    
-    def _get_initial_position(self, crop_w: float, crop_h: float, config: DirectionConfig) -> CropRect:
-        """根据方向配置确定第一个crop的初始位置
-        
-        策略：根据主方向和次方向的组合，将第一个crop放在合适的角落，
-        为后续crop的添加留出正确的扩展空间。
-        """
-        # 根据主方向和次方向确定合适的起始位置
-        if config.primary_axis == 'y':  # 主要是纵向移动
-            if config.primary_direction_positive:  # 向下
-                if config.secondary_direction_positive:  # 向右
-                    # DOWN_RIGHT: 从左上角开始，向下优先，然后向右
-                    x, y = self.margin, self.margin
-                else:  # 向左  
-                    # DOWN_LEFT: 从右上角开始，向下优先，然后向左
-                    x, y = 1.0 - self.margin - crop_w, self.margin
-            else:  # 向上
-                if config.secondary_direction_positive:  # 向右
-                    # UP_RIGHT: 从左下角开始，向上优先，然后向右
-                    x, y = self.margin, 1.0 - self.margin - crop_h
-                else:  # 向左
-                    # UP_LEFT: 从右下角开始，向上优先，然后向左
-                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
-        else:  # config.primary_axis == 'x', 主要是横向移动
-            if config.primary_direction_positive:  # 向右
-                if config.secondary_direction_positive:  # 向下
-                    # RIGHT_DOWN: 从左上角开始，向右优先，然后向下
-                    x, y = self.margin, self.margin
-                else:  # 向上
-                    # RIGHT_UP: 从左下角开始，向右优先，然后向上
-                    x, y = self.margin, 1.0 - self.margin - crop_h
-            else:  # 向左
-                if config.secondary_direction_positive:  # 向下
-                    # LEFT_DOWN: 从右上角开始，向左优先，然后向下
-                    x, y = 1.0 - self.margin - crop_w, self.margin
-                else:  # 向上
-                    # LEFT_UP: 从右下角开始，向左优先，然后向上
-                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
-        
-        return CropRect(x, y, crop_w, crop_h)
-    
-    def _create_new_group(self, 
-                         existing_rects: List[CropRect],
-                         crop_w: float, 
-                         crop_h: float,
-                         config: DirectionConfig) -> CropRect:
-        """创建新行或新列"""
+        """简化的位置查找函数 - 仅基于最后一个crop的位置"""
         if not existing_rects:
             # 第一个crop：根据方向配置决定初始位置
+            actual_direction = convert_visual_to_standard_direction(direction, orientation)
+            config = self.direction_configs[actual_direction]
             return self._get_initial_position(crop_w, crop_h, config)
-            
-        if config.secondary_direction_positive:
-            # 正向移动（右/下）
-            if config.secondary_axis == 'x':
-                # 向右新增列
-                rightmost = max(existing_rects, key=lambda r: r.x + r.width)
-                column_spacing = self._calculate_column_spacing(crop_w)
-                new_x = rightmost.x + rightmost.width + column_spacing
-                # 根据主方向决定新列的对齐方式
-                if config.new_group_align_to_edge:
-                    # 从边界开始：DOWN方向从顶部，UP方向从底部
-                    if config.primary_direction_positive:  # DOWN方向
-                        new_y = self.margin
-                    else:  # UP方向
-                        new_y = 1.0 - self.margin - crop_h
-                else:
-                    # 与参考crop对齐
-                    new_y = rightmost.y
-            else:
-                # 向下新增行
-                bottommost = max(existing_rects, key=lambda r: r.y + r.height)
-                row_spacing = self._calculate_row_spacing(crop_h)
-                new_y = bottommost.y + bottommost.height + row_spacing
-                # 根据主方向决定新行的对齐方式
-                if config.new_group_align_to_edge:
-                    # 从边界开始：RIGHT方向从左边，LEFT方向从右边
-                    if config.primary_direction_positive:  # RIGHT方向
-                        new_x = self.margin
-                    else:  # LEFT方向
-                        new_x = 1.0 - self.margin - crop_w
-                else:
-                    # 与参考crop对齐
-                    new_x = bottommost.x
+        
+        # 使用orientation_direction_mapper转换方向
+        actual_direction = convert_visual_to_standard_direction(direction, orientation)
+        config = self.direction_configs[actual_direction]
+        
+        # 获取最后一个crop作为参考
+        last_crop = existing_rects[-1]
+        
+        # 计算间距
+        spacing = self._calculate_spacing(crop_w, crop_h, config)
+        
+        # 检查主方向是否有空间
+        if self._can_add_primary(last_crop, config, crop_w, crop_h, spacing):
+            # 在主方向添加
+            return self._calculate_primary_position(last_crop, config, crop_w, crop_h, spacing)
         else:
-            # 负向移动（左/上）
-            if config.secondary_axis == 'x':
-                # 向左新增列
-                leftmost = min(existing_rects, key=lambda r: r.x)
-                column_spacing = self._calculate_column_spacing(crop_w)
-                new_x = leftmost.x - crop_w - column_spacing
-                # 根据主方向决定新列的对齐方式
-                if config.new_group_align_to_edge:
-                    # 从边界开始：DOWN方向从顶部，UP方向从底部
-                    if config.primary_direction_positive:  # DOWN方向
-                        new_y = self.margin
-                    else:  # UP方向
-                        new_y = 1.0 - self.margin - crop_h
-                else:
-                    # 与参考crop对齐
-                    new_y = leftmost.y
+            # 在次方向开新行/列
+            return self._calculate_secondary_position(last_crop, config, crop_w, crop_h)
+    
+    def _calculate_spacing(self, crop_w: float, crop_h: float, config: DirectionConfig) -> float:
+        """计算crop间距"""
+        # 根据主轴方向决定间距计算基准
+        if config.primary_axis == 'x':
+            return crop_w * self.item_spacing_ratio
+        else:
+            return crop_h * self.item_spacing_ratio
+    
+    def _can_add_primary(self, last_crop: CropRect, config: DirectionConfig, 
+                        crop_w: float, crop_h: float, spacing: float) -> bool:
+        """检查主方向是否有足够空间"""
+        spacing = - spacing/2 # 在判定是否还有剩余空间时2，减少间距的一半，允许更紧凑的布局
+        if config.primary_axis == 'x':
+            if config.primary_positive:
+                # 向右：检查右边界
+                next_x = last_crop.x + last_crop.width + spacing
+                return (next_x + crop_w) <= (1.0 - self.margin)
             else:
-                # 向上新增行
-                topmost = min(existing_rects, key=lambda r: r.y)
-                row_spacing = self._calculate_row_spacing(crop_h)
-                new_y = topmost.y - crop_h - row_spacing
-                # 根据主方向决定新行的对齐方式
-                if config.new_group_align_to_edge:
-                    # 从边界开始：RIGHT方向从左边，LEFT方向从右边
-                    if config.primary_direction_positive:  # RIGHT方向
-                        new_x = self.margin
-                    else:  # LEFT方向
-                        new_x = 1.0 - self.margin - crop_w
-                else:
-                    # 与参考crop对齐
-                    new_x = topmost.x
+                # 向左：检查左边界
+                next_x = last_crop.x - spacing - crop_w
+                return next_x >= self.margin
+        else:  # primary_axis == 'y'
+            if config.primary_positive:
+                # 向下：检查底边界
+                next_y = last_crop.y + last_crop.height + spacing
+                return (next_y + crop_h) <= (1.0 - self.margin)
+            else:
+                # 向上：检查顶边界
+                next_y = last_crop.y - spacing - crop_h
+                return next_y >= self.margin
+    
+    def _calculate_primary_position(self, last_crop: CropRect, config: DirectionConfig,
+                                   crop_w: float, crop_h: float, spacing: float) -> CropRect:
+        """在主方向计算新crop位置（紧贴最后一个crop）"""
+        if config.primary_axis == 'x':
+            if config.primary_positive:
+                # 向右
+                new_x = last_crop.x + last_crop.width + spacing
+                new_y = last_crop.y  # 保持同一行
+            else:
+                # 向左
+                new_x = last_crop.x - spacing - crop_w
+                new_y = last_crop.y  # 保持同一行
+        else:  # primary_axis == 'y'
+            if config.primary_positive:
+                # 向下
+                new_x = last_crop.x  # 保持同一列
+                new_y = last_crop.y + last_crop.height + spacing
+            else:
+                # 向上
+                new_x = last_crop.x  # 保持同一列
+                new_y = last_crop.y - spacing - crop_h
+        
+        return CropRect(new_x, new_y, crop_w, crop_h)
+    
+    def _calculate_secondary_position(self, last_crop: CropRect, config: DirectionConfig,
+                                     crop_w: float, crop_h: float) -> CropRect:
+        """在次方向开新行/列（基于最后一个crop的位置）"""
+        # 计算次方向的间距
+        if config.secondary_axis == 'x':
+            secondary_spacing = crop_w * self.column_spacing_ratio
+        else:
+            secondary_spacing = crop_h * self.row_spacing_ratio
+        
+        if config.secondary_axis == 'x':
+            if config.secondary_positive:
+                # 向右开新列
+                new_x = last_crop.x + last_crop.width + secondary_spacing
+                # Y坐标：根据主方向决定对齐方式
+                if config.primary_positive:  # DOWN方向：从顶部开始
+                    new_y = self.margin
+                else:  # UP方向：从底部开始
+                    new_y = 1.0 - self.margin - crop_h
+            else:
+                # 向左开新列
+                new_x = last_crop.x - secondary_spacing - crop_w
+                # Y坐标：根据主方向决定对齐方式
+                if config.primary_positive:  # DOWN方向：从顶部开始
+                    new_y = self.margin
+                else:  # UP方向：从底部开始
+                    new_y = 1.0 - self.margin - crop_h
+        else:  # secondary_axis == 'y'
+            if config.secondary_positive:
+                # 向下开新行
+                new_y = last_crop.y + last_crop.height + secondary_spacing
+                # X坐标：根据主方向决定对齐方式
+                if config.primary_positive:  # RIGHT方向：从左边开始
+                    new_x = self.margin
+                else:  # LEFT方向：从右边开始
+                    new_x = 1.0 - self.margin - crop_w
+            else:
+                # 向上开新行
+                new_y = last_crop.y - secondary_spacing - crop_h
+                # X坐标：根据主方向决定对齐方式
+                if config.primary_positive:  # RIGHT方向：从左边开始
+                    new_x = self.margin
+                else:  # LEFT方向：从右边开始
+                    new_x = 1.0 - self.margin - crop_w
         
         # 边界检查和修正
         new_x = max(self.margin, min(new_x, 1.0 - self.margin - crop_w))
@@ -550,65 +364,41 @@ class CropLayoutManager:
         
         return CropRect(new_x, new_y, crop_w, crop_h)
     
-    
-    def _group_by_rows(self, rects: List[CropRect]) -> List[List[CropRect]]:
-        """将裁剪框按行分组"""
-        if not rects:
-            return []
+    def _get_initial_position(self, crop_w: float, crop_h: float, config: DirectionConfig) -> CropRect:
+        """根据方向配置确定第一个crop的初始位置"""
+        # 根据主方向和次方向确定合适的起始位置
+        if config.primary_axis == 'y':  # 主要是纵向移动
+            if config.primary_positive:  # 向下
+                if config.secondary_positive:  # 向右
+                    # DOWN_RIGHT: 从左上角开始
+                    x, y = self.margin, self.margin
+                else:  # 向左  
+                    # DOWN_LEFT: 从右上角开始
+                    x, y = 1.0 - self.margin - crop_w, self.margin
+            else:  # 向上
+                if config.secondary_positive:  # 向右
+                    # UP_RIGHT: 从左下角开始
+                    x, y = self.margin, 1.0 - self.margin - crop_h
+                else:  # 向左
+                    # UP_LEFT: 从右下角开始
+                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
+        else:  # config.primary_axis == 'x', 主要是横向移动
+            if config.primary_positive:  # 向右
+                if config.secondary_positive:  # 向下
+                    # RIGHT_DOWN: 从左上角开始
+                    x, y = self.margin, self.margin
+                else:  # 向上
+                    # RIGHT_UP: 从左下角开始
+                    x, y = self.margin, 1.0 - self.margin - crop_h
+            else:  # 向左
+                if config.secondary_positive:  # 向下
+                    # LEFT_DOWN: 从右上角开始
+                    x, y = 1.0 - self.margin - crop_w, self.margin
+                else:  # 向上
+                    # LEFT_UP: 从右下角开始
+                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
         
-        # 计算动态阈值 - 基于平均crop高度的50%
-        avg_height = sum(r.height for r in rects) / len(rects)
-        row_threshold = avg_height * 0.5  # 相当于半个crop的高度
-        
-        # 按y坐标排序
-        sorted_rects = sorted(rects, key=lambda r: r.y)
-        rows = []
-        current_row = [sorted_rects[0]]
-        current_y = sorted_rects[0].y
-        
-        for rect in sorted_rects[1:]:
-            # 如果y坐标相近，认为是同一行
-            if abs(rect.y - current_y) < row_threshold:
-                current_row.append(rect)
-            else:
-                # 对当前行按x坐标排序
-                rows.append(current_row)
-                current_row = [rect]
-                current_y = rect.y
-        
-        if current_row:
-            rows.append(current_row)
-        
-        return rows
-    
-    def _group_by_columns(self, rects: List[CropRect]) -> List[List[CropRect]]:
-        """将裁剪框按列分组"""
-        if not rects:
-            return []
-        
-        # 计算动态阈值 - 基于平均crop宽度的50%
-        avg_width = sum(r.width for r in rects) / len(rects)
-        column_threshold = avg_width * 0.5  # 相当于半个crop的宽度
-        
-        # 按x坐标排序
-        sorted_rects = sorted(rects, key=lambda r: r.x)
-        columns = []
-        current_column = [sorted_rects[0]]
-        current_x = sorted_rects[0].x
-        
-        for rect in sorted_rects[1:]:
-            # 如果x坐标相近，认为是同一列
-            if abs(rect.x - current_x) < column_threshold:
-                current_column.append(rect)
-            else:
-                columns.append(current_column)
-                current_column = [rect]
-                current_x = rect.x
-        
-        if current_column:
-            columns.append(current_column)
-        
-        return columns
+        return CropRect(x, y, crop_w, crop_h)
 
 
 class PresetCropManager:

@@ -1,33 +1,33 @@
-# DiVERE 胶片校色工具 - 核心依赖包
-# 版本要求与 pyproject.toml 保持一致
+# DiVERE Film Color Correction Tool - Core Dependencies
+# Version requirements consistent with pyproject.toml
 
-# 核心依赖
-PySide6>=6.5.0          # GUI框架
-numpy>=1.24.0            # 数值计算
-opencv-python>=4.8.0     # 图像处理
-pillow>=10.0.0           # 图像I/O
-scipy>=1.11.0            # 科学计算
-imageio>=2.31.0          # 图像格式支持
-colour-science>=0.4.2    # 色彩科学计算
-onnxruntime>=1.15.0      # ONNX推理（AI自动校色）
-pyopencl>=2024.1         # GPU加速计算
+# Core Dependencies
+PySide6>=6.5.0          # GUI framework
+numpy>=1.24.0            # Numerical computing
+opencv-python>=4.8.0     # Image processing
+pillow>=10.0.0           # Image I/O
+scipy>=1.11.0            # Scientific computing
+imageio>=2.31.0          # Image format support
+colour-science>=0.4.2    # Color science calculations
+onnxruntime>=1.15.0      # ONNX inference (AI auto color correction)
+pyopencl>=2024.1         # GPU acceleration
 
-# TIFF 格式支持（ICC配置文件嵌入）
-tifffile>=2024.2.12      # 高级TIFF处理
-imagecodecs>=2024.1.1    # tifffile的压缩编解码器支持
+# TIFF format support (ICC profile embedding)
+tifffile>=2024.2.12      # Advanced TIFF processing
+imagecodecs>=2024.1.1    # Compression codecs for tifffile
 
-# 优化算法
-cma>=3.3.0               # CMA-ES优化器（CCM参数优化）
+# Optimization algorithms
+cma>=3.3.0               # CMA-ES optimizer (CCM parameter optimization)
 
-# 可选GPU加速依赖（根据需要安装）
-# macOS Metal加速
+# Optional GPU acceleration dependencies (install as needed)
+# macOS Metal acceleration
 # pyobjc-framework-Metal
 # pyobjc-framework-MetalPerformanceShaders
 
-# CUDA加速（NVIDIA显卡）
-# cupy-cuda11x  # 按CUDA版本选择
+# CUDA acceleration (NVIDIA cards)
+# cupy-cuda11x  # Choose based on CUDA version
 
-# 开发依赖（可选）
+# Development dependencies (optional)
 # pytest>=7.4.0
 # black>=23.7.0
 # isort>=5.12.0

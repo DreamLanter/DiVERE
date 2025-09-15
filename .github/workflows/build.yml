@@ -66,22 +66,14 @@ jobs:
 
     - name: Install Python dependencies
       run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install -r requirements.txt
-        # 明确确保 onnxruntime 安装（arm64 原生包）
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          pip install --upgrade onnxruntime
-        fi
-        if [ "${{ matrix.arch }}" = "x64" ] && [ "${{ matrix.platform }}" = "macos" ]; then
-          pip install --upgrade onnxruntime
-        fi
-        # GPU 相关依赖
+        python -m pip install --upgrade pip wheel setuptools build
+        # 安装项目本身及其依赖（从 pyproject.toml）
+        pip install -e .
+        # GPU 相关可选依赖
         if [ "${{ matrix.platform }}" = "macos" ]; then
-          pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders || true
+          pip install --extra-index-url https://pypi.org/simple/ "pyobjc-framework-Metal" "pyobjc-framework-MetalPerformanceShaders" || true
         fi
-        # 强制安装 pyopencl（跨平台）
-        pip install pyopencl
-        # Windows 上可选尝试安装 CuPy（CUDA），在 GitHub 托管 runner 上通常无 NVIDIA 驱动，仅供自托管机使用
+        # Windows 上可选尝试安装 CuPy（CUDA）
         if [ "${{ matrix.platform }}" = "windows" ]; then
           echo "Attempting to install CuPy (CUDA) wheels..."
           pip install cupy-cuda12x || \
@@ -407,11 +399,64 @@ jobs:
         name: DiVERE-${{ env.VERSION_TAG }}-${{ matrix.platform }}-${{ matrix.arch }}
         path: dist/DiVERE
 
+  build-packages:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Extract version from package
+      run: |
+        VERSION_RAW=$(python3 - <<'PY'
+        import re, pathlib
+        p = pathlib.Path('divere/__init__.py').read_text(encoding='utf-8')
+        m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", p)
+        print(m.group(1) if m else "")
+        PY
+        )
+        if [ -z "$VERSION_RAW" ]; then echo "::error::Version not found"; exit 1; fi
+        echo "VERSION=$VERSION_RAW" >> $GITHUB_ENV
+        echo "VERSION_TAG=v$VERSION_RAW" >> $GITHUB_ENV
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip build wheel setuptools
+
+    - name: Build Python packages
+      run: |
+        python -m build --sdist --wheel --outdir dist/
+
+    - name: Verify package contents
+      run: |
+        ls -la dist/
+        # Check that both .whl and .tar.gz were created
+        if [ ! -f dist/divere-${{ env.VERSION }}*.whl ]; then
+          echo "::error::Wheel package not found"
+          exit 1
+        fi
+        if [ ! -f dist/divere-${{ env.VERSION }}*.tar.gz ]; then
+          echo "::error::Source package not found"
+          exit 1
+        fi
+        # Check wheel contents
+        python -m zipfile -l dist/divere-${{ env.VERSION }}*.whl | head -20
+
+    - name: Upload Python packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-packages-${{ env.VERSION_TAG }}
+        path: dist/
+
   release:
     permissions:
       contents: write
       packages: write
-    needs: build
+    needs: [build, build-packages]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -422,12 +467,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: DiVERE-${{ env.VERSION_TAG }}-*
 
-      - name: Prepare release assets (zip Windows folder)
+      - name: Prepare release assets
         run: |
           set -e
           ls -la artifacts || true
+          
           # Windows artifact is a folder; zip it for release
           for dir in artifacts/DiVERE-${{ env.VERSION_TAG }}-windows-*; do
             if [ -d "$dir" ]; then
@@ -435,9 +480,18 @@ jobs:
               (cd "$dir" && zip -r ../"$(basename "$zipname")" .)
             fi
           done
-          # Move all zips to top-level release-assets
+          
+          # Move all assets to top-level release-assets
           mkdir -p release-assets
+          
+          # Move binary zips
           find artifacts -name "*.zip" -maxdepth 2 -print -exec mv {} release-assets/ \;
+          
+          # Move Python packages
+          if [ -d "artifacts/python-packages-${{ env.VERSION_TAG }}" ]; then
+            mv artifacts/python-packages-${{ env.VERSION_TAG }}/* release-assets/
+          fi
+          
           echo "Release assets:" && ls -la release-assets
 
       - name: Create GitHub Release
@@ -449,5 +503,7 @@ jobs:
           prerelease: false
           files: |
             release-assets/*.zip
+            release-assets/*.whl
+            release-assets/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

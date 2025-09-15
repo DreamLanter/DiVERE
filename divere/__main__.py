@@ -29,7 +29,12 @@ def main():
     # 创建Qt应用
     app = QApplication(sys.argv)
     app.setApplicationName("DiVERE")
-    app.setApplicationVersion("0.1.0")
+    # 获取应用版本号
+    try:
+        from divere import __version__
+        app.setApplicationVersion(__version__)
+    except ImportError:
+        app.setApplicationVersion("0.1.27")
     app.setOrganizationName("DiVERE Team")
     
     # 设置应用程序图标（如果有的话）

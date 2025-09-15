@@ -19,7 +19,7 @@
   "cc_params": {
     "density_gamma": 1.0,
     "density_dmax": 2.5,
-    "rgb_gains": [0.65, 0.0, 0.0],
+    "rgb_gains": [0.0, 0.0, 0.0],
     "density_matrix": { "name": "Cineon_States_M_to_Print_Density", "values": null },
     "density_curve": { "name": "Kodak Endura Premier", "points": { "rgb": [[0.0, 0.0], [1.0, 1.0]] } }
   }

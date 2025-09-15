@@ -1,8 +1,8 @@
 """智能裁剪布局管理器"""
 
-from typing import List, Tuple, Optional, Callable
+from typing import List, Tuple, Optional, Callable, Union
 from dataclasses import dataclass
-from divere.core.data_types import CropAddDirection
+from divere.core.data_types import CropAddDirection, CropInstance
 from .orientation_direction_mapper import convert_visual_to_standard_direction
 
 
@@ -236,16 +236,55 @@ class CropLayoutManager:
             crop_w = min(crop_w, self.max_crop_size)
             crop_h = min(crop_h, self.max_crop_size)
         
-        # 如果没有现有裁剪，放在左上角
-        if not existing_rects:
-            return (self.margin, self.margin, crop_w, crop_h)
-        
         # 根据用户视觉方向和orientation查找合适的位置
+        # 即使existing_rects为空，也要通过_find_position处理方向转换
         new_rect = self._find_position(
             existing_rects, crop_w, crop_h, direction, orientation
         )
         
         return new_rect.to_tuple()
+    
+    def find_next_position_from_crops(self,
+                                     existing_crops: List[CropInstance],
+                                     template_size: Optional[Tuple[float, float]] = None,
+                                     direction: CropAddDirection = CropAddDirection.DOWN_RIGHT,
+                                     orientation: int = 0) -> CropInstance:
+        """从CropInstance列表中找到下一个裁剪位置（preset驱动版本）
+        
+        Args:
+            existing_crops: 现有CropInstance列表（原图坐标系）
+            template_size: 模板尺寸 (w, h)
+            direction: 用户视觉方向
+            orientation: 当前显示orientation
+            
+        Returns:
+            新的CropInstance对象（原图坐标系）
+            
+        Note:
+            这个方法专门用于preset驱动的crop系统，确保所有数据都基于原图坐标系
+        """
+        # 转换CropInstance列表为元组格式
+        existing_tuples = [crop.rect_norm for crop in existing_crops]
+        
+        # 使用现有的find_next_position方法计算位置
+        new_rect_tuple = self.find_next_position(
+            existing_crops=existing_tuples,
+            template_size=template_size,
+            direction=direction,
+            orientation=orientation
+        )
+        
+        # 生成唯一ID
+        import uuid
+        crop_id = f"crop_{len(existing_crops) + 1}_{uuid.uuid4().hex[:8]}"
+        
+        # 创建新的CropInstance（注意：orientation为0，因为坐标已经是原图坐标系）
+        return CropInstance(
+            id=crop_id,
+            name=f"裁剪 {len(existing_crops) + 1}",
+            rect_norm=new_rect_tuple,
+            orientation=0  # 始终为0，因为rect_norm已经是原图坐标系
+        )
     
     def _find_position(self, 
                        existing_rects: List[CropRect],
@@ -390,6 +429,46 @@ class CropLayoutManager:
                 # 向左，检查左边界
                 return new_x >= self.margin + safety_margin
     
+    def _get_initial_position(self, crop_w: float, crop_h: float, config: DirectionConfig) -> CropRect:
+        """根据方向配置确定第一个crop的初始位置
+        
+        策略：根据主方向和次方向的组合，将第一个crop放在合适的角落，
+        为后续crop的添加留出正确的扩展空间。
+        """
+        # 根据主方向和次方向确定合适的起始位置
+        if config.primary_axis == 'y':  # 主要是纵向移动
+            if config.primary_direction_positive:  # 向下
+                if config.secondary_direction_positive:  # 向右
+                    # DOWN_RIGHT: 从左上角开始，向下优先，然后向右
+                    x, y = self.margin, self.margin
+                else:  # 向左  
+                    # DOWN_LEFT: 从右上角开始，向下优先，然后向左
+                    x, y = 1.0 - self.margin - crop_w, self.margin
+            else:  # 向上
+                if config.secondary_direction_positive:  # 向右
+                    # UP_RIGHT: 从左下角开始，向上优先，然后向右
+                    x, y = self.margin, 1.0 - self.margin - crop_h
+                else:  # 向左
+                    # UP_LEFT: 从右下角开始，向上优先，然后向左
+                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
+        else:  # config.primary_axis == 'x', 主要是横向移动
+            if config.primary_direction_positive:  # 向右
+                if config.secondary_direction_positive:  # 向下
+                    # RIGHT_DOWN: 从左上角开始，向右优先，然后向下
+                    x, y = self.margin, self.margin
+                else:  # 向上
+                    # RIGHT_UP: 从左下角开始，向右优先，然后向上
+                    x, y = self.margin, 1.0 - self.margin - crop_h
+            else:  # 向左
+                if config.secondary_direction_positive:  # 向下
+                    # LEFT_DOWN: 从右上角开始，向左优先，然后向下
+                    x, y = 1.0 - self.margin - crop_w, self.margin
+                else:  # 向上
+                    # LEFT_UP: 从右下角开始，向左优先，然后向上
+                    x, y = 1.0 - self.margin - crop_w, 1.0 - self.margin - crop_h
+        
+        return CropRect(x, y, crop_w, crop_h)
+    
     def _create_new_group(self, 
                          existing_rects: List[CropRect],
                          crop_w: float, 
@@ -397,7 +476,8 @@ class CropLayoutManager:
                          config: DirectionConfig) -> CropRect:
         """创建新行或新列"""
         if not existing_rects:
-            return CropRect(self.margin, self.margin, crop_w, crop_h)
+            # 第一个crop：根据方向配置决定初始位置
+            return self._get_initial_position(crop_w, crop_h, config)
             
         if config.secondary_direction_positive:
             # 正向移动（右/下）
@@ -493,3 +573,144 @@ class CropLayoutManager:
             columns.append(current_column)
         
         return columns
+
+
+class PresetCropManager:
+    """Preset驱动的Crop管理器
+    
+    负责管理基于preset的crop操作，确保所有数据都基于原图坐标系存储
+    """
+    
+    def __init__(self):
+        self.layout_manager = CropLayoutManager()
+    
+    def add_crop_to_preset(self, 
+                          preset: 'Preset',  # type: ignore
+                          direction: CropAddDirection,
+                          display_orientation: int = 0,
+                          template_size: Optional[Tuple[float, float]] = None) -> 'CropInstance':  # type: ignore
+        """向preset添加新的crop
+        
+        Args:
+            preset: 目标preset对象
+            direction: 用户选择的视觉方向
+            display_orientation: 当前UI显示的orientation
+            template_size: 可选的模板尺寸
+            
+        Returns:
+            新创建的CropInstance对象（原图坐标系）
+        """
+        # 获取现有的crops
+        existing_crops = preset.get_crop_instances()
+        
+        # 使用layout_manager计算新位置
+        new_crop = self.layout_manager.find_next_position_from_crops(
+            existing_crops=existing_crops,
+            template_size=template_size,
+            direction=direction,
+            orientation=display_orientation
+        )
+        
+        # 更新preset中的crops数据
+        updated_crops = existing_crops + [new_crop]
+        preset.set_crop_instances(updated_crops, new_crop.id)
+        
+        return new_crop
+    
+    def remove_crop_from_preset(self, preset: 'Preset', crop_id: str) -> bool:  # type: ignore
+        """从preset中移除指定的crop
+        
+        Args:
+            preset: 目标preset对象
+            crop_id: 要移除的crop ID
+            
+        Returns:
+            是否成功移除
+        """
+        existing_crops = preset.get_crop_instances()
+        updated_crops = [crop for crop in existing_crops if crop.id != crop_id]
+        
+        if len(updated_crops) == len(existing_crops):
+            return False  # 没有找到要删除的crop
+            
+        # 如果删除的是active crop，需要选择新的active crop
+        new_active_id = None
+        if updated_crops:
+            if preset.active_crop_id == crop_id:
+                new_active_id = updated_crops[0].id
+            else:
+                new_active_id = preset.active_crop_id
+                
+        preset.set_crop_instances(updated_crops, new_active_id)
+        return True
+    
+    def get_display_crops(self, 
+                         preset: 'Preset',  # type: ignore
+                         display_orientation: int) -> List[Tuple[float, float, float, float]]:
+        """获取用于UI显示的crop坐标列表
+        
+        Args:
+            preset: preset对象
+            display_orientation: 当前显示orientation
+            
+        Returns:
+            转换为当前显示方向的crop坐标列表
+        """
+        crops = preset.get_crop_instances()
+        display_crops = []
+        
+        for crop in crops:
+            # 将原图坐标转换为显示坐标
+            display_rect = self.transform_crop_for_display(
+                crop.rect_norm, 
+                display_orientation
+            )
+            display_crops.append(display_rect)
+            
+        return display_crops
+    
+    def transform_crop_for_display(self, 
+                                  original_rect: Tuple[float, float, float, float],
+                                  display_orientation: int) -> Tuple[float, float, float, float]:
+        """将原图坐标系的crop转换为显示坐标系
+        
+        Args:
+            original_rect: 原图坐标系中的crop矩形 (x, y, w, h)
+            display_orientation: 显示orientation (0, 90, 180, 270)
+            
+        Returns:
+            显示坐标系中的crop矩形
+        """
+        if display_orientation == 0:
+            return original_rect
+            
+        x, y, w, h = original_rect
+        
+        # 根据orientation转换坐标
+        if display_orientation == 90:  # CCW 90°
+            # (x,y) → (1-y-h, x)
+            # (w,h) → (h, w)
+            return (1.0 - y - h, x, h, w)
+        elif display_orientation == 180:  # 180°
+            # (x,y) → (1-x-w, 1-y-h)
+            # (w,h) → (w, h)
+            return (1.0 - x - w, 1.0 - y - h, w, h)
+        elif display_orientation == 270:  # CCW 270°
+            # (x,y) → (y, 1-x-w)
+            # (w,h) → (h, w)  
+            return (y, 1.0 - x - w, h, w)
+        else:
+            raise ValueError(f"Unsupported display_orientation: {display_orientation}")
+    
+    def save_preset(self, preset: 'Preset', file_path: str):  # type: ignore
+        """保存preset到文件（简化版本，实际实现需要根据项目的保存逻辑）
+        
+        Args:
+            preset: preset对象
+            file_path: 保存路径
+        """
+        # 这里应该调用项目中实际的preset保存逻辑
+        # 比如通过PresetManager来保存
+        import json
+        with open(file_path, 'w') as f:
+            json.dump(preset.to_dict(), f, indent=2)

@@ -392,35 +392,6 @@ class ApplicationContext(QObject):
         except Exception:
             pass
 
-    def _apply_inverse_orientation_to_rect(self, x: float, y: float, w: float, h: float, orientation: int) -> tuple:
-        """应用orientation的逆变换，将显示坐标转换为标准坐标系
-        
-        这与PreviewWidget._apply_orientation_to_rect()互为逆操作，
-        用于将经过orientation变换的坐标转换回标准坐标系。
-        
-        Args:
-            x, y, w, h: 显示坐标系下的矩形（经过orientation变换的）
-            orientation: orientation角度
-            
-        Returns:
-            标准坐标系下的矩形 (x, y, w, h)
-        """
-        if orientation % 360 == 0:
-            return (x, y, w, h)
-        
-        k = (orientation // 90) % 4
-
-        if k == 1:  # 90° CCW的逆变换 = 270° CCW = 90° CW
-            # 逆变换：(x,y,w,h) → (1-y-h, x, h, w)
-            return (1.0 - y - h, x, h, w)
-        elif k == 2:  # 180°的逆变换 = 180°
-            # 逆变换：(x,y,w,h) → (1-x-w, 1-y-h, w, h)
-            return (1.0 - x - w, 1.0 - y - h, w, h)
-        elif k == 3:  # 270° CCW的逆变换 = 90° CCW
-            # 逆变换：(x,y,w,h) → (y, 1-x-w, h, w)
-            return (y, 1.0 - x - w, h, w)
-        else:
-            return (x, y, w, h)
 
     def _calculate_visual_aspect_ratio(self, orientation: int) -> float:
         """计算考虑orientation的视觉宽高比（用户看到的宽高比）
@@ -444,38 +415,12 @@ class ApplicationContext(QObject):
             # 保持原始宽高比
             return w / h if h > 0 else 1.0
 
-    def _apply_orientation_to_rect(self, x: float, y: float, w: float, h: float, orientation: int) -> tuple:
-        """应用orientation正变换，将标准坐标转换为显示坐标系
-        
-        这与PreviewWidget._apply_orientation_to_rect()保持一致，
-        用于将标准坐标系的坐标转换为显示坐标系。
-        
-        Args:
-            x, y, w, h: 标准坐标系下的矩形
-            orientation: orientation角度
-            
-        Returns:
-            显示坐标系下的矩形 (x, y, w, h)
-        """
-        if orientation % 360 == 0:
-            return (x, y, w, h)
-        
-        k = (orientation // 90) % 4
-        
-        if k == 1:  # 90° CCW
-            return (y, 1.0 - x - w, h, w)
-        elif k == 2:  # 180°
-            return (1.0 - x - w, 1.0 - y - h, w, h)
-        elif k == 3:  # 270° CCW
-            return (1.0 - y - h, x, h, w)
-        else:
-            return (x, y, w, h)
 
     def smart_add_crop(self, direction: CropAddDirection = CropAddDirection.DOWN_RIGHT) -> str:
-        """智能添加裁剪：根据现有裁剪自动计算最佳位置（考虑orientation坐标变换）
+        """智能添加裁剪：根据现有裁剪自动计算最佳位置（仅使用direction mapping处理orientation）
         
         Args:
-            direction: 指定的添加方向
+            direction: 指定的添加方向（用户视觉方向）
         """
         try:
             from divere.utils.crop_layout_manager import CropLayoutManager
@@ -483,28 +428,20 @@ class ApplicationContext(QObject):
             # 获取contact sheet的orientation
             cs_orientation = self._contactsheet_profile.orientation
             
-            # 1. 将现有crops坐标逆变换到标准坐标系
-            existing_crops_std = []
-            for crop in self._crops:
-                x, y, w, h = crop.rect_norm
-                x_std, y_std, w_std, h_std = self._apply_inverse_orientation_to_rect(x, y, w, h, cs_orientation)
-                existing_crops_std.append((x_std, y_std, w_std, h_std))
+            # 直接使用现有crops的显示坐标（不做坐标变换）
+            existing_crops_display = [crop.rect_norm for crop in self._crops]
             
-            # 在标准坐标系中使用布局管理器计算最佳位置（传递orientation用于方向转换）
+            # 在显示坐标系中计算新位置，依靠direction mapping处理方向转换
             layout_manager = CropLayoutManager()
-            new_rect_std = layout_manager.find_next_position(
-                existing_crops=existing_crops_std,
+            new_rect_display = layout_manager.find_next_position(
+                existing_crops=existing_crops_display,
                 template_size=None,  # 使用最后一个裁剪的尺寸或默认值
                 direction=direction,  # 用户视觉方向
-                orientation=cs_orientation  # 传递orientation用于方向转换
+                orientation=cs_orientation  # 仅用于direction mapping
             )
             
-            # 将计算结果正变换到显示坐标系
-            x_std, y_std, w_std, h_std = new_rect_std
-            new_rect = self._apply_orientation_to_rect(x_std, y_std, w_std, h_std, cs_orientation)
-            
-            # 创建新裁剪 - 继承contactsheet的orientation
-            return self.add_crop(new_rect, cs_orientation)
+            # 直接使用计算结果（已经是显示坐标系）
+            return self.add_crop(new_rect_display, cs_orientation)
             
         except Exception as e:
             print(f"智能添加裁剪失败: {e}")

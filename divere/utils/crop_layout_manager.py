@@ -17,7 +17,7 @@ class DirectionConfig:
     use_edge_for_primary: bool  # True表示在主轴上使用边界（如x+width），False使用起始点
     primary_direction_positive: bool  # True表示正向移动，False表示负向移动
     secondary_direction_positive: bool  # True表示正向移动，False表示负向移动
-    fallback_to_edge: bool  # True表示回退时移动到边界，False表示从起始位置开始
+    new_group_align_to_edge: bool  # True表示新行/列从边界开始，False表示与参考crop对齐
     
     def get_spacing_calculator(self, manager: 'CropLayoutManager') -> Callable[[float, float], float]:
         """根据布局方向返回间距计算函数"""
@@ -79,7 +79,7 @@ class CropLayoutManager:
                 use_edge_for_primary=True,
                 primary_direction_positive=True,
                 secondary_direction_positive=True,
-                fallback_to_edge=True
+                new_group_align_to_edge=True  # 新列从顶部开始
             ),
             CropAddDirection.DOWN_LEFT: DirectionConfig(
                 layout_direction='vertical',
@@ -90,7 +90,7 @@ class CropLayoutManager:
                 use_edge_for_primary=True,
                 primary_direction_positive=True,
                 secondary_direction_positive=False,
-                fallback_to_edge=True
+                new_group_align_to_edge=True  # 新列从顶部开始
             ),
             CropAddDirection.RIGHT_DOWN: DirectionConfig(
                 layout_direction='horizontal',
@@ -101,7 +101,7 @@ class CropLayoutManager:
                 use_edge_for_primary=True,
                 primary_direction_positive=True,
                 secondary_direction_positive=True,
-                fallback_to_edge=True
+                new_group_align_to_edge=True  # 新行从左边开始
             ),
             CropAddDirection.RIGHT_UP: DirectionConfig(
                 layout_direction='horizontal',
@@ -112,7 +112,7 @@ class CropLayoutManager:
                 use_edge_for_primary=True,
                 primary_direction_positive=True,
                 secondary_direction_positive=False,
-                fallback_to_edge=True
+                new_group_align_to_edge=True  # 新行从左边开始
             ),
             CropAddDirection.UP_LEFT: DirectionConfig(
                 layout_direction='vertical',
@@ -123,7 +123,7 @@ class CropLayoutManager:
                 use_edge_for_primary=False,
                 primary_direction_positive=False,
                 secondary_direction_positive=False,
-                fallback_to_edge=False
+                new_group_align_to_edge=True  # 新列从底部开始
             ),
             CropAddDirection.UP_RIGHT: DirectionConfig(
                 layout_direction='vertical',
@@ -134,7 +134,7 @@ class CropLayoutManager:
                 use_edge_for_primary=False,
                 primary_direction_positive=False,
                 secondary_direction_positive=True,
-                fallback_to_edge=False
+                new_group_align_to_edge=True  # 新列从底部开始
             ),
             CropAddDirection.LEFT_UP: DirectionConfig(
                 layout_direction='horizontal',
@@ -145,7 +145,7 @@ class CropLayoutManager:
                 use_edge_for_primary=False,
                 primary_direction_positive=False,
                 secondary_direction_positive=False,
-                fallback_to_edge=False
+                new_group_align_to_edge=True  # 新行从右边开始
             ),
             CropAddDirection.LEFT_DOWN: DirectionConfig(
                 layout_direction='horizontal',
@@ -156,7 +156,7 @@ class CropLayoutManager:
                 use_edge_for_primary=False,
                 primary_direction_positive=False,
                 secondary_direction_positive=True,
-                fallback_to_edge=False
+                new_group_align_to_edge=True  # 新行从右边开始
             )
         }
         
@@ -486,13 +486,31 @@ class CropLayoutManager:
                 rightmost = max(existing_rects, key=lambda r: r.x + r.width)
                 column_spacing = self._calculate_column_spacing(crop_w)
                 new_x = rightmost.x + rightmost.width + column_spacing
-                new_y = self.margin if config.fallback_to_edge else rightmost.y
+                # 根据主方向决定新列的对齐方式
+                if config.new_group_align_to_edge:
+                    # 从边界开始：DOWN方向从顶部，UP方向从底部
+                    if config.primary_direction_positive:  # DOWN方向
+                        new_y = self.margin
+                    else:  # UP方向
+                        new_y = 1.0 - self.margin - crop_h
+                else:
+                    # 与参考crop对齐
+                    new_y = rightmost.y
             else:
                 # 向下新增行
                 bottommost = max(existing_rects, key=lambda r: r.y + r.height)
                 row_spacing = self._calculate_row_spacing(crop_h)
                 new_y = bottommost.y + bottommost.height + row_spacing
-                new_x = self.margin if config.fallback_to_edge else bottommost.x
+                # 根据主方向决定新行的对齐方式
+                if config.new_group_align_to_edge:
+                    # 从边界开始：RIGHT方向从左边，LEFT方向从右边
+                    if config.primary_direction_positive:  # RIGHT方向
+                        new_x = self.margin
+                    else:  # LEFT方向
+                        new_x = 1.0 - self.margin - crop_w
+                else:
+                    # 与参考crop对齐
+                    new_x = bottommost.x
         else:
             # 负向移动（左/上）
             if config.secondary_axis == 'x':
@@ -500,13 +518,31 @@ class CropLayoutManager:
                 leftmost = min(existing_rects, key=lambda r: r.x)
                 column_spacing = self._calculate_column_spacing(crop_w)
                 new_x = leftmost.x - crop_w - column_spacing
-                new_y = 1.0 - self.margin - crop_h if config.fallback_to_edge else leftmost.y
+                # 根据主方向决定新列的对齐方式
+                if config.new_group_align_to_edge:
+                    # 从边界开始：DOWN方向从顶部，UP方向从底部
+                    if config.primary_direction_positive:  # DOWN方向
+                        new_y = self.margin
+                    else:  # UP方向
+                        new_y = 1.0 - self.margin - crop_h
+                else:
+                    # 与参考crop对齐
+                    new_y = leftmost.y
             else:
                 # 向上新增行
                 topmost = min(existing_rects, key=lambda r: r.y)
                 row_spacing = self._calculate_row_spacing(crop_h)
                 new_y = topmost.y - crop_h - row_spacing
-                new_x = 1.0 - self.margin - crop_w if config.fallback_to_edge else topmost.x
+                # 根据主方向决定新行的对齐方式
+                if config.new_group_align_to_edge:
+                    # 从边界开始：RIGHT方向从左边，LEFT方向从右边
+                    if config.primary_direction_positive:  # RIGHT方向
+                        new_x = self.margin
+                    else:  # LEFT方向
+                        new_x = 1.0 - self.margin - crop_w
+                else:
+                    # 与参考crop对齐
+                    new_x = topmost.x
         
         # 边界检查和修正
         new_x = max(self.margin, min(new_x, 1.0 - self.margin - crop_w))

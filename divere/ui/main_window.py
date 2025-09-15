@@ -343,12 +343,7 @@ class MainWindow(QMainWindow):
         # 工具菜单
         tools_menu = menubar.addMenu("工具")
         
-        # 估算胶片类型
-        estimate_film_action = QAction("估算胶片类型", self)
-        estimate_film_action.triggered.connect(self._estimate_film_type)
-        tools_menu.addAction(estimate_film_action)
-        
-        tools_menu.addSeparator()
+        # 直接添加分隔符，移除估算胶片类型功能
         
         # 文件分类规则管理器
         file_classification_action = QAction("文件分类规则管理器", self)
@@ -369,10 +364,7 @@ class MainWindow(QMainWindow):
         profiling_action.toggled.connect(self._toggle_profiling)
         tools_menu.addAction(profiling_action)
         
-        # LUT数学一致性验证
-        lut_test_action = QAction("测试LUT数学一致性", self)
-        lut_test_action.triggered.connect(self._test_lut_chain_consistency)
-        tools_menu.addAction(lut_test_action)
+        # LUT数学一致性验证功能已移除
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
@@ -1839,23 +1831,6 @@ class MainWindow(QMainWindow):
     
 
     
-    def _estimate_film_type(self):
-        """估算胶片类型"""
-        if not self.context.get_current_image():
-            QMessageBox.warning(self, "警告", "没有加载的图像")
-            return
-        
-        try:
-            # self.grading_engine is not defined in this file.
-            # Assuming it's meant to be self.the_enlarger.grading_engine
-            # or that it should be initialized if not already.
-            # For now, commenting out as it's not defined.
-            # film_type = self.grading_engine.estimate_film_type(self.current_image)
-            # QMessageBox.information(self, "胶片类型", f"估算的胶片类型: {film_type}")
-            pass # Placeholder for actual estimation logic
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"估算胶片类型失败: {str(e)}")
-    
     def _open_file_classification_manager(self):
         """打开文件分类规则管理器"""
         try:
@@ -2324,44 +2299,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"导出密度曲线LUT失败: {e}")
             return False
-    
-    def _test_lut_chain_consistency(self) -> None:
-        """测试三个LUT串联的数学一致性（调试功能）"""
-        try:
-            from divere.utils.lut_generator.interface import DiVERELUTInterface
-            
-            params = self.context.get_current_params()
-            lut_interface = DiVERELUTInterface()
-            
-            # 验证数学一致性（使用小样本快速测试）
-            stats = lut_interface.validate_lut_chain_consistency(
-                self.context, params, "", "", "", test_samples=50
-            )
-            
-            if 'error' in stats:
-                print(f"LUT链验证出错: {stats['error']}")
-                return
-                
-            print("=== LUT链数学一致性验证结果 ===")
-            print(f"测试样本数: {stats['samples_tested']}")
-            print(f"最大绝对误差: {stats['max_abs_error']:.6f}")
-            print(f"平均绝对误差: {stats['mean_abs_error']:.6f}")
-            print(f"最大相对误差: {stats['max_rel_error']:.6f}")
-            print(f"平均相对误差: {stats['mean_rel_error']:.6f}")
-            print(f"RMSE: {stats['rmse']:.6f}")
-            
-            # 简单判断数学一致性
-            if stats['max_abs_error'] < 1e-3 and stats['mean_abs_error'] < 1e-4:
-                print("✅ 数学一致性良好！")
-                self.statusBar().showMessage("LUT链数学一致性验证通过")
-            else:
-                print("⚠️ 检测到数学不一致，可能需要进一步调试")
-                self.statusBar().showMessage("LUT链存在数学不一致问题")
-                
-        except Exception as e:
-            print(f"LUT一致性测试失败: {e}")
-            import traceback
-            traceback.print_exc()
     
     def _on_glare_compensation_interaction_started(self, compensation_value: float):
         """处理屏幕反光补偿交互开始"""

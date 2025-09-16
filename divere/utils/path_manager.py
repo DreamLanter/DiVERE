@@ -50,9 +50,14 @@ class PathManager:
         info(f"Using project root: {project_root}", "PathManager")
         
         # 根据环境使用不同的路径构建策略
-        if self._is_macos_app_bundle():
+        if self._is_pyinstaller_bundle():
+            # PyInstaller打包环境（Windows和其他平台）
+            self._initialize_pyinstaller_paths()
+        elif self._is_macos_app_bundle():
+            # macOS .app bundle
             self._initialize_app_bundle_paths(project_root)
         else:
+            # 开发环境
             self._initialize_development_paths(project_root)
     
     def _initialize_development_paths(self, project_root: str):
@@ -114,6 +119,105 @@ class PathManager:
         self._add_all_paths()
         
         self._initialized = True
+    
+    def _initialize_pyinstaller_paths(self):
+        """初始化PyInstaller打包环境路径（主要用于Windows）"""
+        info("Using PyInstaller bundle paths", "PathManager")
+        
+        # 获取PyInstaller bundle目录
+        bundle_dir = self._get_pyinstaller_root()
+        
+        # Windows上，资源文件通常在exe同目录
+        # 在其他平台或使用--onefile时，可能在_MEIPASS临时目录
+        if getattr(sys, 'frozen', False) and not hasattr(sys, '_MEIPASS'):
+            # Windows --onedir模式：文件在exe同目录
+            base_dir = os.path.dirname(sys.executable)
+            info(f"Using Windows onedir mode, base directory: {base_dir}", "PathManager")
+        else:
+            # --onefile模式或其他平台：使用bundle_dir
+            base_dir = bundle_dir
+            info(f"Using bundle directory: {base_dir}", "PathManager")
+        
+        # 配置路径
+        config_paths = [
+            os.path.join(base_dir, "config"),
+            os.path.join(base_dir, "config", "defaults"),
+            os.path.join(base_dir, "config", "colorchecker"),
+            os.path.join(base_dir, "config", "colorspace"),
+            os.path.join(base_dir, "config", "curves"),
+            os.path.join(base_dir, "config", "matrices"),
+            # 兼容性路径
+            os.path.join(base_dir, "_internal", "config"),
+            os.path.join(base_dir, "_internal", "config", "defaults"),
+            os.path.join(base_dir, "_internal", "config", "colorchecker"),
+            os.path.join(base_dir, "_internal", "config", "colorspace"),
+            os.path.join(base_dir, "_internal", "config", "curves"),
+            os.path.join(base_dir, "_internal", "config", "matrices")
+        ]
+        self._paths["config"].extend(config_paths)
+        debug(f"PyInstaller config paths: {config_paths}", "PathManager")
+        
+        # 默认预设路径
+        defaults_paths = [
+            os.path.join(base_dir, "config", "defaults"),
+            os.path.join(base_dir, "_internal", "config", "defaults")
+        ]
+        self._paths["defaults"].extend(defaults_paths)
+        debug(f"PyInstaller defaults paths: {defaults_paths}", "PathManager")
+        
+        # 色彩空间路径
+        self._paths["colorspace"].extend([
+            os.path.join(base_dir, "config", "colorspace"),
+            os.path.join(base_dir, "config", "colorspace", "legacy"),
+            os.path.join(base_dir, "config", "colorspace", "icc"),
+            os.path.join(base_dir, "_internal", "config", "colorspace"),
+            os.path.join(base_dir, "_internal", "config", "colorspace", "legacy"),
+            os.path.join(base_dir, "_internal", "config", "colorspace", "icc")
+        ])
+        
+        # 曲线路径
+        self._paths["curves"].extend([
+            os.path.join(base_dir, "config", "curves"),
+            os.path.join(base_dir, "_internal", "config", "curves")
+        ])
+        
+        # 矩阵路径
+        self._paths["matrices"].extend([
+            os.path.join(base_dir, "config", "matrices"),
+            os.path.join(base_dir, "_internal", "config", "matrices")
+        ])
+        
+        # 资源路径
+        self._paths["assets"].extend([
+            os.path.join(base_dir, "assets"),
+            os.path.join(base_dir, "_internal", "assets")
+        ])
+        
+        # 模型路径
+        self._paths["models"].extend([
+            os.path.join(base_dir, "models"),
+            os.path.join(base_dir, "_internal", "models")
+        ])
+        
+        # 测试数据路径（打包版本通常不包含）
+        self._paths["test_data"].extend([
+            os.path.join(base_dir, "test_scans"),
+            os.path.join(base_dir, "_internal", "test_scans")
+        ])
+        
+        # 添加所有路径到Python路径
+        self._add_all_paths()
+        
+        self._initialized = True
+        
+        # 调试输出：显示实际存在的路径
+        info("Checking which PyInstaller paths actually exist:", "PathManager")
+        for category, paths in self._paths.items():
+            existing = [p for p in paths if os.path.exists(p)]
+            if existing:
+                info(f"  {category}: {len(existing)} paths exist", "PathManager")
+                for p in existing[:2]:  # 只显示前两个
+                    debug(f"    - {p}", "PathManager")
     
     def _initialize_app_bundle_paths(self, executable_dir: str):
         """初始化 macOS app bundle 路径"""
@@ -258,6 +362,26 @@ class PathManager:
         
         return fallback
     
+    def _is_pyinstaller_bundle(self) -> bool:
+        """检测是否在PyInstaller打包的环境中运行"""
+        try:
+            # 检查PyInstaller特有的属性
+            is_frozen = getattr(sys, 'frozen', False)
+            has_meipass = hasattr(sys, '_MEIPASS')
+            
+            if is_frozen or has_meipass:
+                info(f"Detected PyInstaller bundle (frozen={is_frozen}, _MEIPASS={has_meipass})", "PathManager")
+                if has_meipass:
+                    debug(f"PyInstaller temp path: {sys._MEIPASS}", "PathManager")
+                if is_frozen:
+                    debug(f"Executable path: {sys.executable}", "PathManager")
+                return True
+            
+            return False
+        except Exception as e:
+            debug(f"PyInstaller detection failed: {e}", "PathManager")
+            return False
+    
     def _is_macos_app_bundle(self) -> bool:
         """检测是否在 macOS app bundle 中运行"""
         try:
@@ -274,6 +398,33 @@ class PathManager:
         except Exception as e:
             debug(f"App bundle detection failed: {e}", "PathManager")
             return False
+    
+    def _get_pyinstaller_root(self) -> str:
+        """获取PyInstaller bundle的根目录"""
+        info("Getting PyInstaller bundle root", "PathManager")
+        
+        try:
+            if hasattr(sys, '_MEIPASS') and sys._MEIPASS:
+                # PyInstaller临时解压目录
+                bundle_dir = sys._MEIPASS
+                info(f"Using PyInstaller _MEIPASS: {bundle_dir}", "PathManager")
+                return bundle_dir
+            elif getattr(sys, 'frozen', False):
+                # exe所在目录
+                bundle_dir = os.path.dirname(sys.executable)
+                info(f"Using frozen executable directory: {bundle_dir}", "PathManager")
+                return bundle_dir
+            else:
+                # 回退到当前工作目录
+                fallback = os.getcwd()
+                warning(f"PyInstaller attributes not found, using fallback: {fallback}", "PathManager")
+                return fallback
+                
+        except Exception as e:
+            error(f"Failed to get PyInstaller root: {e}", "PathManager")
+            fallback = os.getcwd()
+            warning(f"Using fallback for PyInstaller: {fallback}", "PathManager")
+            return fallback
     
     def _get_app_bundle_root(self) -> str:
         """获取 macOS app bundle 的根目录"""

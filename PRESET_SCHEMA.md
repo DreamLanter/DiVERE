@@ -178,7 +178,7 @@
   "version": 3,
   "type": "single",
   "metadata": {
-    "raw_file": "Portra400鲜艳街头.tif",
+    "raw_file": "EpsonV700-Portra400鲜艳街头.tif",
     "scanner": "Nikon 5000ED",
     "light_source": "D50",
     "film_stock": "Kodak Portra 400",
@@ -219,7 +219,7 @@
   "version": 3,
   "type": "contactsheet",
   "metadata": {
-    "raw_file": "Portra400鲜艳街头.tif",
+    "raw_file": "EpsonV700-Portra400鲜艳街头.tif",
     "scanner": "Nikon 5000ED",
     "light_source": "D50",
     "film_stock": "Kodak Portra 400",

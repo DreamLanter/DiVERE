@@ -6,7 +6,11 @@ GPU加速器模块 - 跨平台GPU加速支持
 import numpy as np
 from typing import Optional, Dict, Any, List, Tuple
 import time
+import platform
 from abc import ABC, abstractmethod
+
+# 导入debug logger
+from ..utils.debug_logger import debug, info, warning, error
 
 # GPU库导入（可选）
 try:
@@ -66,34 +70,120 @@ class OpenCLEngine(GPUComputeEngine):
         self.program = None
         self._initialize()
     
+    def _is_problematic_windows_device(self, device, platform) -> bool:
+        """检查是否为Windows上可能有问题的设备"""
+        try:
+            device_name = device.name.lower()
+            vendor_name = getattr(device, 'vendor', '').lower()
+            platform_name = platform.name.lower()
+            
+            # Intel集显的OpenCL驱动在Windows上经常有问题
+            intel_keywords = ['intel', 'hd graphics', 'iris', 'uhd graphics']
+            if any(keyword in device_name or keyword in vendor_name for keyword in intel_keywords):
+                debug(f"    检测到Intel集显设备: {device.name}", "GPU")
+                return True
+            
+            # 某些老旧的OpenCL实现
+            if 'microsoft' in platform_name or 'basic render driver' in device_name:
+                debug(f"    检测到Microsoft基础渲染驱动: {device.name}", "GPU")
+                return True
+            
+            # 内存过小的设备（通常是集显）
+            memory_mb = device.global_mem_size // (1024 * 1024)
+            if memory_mb < 512:  # 小于512MB的设备通常是集显
+                debug(f"    设备内存过小({memory_mb}MB)，可能是集显", "GPU")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            warning(f"    无法检查设备兼容性: {e}", "GPU")
+            return True  # 保守策略：无法检查的设备认为有问题
+    
     def _initialize(self):
         """初始化OpenCL环境"""
         if not OPENCL_AVAILABLE:
+            debug("PyOpenCL未安装，跳过OpenCL引擎初始化", "GPU")
             return
         
         try:
+            info("开始初始化OpenCL环擎", "GPU")
+            
             # 寻找最佳GPU设备
             platforms = cl.get_platforms()
+            info(f"发现{len(platforms)}个OpenCL平台", "GPU")
+            
             best_device = None
             best_compute_units = 0
+            best_memory_mb = 0
             
-            for platform in platforms:
-                devices = platform.get_devices()
-                for device in devices:
-                    if device.type & cl.device_type.GPU:
+            for i, platform in enumerate(platforms):
+                debug(f"平台[{i}]: {platform.name} ({platform.vendor})", "GPU")
+                
+                try:
+                    devices = platform.get_devices()
+                    for j, device in enumerate(devices):
+                        debug(f"  设备[{j}]: {device.name} ({device.type})", "GPU")
+                        
+                        # 只考虑GPU设备
+                        if not (device.type & cl.device_type.GPU):
+                            debug(f"    跳过非GPU设备", "GPU")
+                            continue
+                        
+                        # 获取设备信息
                         compute_units = device.max_compute_units
-                        if compute_units > best_compute_units:
+                        memory_mb = device.global_mem_size // (1024 * 1024)
+                        
+                        debug(f"    计算单元: {compute_units}, 显存: {memory_mb}MB", "GPU")
+                        
+                        # Windows特定检查：过滤可能有问题的设备
+                        import platform as sys_platform
+                        if sys_platform.system() == 'Windows':
+                            if self._is_problematic_windows_device(device, platform):
+                                warning(f"    跳过可能有问题的Windows设备: {device.name}", "GPU")
+                                continue
+                        
+                        # 内存检查：至少需要256MB
+                        if memory_mb < 256:
+                            warning(f"    设备内存不足({memory_mb}MB < 256MB)，跳过", "GPU")
+                            continue
+                        
+                        # 选择最佳设备：优先考虑计算单元，其次内存
+                        is_better = (compute_units > best_compute_units or 
+                                    (compute_units == best_compute_units and memory_mb > best_memory_mb))
+                        
+                        if is_better:
                             best_device = device
                             best_compute_units = compute_units
+                            best_memory_mb = memory_mb
+                            debug(f"    选为最佳设备候选", "GPU")
+                            
+                except cl.Error as e:
+                    warning(f"  无法获取平台{i}的设备信息: {e}", "GPU")
+                    continue
             
             if best_device:
+                info(f"选择OpenCL设备: {best_device.name} ({best_compute_units}CU, {best_memory_mb}MB)", "GPU")
+                
+                # 创建上下文和队列
                 self.device = best_device
                 self.context = cl.Context([best_device])
                 self.queue = cl.CommandQueue(self.context)
+                
+                # 构建内核
                 self._build_kernels()
                 
+                if self.program is not None:
+                    info("OpenCL引擎初始化成功", "GPU")
+                else:
+                    error("OpenCL内核编译失败，引擎不可用", "GPU")
+            else:
+                warning("未找到合适的OpenCL GPU设备", "GPU")
+                
         except Exception as e:
-            print(f"OpenCL初始化失败: {e}")
+            error(f"OpenCL初始化失败: {e}", "GPU")
+            import traceback
+            debug(f"OpenCL初始化异常详情:\n{traceback.format_exc()}", "GPU")
     
     def _build_kernels(self):
         """编译OpenCL内核"""
@@ -140,9 +230,32 @@ class OpenCLEngine(GPUComputeEngine):
         '''
         
         try:
+            # 尝试编译内核
+            debug("开始编译OpenCL内核", "GPU")
+            info(f"为设备{self.device.name}编译OpenCL内核", "GPU")
             self.program = cl.Program(self.context, kernel_source).build()
+            info("OpenCL内核编译成功", "GPU")
+            
+            # 验证内核函数是否可用
+            try:
+                density_kernel = self.program.density_inversion
+                curve_kernel = self.program.curve_lut_apply
+                debug("内核函数验证成功", "GPU")
+            except AttributeError as e:
+                error(f"内核函数验证失败: {e}", "GPU")
+                self.program = None
+                
+        except cl.CompileError as e:
+            error(f"OpenCL内核编译错误: {e}", "GPU")
+            debug(f"编译错误详情:\n{e}", "GPU")
+            self.program = None
+        except cl.Error as e:
+            error(f"OpenCL编译时发生错误: {e}", "GPU")
+            self.program = None
         except Exception as e:
-            print(f"OpenCL内核编译失败: {e}")
+            error(f"OpenCL内核编译发生未知错误: {e}", "GPU")
+            import traceback
+            debug(f"编译异常详情:\n{traceback.format_exc()}", "GPU")
             self.program = None
     
     def is_available(self) -> bool:
@@ -172,31 +285,59 @@ class OpenCLEngine(GPUComputeEngine):
         if not self.is_available():
             raise RuntimeError("OpenCL不可用")
         
-        # 展平数组以简化处理
-        original_shape = image.shape
-        image_flat = image.flatten().astype(np.float32)
-        output_flat = np.zeros_like(image_flat)
+        debug(f"OpenCL密度反相处理: 图像{image.shape}, gamma={gamma:.3f}", "GPU")
         
-        # 创建OpenCL缓冲区
-        mf = cl.mem_flags
-        input_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, 
-                             hostbuf=image_flat)
-        output_buf = cl.Buffer(self.context, mf.WRITE_ONLY, image_flat.nbytes)
-        
-        # 执行内核
-        global_size = (len(image_flat),)
-        self.program.density_inversion(
-            self.queue, global_size, None,
-            input_buf, output_buf,
-            np.float32(gamma), np.float32(dmax), np.float32(pivot),
-            np.int32(len(image_flat))
-        )
-        
-        # 读取结果
-        cl.enqueue_copy(self.queue, output_flat, output_buf)
-        
-        # 恢复原始形状
-        return output_flat.reshape(original_shape)
+        try:
+            # 展平数组以简化处理
+            original_shape = image.shape
+            image_flat = image.flatten().astype(np.float32)
+            output_flat = np.zeros_like(image_flat)
+            
+            debug(f"处理{len(image_flat)}个像素", "GPU")
+            
+            # 检查内存大小
+            memory_needed = len(image_flat) * 8  # input + output buffers
+            device_memory = self.device.global_mem_size
+            if memory_needed > device_memory * 0.8:  # 不使用超过80%的显存
+                warning(f"内存需求({memory_needed//1024//1024}MB)接近设备限制({device_memory//1024//1024}MB)", "GPU")
+            
+            # 创建OpenCL缓冲区
+            mf = cl.mem_flags
+            input_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, 
+                                 hostbuf=image_flat)
+            output_buf = cl.Buffer(self.context, mf.WRITE_ONLY, image_flat.nbytes)
+            
+            # 执行内核
+            global_size = (len(image_flat),)
+            event = self.program.density_inversion(
+                self.queue, global_size, None,
+                input_buf, output_buf,
+                np.float32(gamma), np.float32(dmax), np.float32(pivot),
+                np.int32(len(image_flat))
+            )
+            
+            # 等待执行完成
+            event.wait()
+            
+            # 读取结果
+            cl.enqueue_copy(self.queue, output_flat, output_buf)
+            
+            debug("OpenCL密度反相处理完成", "GPU")
+            
+            # 恢复原始形状
+            return output_flat.reshape(original_shape)
+            
+        except cl.MemoryError as e:
+            error(f"OpenCL内存不足: {e}", "GPU")
+            raise RuntimeError(f"GPU内存不足: {e}")
+        except cl.Error as e:
+            error(f"OpenCL执行错误: {e}", "GPU")
+            raise RuntimeError(f"GPU执行失败: {e}")
+        except Exception as e:
+            error(f"OpenCL密度反相处理发生未知错误: {e}", "GPU")
+            import traceback
+            debug(f"异常详情:\n{traceback.format_exc()}", "GPU")
+            raise
     
     def curve_processing_gpu(self, density_array: np.ndarray, 
                            lut: np.ndarray) -> np.ndarray:
@@ -204,33 +345,61 @@ class OpenCLEngine(GPUComputeEngine):
         if not self.is_available():
             raise RuntimeError("OpenCL不可用")
         
-        # 展平数组
-        original_shape = density_array.shape
-        density_flat = density_array.flatten().astype(np.float32)
-        output_flat = np.zeros_like(density_flat)
-        lut_float = lut.astype(np.float32)
+        debug(f"OpenCL曲线处理: 图像{density_array.shape}, LUT大小{len(lut)}", "GPU")
         
-        # 创建OpenCL缓冲区
-        mf = cl.mem_flags
-        input_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, 
-                             hostbuf=density_flat)
-        output_buf = cl.Buffer(self.context, mf.WRITE_ONLY, density_flat.nbytes)
-        lut_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR,
-                           hostbuf=lut_float)
-        
-        # 执行内核
-        global_size = (len(density_flat),)
-        self.program.curve_lut_apply(
-            self.queue, global_size, None,
-            input_buf, output_buf, lut_buf,
-            np.int32(len(density_flat)), np.int32(len(lut_float))
-        )
-        
-        # 读取结果
-        cl.enqueue_copy(self.queue, output_flat, output_buf)
-        
-        # 恢复原始形状
-        return output_flat.reshape(original_shape)
+        try:
+            # 展平数组
+            original_shape = density_array.shape
+            density_flat = density_array.flatten().astype(np.float32)
+            output_flat = np.zeros_like(density_flat)
+            lut_float = lut.astype(np.float32)
+            
+            debug(f"处理{len(density_flat)}个像素，LUT:{len(lut_float)}个条目", "GPU")
+            
+            # 检查内存大小
+            memory_needed = len(density_flat) * 8 + len(lut_float) * 4  # buffers
+            device_memory = self.device.global_mem_size
+            if memory_needed > device_memory * 0.8:
+                warning(f"内存需求({memory_needed//1024//1024}MB)接近设备限制({device_memory//1024//1024}MB)", "GPU")
+            
+            # 创建OpenCL缓冲区
+            mf = cl.mem_flags
+            input_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, 
+                                 hostbuf=density_flat)
+            output_buf = cl.Buffer(self.context, mf.WRITE_ONLY, density_flat.nbytes)
+            lut_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR,
+                               hostbuf=lut_float)
+            
+            # 执行内核
+            global_size = (len(density_flat),)
+            event = self.program.curve_lut_apply(
+                self.queue, global_size, None,
+                input_buf, output_buf, lut_buf,
+                np.int32(len(density_flat)), np.int32(len(lut_float))
+            )
+            
+            # 等待执行完成
+            event.wait()
+            
+            # 读取结果
+            cl.enqueue_copy(self.queue, output_flat, output_buf)
+            
+            debug("OpenCL曲线处理完成", "GPU")
+            
+            # 恢复原始形状
+            return output_flat.reshape(original_shape)
+            
+        except cl.MemoryError as e:
+            error(f"OpenCL内存不足: {e}", "GPU")
+            raise RuntimeError(f"GPU内存不足: {e}")
+        except cl.Error as e:
+            error(f"OpenCL执行错误: {e}", "GPU")
+            raise RuntimeError(f"GPU执行失败: {e}")
+        except Exception as e:
+            error(f"OpenCL曲线处理发生未知错误: {e}", "GPU")
+            import traceback
+            debug(f"异常详情:\n{traceback.format_exc()}", "GPU")
+            raise
 
 
 class CUDAEngine(GPUComputeEngine):
@@ -241,9 +410,14 @@ class CUDAEngine(GPUComputeEngine):
         if self._available:
             try:
                 # 测试CUDA可用性
+                debug("尝试初始化CUDA引擎", "GPU")
                 cp.cuda.Device(0).use()
-            except:
+                info("CUDA引擎初始化成功", "GPU")
+            except Exception as e:
+                warning(f"CUDA引擎初始化失败: {e}", "GPU")
                 self._available = False
+        else:
+            debug("CuPy未安装，跳过CUDA引擎", "GPU")
     
     def is_available(self) -> bool:
         return self._available
@@ -318,7 +492,7 @@ class MetalEngine(GPUComputeEngine):
                 self.command_queue = self.device.newCommandQueue()
                 self._create_compute_library()
         except Exception as e:
-            print(f"Metal初始化失败: {e}")
+            error(f"Metal初始化失败: {e}", "GPU")
     
     def _create_compute_library(self):
         """创建Metal计算着色器库"""
@@ -389,9 +563,9 @@ class MetalEngine(GPUComputeEngine):
             if library[0]:
                 self.library = library[0]
             else:
-                print(f"Metal着色器编译失败: {library[1]}")
+                error(f"Metal着色器编译失败: {library[1]}", "GPU")
         except Exception as e:
-            print(f"Metal着色器创建失败: {e}")
+            error(f"Metal着色器创建失败: {e}", "GPU")
     
     def is_available(self) -> bool:
         """检查Metal是否可用"""
@@ -578,23 +752,64 @@ class GPUAccelerator:
     
     def _initialize_engines(self):
         """初始化所有可用的计算引擎"""
-        # 优先级顺序：Metal > OpenCL > CUDA（macOS原生优先）
-        engines_to_try = [
-            ("Metal", MetalEngine),
-            ("OpenCL", OpenCLEngine), 
-            ("CUDA", CUDAEngine),
-        ]
+        import os
+        
+        # 检查是否禁用GPU加速
+        if os.environ.get('DIVERE_DISABLE_GPU', '').lower() in ('1', 'true', 'yes'):
+            info("检测到DIVERE_DISABLE_GPU环境变量，禁用GPU加速", "GPU")
+            return
+        
+        # 根据平台调整引擎优先级
+        if platform.system() == 'Windows':
+            # Windows: CUDA > OpenCL > Metal（Metal在Windows上不可用）
+            engines_to_try = [
+                ("CUDA", CUDAEngine),
+                ("OpenCL", OpenCLEngine),
+                ("Metal", MetalEngine),
+            ]
+            info("Windows平台：优先尝试CUDA，然后OpenCL", "GPU")
+        elif platform.system() == 'Darwin':
+            # macOS: Metal > OpenCL > CUDA（优先原生加速）
+            engines_to_try = [
+                ("Metal", MetalEngine),
+                ("OpenCL", OpenCLEngine), 
+                ("CUDA", CUDAEngine),
+            ]
+            info("macOS平台：优先尝试Metal，然后OpenCL", "GPU")
+        else:
+            # Linux等: OpenCL > CUDA > Metal
+            engines_to_try = [
+                ("OpenCL", OpenCLEngine),
+                ("CUDA", CUDAEngine),
+                ("Metal", MetalEngine),
+            ]
+            info("Linux平台：优先尝试OpenCL，然后CUDA", "GPU")
+        
+        info("开始初始化GPU引擎", "GPU")
         
         for name, engine_class in engines_to_try:
             try:
+                debug(f"尝试初始化{name}引擎", "GPU")
                 engine = engine_class()
                 if engine.is_available():
                     self.engines.append((name, engine))
                     if self.active_engine is None:
                         self.active_engine = engine
-                        print(f"🚀 使用GPU引擎: {name}")
+                        info(f"🚀 使用GPU引擎: {name}", "GPU")
+                        # 获取设备信息
+                        device_info = engine.get_device_info()
+                        debug(f"设备信息: {device_info}", "GPU")
+                else:
+                    debug(f"{name}引擎不可用", "GPU")
             except Exception as e:
-                print(f"⚠️  {name}引擎初始化失败: {e}")
+                warning(f"⚠️  {name}引擎初始化失败: {e}", "GPU")
+                debug(f"{name}引擎初始化异常详情: {e}", "GPU")
+        
+        if not self.engines:
+            warning("未找到可用的GPU引擎，将使用CPU计算", "GPU")
+        else:
+            available_engines = [name for name, _ in self.engines]
+            info(f"可用GPU引擎: {available_engines}", "GPU")
     
     def is_available(self) -> bool:
         """检查是否有可用的GPU加速"""
@@ -618,7 +833,7 @@ class GPUAccelerator:
         for name, engine in self.engines:
             if name == engine_name:
                 self.active_engine = engine
-                print(f"🔄 切换到GPU引擎: {engine_name}")
+                info(f"🔄 切换到GPU引擎: {engine_name}", "GPU")
                 return True
         return False
     
@@ -626,38 +841,52 @@ class GPUAccelerator:
                                      dmax: float, pivot: float) -> np.ndarray:
         """GPU加速的密度反相，自动回退到CPU"""
         if not self.is_available():
-            # CPU回退版本
+            debug("没有可用的GPU引擎，使用CPU处理密度反相", "GPU")
             return self._density_inversion_cpu(image, gamma, dmax, pivot)
         
         try:
-            return self.active_engine.density_inversion_gpu(image, gamma, dmax, pivot)
+            debug(f"使用{type(self.active_engine).__name__}处理密度反相", "GPU")
+            result = self.active_engine.density_inversion_gpu(image, gamma, dmax, pivot)
+            debug("GPU密度反相处理成功", "GPU")
+            return result
         except Exception as e:
-            print(f"⚠️  GPU加速失败，回退到CPU: {e}")
+            error(f"GPU加速失败，回退到CPU: {e}", "GPU")
+            debug(f"GPU失败详情: {e}", "GPU")
             return self._density_inversion_cpu(image, gamma, dmax, pivot)
     
     def curve_processing_accelerated(self, density_array: np.ndarray, 
                                    lut: np.ndarray) -> np.ndarray:
         """GPU加速的曲线处理，自动回退到CPU"""
         if not self.is_available():
+            debug("没有可用的GPU引擎，使用CPU处理曲线", "GPU")
             return self._curve_processing_cpu(density_array, lut)
         
         try:
-            return self.active_engine.curve_processing_gpu(density_array, lut)
+            debug(f"使用{type(self.active_engine).__name__}处理曲线", "GPU")
+            result = self.active_engine.curve_processing_gpu(density_array, lut)
+            debug("GPU曲线处理成功", "GPU")
+            return result
         except Exception as e:
-            print(f"⚠️  GPU加速失败，回退到CPU: {e}")
+            error(f"GPU加速失败，回退到CPU: {e}", "GPU")
+            debug(f"GPU失败详情: {e}", "GPU")
             return self._curve_processing_cpu(density_array, lut)
     
     def _density_inversion_cpu(self, image: np.ndarray, gamma: float, 
                               dmax: float, pivot: float) -> np.ndarray:
         """CPU版本的密度反相（回退方案）"""
+        debug(f"CPU密度反相处理: 图像{image.shape}, gamma={gamma:.3f}", "GPU")
         safe_img = np.maximum(image, 1e-10)
         original_density = -np.log10(safe_img)
         adjusted_density = pivot + (original_density - pivot) * gamma - dmax
-        return np.power(10.0, adjusted_density)
+        result = np.power(10.0, adjusted_density)
+        debug("CPU密度反相处理完成", "GPU")
+        return result
     
     def _curve_processing_cpu(self, density_array: np.ndarray, 
                              lut: np.ndarray) -> np.ndarray:
         """CPU版本的曲线处理（回退方案）- 使用高精度插值"""
+        debug(f"CPU曲线处理: 图像{density_array.shape}, LUT大小{len(lut)}", "GPU")
+        
         # 高精度线性插值实现，避免简单索引造成的量化误差
         inv_range = 1.0 / 6.5536  # LOG65536的倒数
         normalized = 1.0 - np.clip(density_array * inv_range, 0.0, 1.0)
@@ -666,6 +895,7 @@ class GPUAccelerator:
         lut_indices = np.linspace(0.0, 1.0, len(lut), dtype=np.float64)
         result = np.interp(normalized.flatten(), lut_indices, lut).astype(density_array.dtype)
         
+        debug("CPU曲线处理完成", "GPU")
         return result.reshape(density_array.shape)
 
 

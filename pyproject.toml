@@ -21,11 +21,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "numpy>=1.24.0",
+    "numpy>=1.24.0,<2.0.0",
     "opencv-python>=4.8.0",
     "pillow>=10.0.0",
     "PySide6>=6.5.0",
-    "scipy>=1.11.0",
+    "scipy>=1.13.0,<1.15.0",
     "imageio>=2.31.0",
     "colour-science>=0.4.2",
     "onnxruntime>=1.15.0",

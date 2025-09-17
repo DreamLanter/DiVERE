@@ -1,6 +1,6 @@
 [project]
 name = "divere"
-version = "0.1.27"
+version = "2025.09.17"
 description = "胶片校色工具 - 基于ACEScg Linear工作流的胶片数字化后期处理"
 authors = [{name = "V7", email = "vanadis@yeah.net"}]
 readme = "README.md"

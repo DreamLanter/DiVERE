@@ -1,8 +1,10 @@
 {
-    "name": "sRGB",
+    "name": "AdobeRGB",
+    "type": ["regular"],
+    "icc_profile": "AdobeRGB1998.icc",
     "primaries": {
         "R": [0.6400, 0.3300],
-        "G": [0.3000, 0.6000],
+        "G": [0.2100, 0.7100],
         "B": [0.1500, 0.0600]
     },
     "white_point": [0.3127, 0.3290],

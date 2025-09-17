@@ -16,7 +16,7 @@
     ]
   },
   "defaults": {
-    "input_color_space": "sRGB",
+    "input_color_space": "ACEScg",
     "output_color_space": "sRGB"
   }
 }

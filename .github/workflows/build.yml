@@ -152,17 +152,11 @@ jobs:
         ICON_ARG=""
         if [ "${{ matrix.platform }}" = "macos" ] && [ -f icons/app.icns ]; then ICON_ARG="--icon icons/app.icns"; fi
         if [ "${{ matrix.platform }}" = "windows" ] && [ -f icons/app.ico ]; then ICON_ARG="--icon icons/app.ico"; fi
-        # macOS ARM 特定优化，增加栈大小和运行时选项
-        MACOS_OPTS=""
-        if [ "${{ matrix.platform }}" = "macos" ] && [ "${{ matrix.arch }}" = "arm64" ]; then
-          MACOS_OPTS="--runtime-option PTHREAD_STACK_SIZE=8388608"  # 8MB栈大小
-        fi
         python -m PyInstaller \
           -y --clean --noconfirm \
           --windowed \
           --name "DiVERE" \
           ${ICON_ARG} \
-          ${MACOS_OPTS} \
           --add-data "divere/config${DATA_SEP}config" \
           --add-data "divere/assets${DATA_SEP}assets" \
           --add-data "divere/models${DATA_SEP}models" \

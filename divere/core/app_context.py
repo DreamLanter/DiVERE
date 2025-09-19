@@ -99,6 +99,9 @@ class ApplicationContext(QObject):
         self._preview_pending: bool = False
         self.thread_pool: QThreadPool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(1)
+        # 设置线程栈大小为8MB以避免macOS ARM版本打包后的栈溢出问题
+        # 这主要解决OpenBLAS在numpy.linalg.solve中的栈空间不足问题
+        self.thread_pool.setStackSize(8 * 1024 * 1024)  # 8MB
 
         # AI自动校色迭代状态
         self._auto_color_iterations = 0

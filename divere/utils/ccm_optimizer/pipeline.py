@@ -72,8 +72,17 @@ class DiVEREPipelineSimulator:
         wz = 1 - wx - wy
         white_xyz = np.array([wx/wy, 1.0, wz/wy])
         
-        # 计算scaling factors
-        scaling = np.linalg.solve(xyz_primaries, white_xyz)
+        # 计算scaling factors，增强数值稳定性
+        try:
+            # 检查矩阵条件数，避免数值不稳定
+            cond_num = np.linalg.cond(xyz_primaries)
+            if cond_num > 1e12:  # 条件数过大，使用伪逆
+                scaling = np.linalg.pinv(xyz_primaries) @ white_xyz
+            else:
+                scaling = np.linalg.solve(xyz_primaries, white_xyz)
+        except (np.linalg.LinAlgError, RuntimeError, MemoryError):
+            # 回退到默认缩放因子
+            scaling = np.array([1.0, 1.0, 1.0])
         
         # 构建最终的转换矩阵
         return xyz_primaries * scaling[np.newaxis, :]

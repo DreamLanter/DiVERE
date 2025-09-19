@@ -29,6 +29,13 @@ try:
 except Exception:
     pass
 
+# 配置数值计算库，防止多线程冲突和栈溢出
+# 必须在导入numpy之前设置
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'  
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
 # 添加项目根目录到Python路径（开发环境下使用）
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:

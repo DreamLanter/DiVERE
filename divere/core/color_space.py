@@ -300,10 +300,17 @@ class ColorSpaceManager:
         
         # 求解标量因子，使得 primaries_matrix * [Sr, Sg, Sb]^T = W_XYZ
         try:
-            scaling_factors = np.linalg.solve(primaries_matrix, W_XYZ)
-        except np.linalg.LinAlgError:
+            # 检查矩阵条件数，避免数值不稳定
+            cond_num = np.linalg.cond(primaries_matrix)
+            if cond_num > 1e12:  # 条件数过大，使用伪逆
+                if self._verbose_logs:
+                    print(f"警告: 基色矩阵条件数过大 ({cond_num:.2e})，使用伪逆求解")
+                scaling_factors = np.linalg.pinv(primaries_matrix) @ W_XYZ
+            else:
+                scaling_factors = np.linalg.solve(primaries_matrix, W_XYZ)
+        except (np.linalg.LinAlgError, RuntimeError, MemoryError) as e:
             if self._verbose_logs:
-                print("警告: 基色矩阵奇异，使用默认缩放因子")
+                print(f"警告: 矩阵求解失败 ({type(e).__name__}: {e})，使用默认缩放因子")
             scaling_factors = np.array([1.0, 1.0, 1.0])
         
         # 构建最终的RGB到XYZ转换矩阵

@@ -157,11 +157,7 @@ class PreviewWidget(QWidget):
         self._min_zoom: float = 0.05
         self._max_zoom: float = 16.0
 
-        # 旋转锚点状态（用于保持以预览中心为轴旋转）
-        self._rotate_anchor_active: bool = False
-        self._rotate_direction: int = 0  # 1=左旋, -1=右旋
-        self._rotate_anchor_p = None  # (px, py) 旋转前图像坐标
-        self._rotate_old_wh = None  # (W_old, H_old)
+        # 旋转锚点相关代码已移除，简化旋转逻辑
 
         # 色卡选择器状态
         self.cc_enabled: bool = False
@@ -1173,9 +1169,9 @@ class PreviewWidget(QWidget):
             self._detect_black_cutoff_pixels()
             
         self.image_label.update()
-        # 如果存在旋转锚点，应用
-        if self._rotate_anchor_active:
-            self.apply_rotate_anchor()
+        # 旋转后自动适应窗口以确保图像完整可见
+        # 移除有问题的锚点机制，使用简单的适应窗口
+        QTimer.singleShot(0, self.fit_to_window)
 
     def get_current_image_data(self) -> Optional[ImageData]:
         """返回当前显示的ImageData对象"""
@@ -2375,82 +2371,19 @@ class PreviewWidget(QWidget):
         except Exception as e:
             print(f"右旋转色卡失败: {e}")
 
-    # ===== 旋转锚点支持 =====
-    def prepare_rotate(self, direction: int):
-        """在图像实际旋转前调用，捕获以预览中心为锚的图像坐标。"""
-        if not self.current_image:
-            return
-        self._rotate_direction = int(direction)
-        self._rotate_anchor_active = True
-        # 视口中心
-        Wv = self._get_viewport_size().width()
-        Hv = self._get_viewport_size().height()
-        m0x = float(Wv) / 2.0
-        m0y = float(Hv) / 2.0
-        s = float(self.zoom_factor)
-        t_x = float(self.pan_x)
-        t_y = float(self.pan_y)
-        # 以当前视图参数反解中心对应的图像坐标 p
-        p_x = (m0x - t_x) / s
-        p_y = (m0y - t_y) / s
-        self._rotate_anchor_p = (p_x, p_y)
-        h, w = self.current_image.array.shape[:2]
-        self._rotate_old_wh = (float(w), float(h))
-
-    def apply_rotate_anchor(self):
-        """在图像旋转加载完成后调用，调整平移使预览中心保持为旋转轴。"""
-        if not (self._rotate_anchor_active and self.current_image and self.current_image.array is not None):
-            # 清理状态
-            self._rotate_anchor_active = False
-            self._rotate_direction = 0
-            self._rotate_anchor_p = None
-            self._rotate_old_wh = None
-            return
-        try:
-            W_old, H_old = self._rotate_old_wh
-            px, py = self._rotate_anchor_p
-            direction = self._rotate_direction
-            # 旋转后的对应坐标 p'
-            if direction == 1:  # 左旋 90° CCW
-                ppx = py
-                ppy = W_old - 1.0 - px
-            elif direction == -1:  # 右旋 90° CW
-                ppx = H_old - 1.0 - py
-                ppy = px
-            else:
-                ppx, ppy = px, py
-            # 色卡坐标使用归一化坐标，不受图像旋转影响，无需同步更新
-            # 以当前视口中心求新的平移
-            Wv = self._get_viewport_size().width()
-            Hv = self._get_viewport_size().height()
-            m0x = float(Wv) / 2.0
-            m0y = float(Hv) / 2.0
-            s = float(self.zoom_factor)
-            self.pan_x = m0x - ppx * s
-            self.pan_y = m0y - ppy * s
-            self._clamp_pan()
-            self._update_display()
-        finally:
-            # 清理状态
-            self._rotate_anchor_active = False
-            self._rotate_direction = 0
-            self._rotate_anchor_p = None
-            self._rotate_old_wh = None
-            # 旋转完成后自动适应窗口
-            self.fit_to_window()
+    # ===== 旋转锚点支持代码已移除 =====
+    # 简化旋转逻辑，旋转后自动适应窗口显示
         
     def rotate_left(self):
         """左旋90度"""
         if self.current_image and self.current_image.array is not None:
-            # 先捕获旋转锚点（以视口中心为轴），再通知主窗口执行旋转
-            self.prepare_rotate(1)
+            # 直接通知主窗口执行旋转，不使用锚点机制
             self.image_rotated.emit(1)  # 1表示左旋
             
     def rotate_right(self):
         """右旋90度"""
         if self.current_image and self.current_image.array is not None:
-            # 先捕获旋转锚点（以视口中心为轴），再通知主窗口执行旋转
-            self.prepare_rotate(-1)
+            # 直接通知主窗口执行旋转，不使用锚点机制
             self.image_rotated.emit(-1)  # -1表示右旋
             
     def keyPressEvent(self, event):

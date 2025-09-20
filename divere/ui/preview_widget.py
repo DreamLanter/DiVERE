@@ -142,6 +142,7 @@ class PreviewWidget(QWidget):
         self._create_crop_selector()
         self._setup_mouse_controls()
         self._setup_keyboard_controls()
+        self._setup_navigation_controls()
         # 捕获应用级别的修饰键变化（确保光标能及时更新）
         try:
             QApplication.instance().installEventFilter(self)
@@ -297,6 +298,9 @@ class PreviewWidget(QWidget):
         button_layout.addWidget(self.center_btn)
         button_layout.addWidget(self.cc_checkbox)
         button_layout.addStretch()  # 弹性空间
+        
+        # 文件夹导航控件
+        self._create_navigation_controls(button_layout)
         layout.addLayout(button_layout)
         
         self.scroll_area = QScrollArea()
@@ -925,6 +929,38 @@ class PreviewWidget(QWidget):
             # 触发重绘以显示新的参考色块
             self._update_display()
 
+    def _create_navigation_controls(self, parent_layout):
+        """创建文件夹导航控件"""
+        # 导航控件容器
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(4)
+        
+        # 上一张按钮
+        self.nav_prev_btn = QPushButton("◀")
+        self.nav_prev_btn.setMaximumWidth(32)
+        self.nav_prev_btn.setToolTip("上一张图片")
+        self.nav_prev_btn.setEnabled(False)
+        
+        # 文件选择下拉框
+        self.nav_file_combo = QComboBox()
+        self.nav_file_combo.setMinimumWidth(120)
+        self.nav_file_combo.setMaximumWidth(200)
+        self.nav_file_combo.setToolTip("选择当前文件夹中的文件")
+        
+        # 下一张按钮
+        self.nav_next_btn = QPushButton("▶")
+        self.nav_next_btn.setMaximumWidth(32)
+        self.nav_next_btn.setToolTip("下一张图片")
+        self.nav_next_btn.setEnabled(False)
+        
+        # 添加到导航布局
+        nav_layout.addWidget(self.nav_prev_btn)
+        nav_layout.addWidget(self.nav_file_combo)
+        nav_layout.addWidget(self.nav_next_btn)
+        
+        # 将导航布局添加到父布局
+        parent_layout.addLayout(nav_layout)
+
     def _setup_mouse_controls(self):
         """设置鼠标控制"""
         # 将鼠标事件绑定到image_label而不是scroll_area
@@ -954,6 +990,67 @@ class PreviewWidget(QWidget):
     def _setup_keyboard_controls(self):
         """设置键盘控制"""
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def _setup_navigation_controls(self):
+        """设置导航控件事件连接"""
+        # 连接按钮点击事件
+        self.nav_prev_btn.clicked.connect(self._on_nav_previous)
+        self.nav_next_btn.clicked.connect(self._on_nav_next)
+        
+        # 连接下拉框选择变化事件
+        self.nav_file_combo.currentIndexChanged.connect(self._on_nav_file_selected)
+
+    def _on_nav_previous(self):
+        """处理上一张按钮点击"""
+        if self.context and hasattr(self.context, 'folder_navigator'):
+            self.context.folder_navigator.navigate_previous()
+
+    def _on_nav_next(self):
+        """处理下一张按钮点击"""
+        if self.context and hasattr(self.context, 'folder_navigator'):
+            self.context.folder_navigator.navigate_next()
+
+    def _on_nav_file_selected(self, index):
+        """处理文件选择下拉框变化"""
+        if self.context and hasattr(self.context, 'folder_navigator'):
+            # 避免循环触发
+            if index >= 0:
+                self.context.folder_navigator.navigate_to_index(index)
+
+    def update_navigation_state(self):
+        """更新导航控件状态"""
+        if not self.context or not hasattr(self.context, 'folder_navigator'):
+            # 禁用所有导航控件
+            self.nav_prev_btn.setEnabled(False)
+            self.nav_next_btn.setEnabled(False)
+            self.nav_file_combo.clear()
+            return
+        
+        navigator = self.context.folder_navigator
+        nav_info = navigator.get_navigation_info()
+        
+        # 更新按钮状态
+        self.nav_prev_btn.setEnabled(nav_info['can_previous'])
+        self.nav_next_btn.setEnabled(nav_info['can_next'])
+        
+        # 更新下拉框内容
+        current_index = nav_info['current_index']
+        file_list = nav_info['file_list']
+        
+        # 暂时断开信号连接以避免循环触发
+        self.nav_file_combo.blockSignals(True)
+        self.nav_file_combo.clear()
+        
+        # 添加文件列表
+        for filename in file_list:
+            self.nav_file_combo.addItem(filename)
+        
+        # 设置当前选中项
+        if 0 <= current_index < len(file_list):
+            self.nav_file_combo.setCurrentIndex(current_index)
+        
+        # 重新连接信号
+        self.nav_file_combo.blockSignals(False)
 
     def eventFilter(self, obj, event):
         # 全局监听修饰键变化与鼠标移动，以便更新编辑模式下的光标

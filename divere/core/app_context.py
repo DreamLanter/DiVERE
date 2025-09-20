@@ -8,6 +8,7 @@ from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
 from .film_type_controller import FilmTypeController
+from .folder_navigator import FolderNavigator
 from ..utils.auto_preset_manager import AutoPresetManager
 
 
@@ -81,6 +82,7 @@ class ApplicationContext(QObject):
         self.color_space_manager = ColorSpaceManager()
         self.the_enlarger = TheEnlarger()
         self.film_type_controller = FilmTypeController()
+        self.folder_navigator = FolderNavigator(self.image_manager)
         self.auto_preset_manager = AutoPresetManager()
 
         # =================
@@ -138,6 +140,9 @@ class ApplicationContext(QObject):
             crop_rect=None
         )
         self._per_crop_params: dict = {}
+        
+        # 连接文件夹导航信号
+        self.folder_navigator.file_changed.connect(self.load_image)
 
     def _create_default_params(self) -> ColorGradingParams:
         params = ColorGradingParams()
@@ -694,6 +699,9 @@ class ApplicationContext(QObject):
         try:
             self.status_message_changed.emit(f"正在加载图像: {file_path}...")
             self._current_image = self.image_manager.load_image(file_path)
+            
+            # 更新文件夹导航状态
+            self.folder_navigator.update_folder(file_path)
             
             # 检测单/双通道图像，自动切换黑白模式
             if self._current_image.is_monochrome_source:

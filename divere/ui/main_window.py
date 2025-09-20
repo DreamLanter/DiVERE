@@ -477,6 +477,12 @@ class MainWindow(QMainWindow):
             self.preview_widget.refresh_crop_selector(crops, active_id)
         except Exception:
             pass
+        
+        # 更新文件夹导航状态
+        try:
+            self.preview_widget.update_navigation_state()
+        except Exception:
+            pass
 
     def _on_autosave_requested(self):
         """处理来自Context的自动保存请求"""

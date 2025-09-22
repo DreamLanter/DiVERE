@@ -43,11 +43,13 @@ except Exception:
 class CCMOptimizer:
     """CCM参数优化器"""
     
-    def __init__(self, reference_file: str = "colorchecker_acescg_rgb_values.json",
+    def __init__(self, reference_file: str = "original_color_cc24data.json",
                  weights_config_path: Optional[str] = None,
                  bounds_config_path: Optional[str] = None,
                  sharpening_config: Optional['SpectralSharpeningConfig'] = None,
-                 status_callback: Optional[callable] = None):
+                 status_callback: Optional[callable] = None,
+                 color_space_manager: Optional[Any] = None,
+                 working_colorspace: Optional[str] = None):
         """
         初始化优化器
         
@@ -71,6 +73,11 @@ class CCMOptimizer:
         
         self.sharpening_config = sharpening_config
         self.pipeline = DiVEREPipelineSimulator(verbose=False)
+        
+        # 保存ColorSpaceManager和工作空间信息
+        self._color_space_manager = color_space_manager
+        self._working_colorspace = working_colorspace or 'ACEScg'
+        
         self.reference_values = self._load_reference_values(reference_file)
         # 加载权重配置（可选）。默认使用内置的 config/colorchecker/weights.json
         self._weights_config = self._load_weights_config(weights_config_path)
@@ -232,9 +239,31 @@ class CCMOptimizer:
                     self.initial_params['density_matrix'] = np.array(clamped_matrix)
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
-        """加载参考RGB值
-        优先从统一数据路径 `config/colorchecker/<file>` 解析；
-        冻结环境下优先使用可执行目录旁的 `config`；开发环境回退到包内同目录或 `divere/config/colorchecker`。
+        """
+        使用新的colorchecker_loader加载参考RGB值
+        支持XYZ和EnduraDensityExp类型的自动处理
+        """
+        try:
+            from divere.utils.colorchecker_loader import load_colorchecker_reference
+            
+            # 使用构造函数中保存的工作空间和ColorSpaceManager
+            working_colorspace = self._working_colorspace
+            color_space_manager = self._color_space_manager
+            
+            # 使用新的加载器，自动处理白点变换
+            return load_colorchecker_reference(
+                reference_file, 
+                working_colorspace,
+                color_space_manager
+            )
+            
+        except Exception as e:
+            print(f"警告：使用新加载器失败，回退到旧方法: {e}")
+            return self._load_reference_values_legacy(reference_file)
+
+    def _load_reference_values_legacy(self, reference_file: str) -> Dict[str, List[float]]:
+        """
+        旧版参考值加载方法（向后兼容）
         """
         candidates: List[Path] = []
         # 允许外部传绝对路径
@@ -767,7 +796,7 @@ class CCMOptimizer:
 
 def optimize_from_image(image_array: np.ndarray,
                        corners: List[Tuple[float, float]],
-                       reference_file: str = "colorchecker_acescg_rgb_values.json",
+                       reference_file: str = "original_color_cc24data.json",
                        **optimizer_kwargs) -> Dict:
     """
     从图像直接优化的便捷函数

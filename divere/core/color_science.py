@@ -16,6 +16,17 @@ from colour.models import eotf_inverse_sRGB
 
 # 常量白点
 D50_XYZ = np.array([0.96422, 1.00000, 0.82521], dtype=np.float64)
+D55_XYZ = np.array([0.95682, 1.00000, 0.92149], dtype=np.float64)
+D60_XYZ = np.array([0.95230, 1.00000, 1.00882], dtype=np.float64)
+D65_XYZ = np.array([0.95047, 1.00000, 1.08883], dtype=np.float64)
+
+# 白点映射字典
+STANDARD_ILLUMINANTS = {
+    "D50": D50_XYZ,
+    "D55": D55_XYZ, 
+    "D60": D60_XYZ,
+    "D65": D65_XYZ
+}
 
 
 def lab_d50_to_xyz_d50(lab: Iterable[float]) -> np.ndarray:
@@ -42,6 +53,32 @@ def xyz_chromatic_adapt_bradford(xyz: np.ndarray, src_wp: np.ndarray, dst_wp: np
     src_wp = np.asarray(src_wp, dtype=np.float64)
     dst_wp = np.asarray(dst_wp, dtype=np.float64)
     return chromatic_adaptation_VonKries(xyz, src_wp, dst_wp, transform='Bradford')
+
+
+def bradford_chromatic_adaptation(xyz_values: np.ndarray, src_illuminant: str, dst_illuminant: str) -> np.ndarray:
+    """
+    使用Bradford CAT在标准光源间进行色度适应变换
+    
+    Args:
+        xyz_values: XYZ颜色值，shape (3,) 或 (N, 3)
+        src_illuminant: 源光源名称 ("D50", "D55", "D60", "D65")
+        dst_illuminant: 目标光源名称 ("D50", "D55", "D60", "D65")
+    
+    Returns:
+        变换后的XYZ值，与输入shape相同
+    """
+    if src_illuminant == dst_illuminant:
+        return np.asarray(xyz_values, dtype=np.float64)
+    
+    if src_illuminant not in STANDARD_ILLUMINANTS:
+        raise ValueError(f"不支持的源光源: {src_illuminant}")
+    if dst_illuminant not in STANDARD_ILLUMINANTS:
+        raise ValueError(f"不支持的目标光源: {dst_illuminant}")
+    
+    src_wp = STANDARD_ILLUMINANTS[src_illuminant]
+    dst_wp = STANDARD_ILLUMINANTS[dst_illuminant]
+    
+    return xyz_chromatic_adapt_bradford(xyz_values, src_wp, dst_wp)
 
 
 def xy_to_XYZ_unitY(xy: np.ndarray) -> np.ndarray:

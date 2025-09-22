@@ -798,7 +798,7 @@ class PreviewWidget(QWidget):
             if hasattr(main_window, 'parameter_panel'):
                 colorchecker_file = main_window.parameter_panel.get_selected_colorchecker_file()
             else:
-                colorchecker_file = "colorchecker_acescg_rgb_values.json"
+                colorchecker_file = "original_color_cc24data.json"
             
             # 读取色卡JSON文件
             self.cc_ref_qcolors = self._load_colorchecker_colors(colorchecker_file)
@@ -813,21 +813,29 @@ class PreviewWidget(QWidget):
                 self.cc_ref_qcolors = None
 
     def _load_colorchecker_colors(self, filename: str):
-        """从色卡JSON文件加载颜色值，并进行正确的色彩空间转换"""
+        """
+        使用colorchecker_loader加载颜色值，确保与优化器数据一致
+        自动处理白点变换，然后转换到显示空间
+        """
         try:
-            import json
-            from pathlib import Path
+            from divere.utils.colorchecker_loader import load_colorchecker_reference, WorkspaceValidationError
+            from divere.ui.main_window import MainWindow
             
-            # 构建文件路径
-            colorchecker_dir = Path(__file__).parent.parent / "config" / "colorchecker"
-            file_path = colorchecker_dir / filename
+            # 获取ColorSpaceManager和工作空间信息
+            main_window = self.window()
+            if hasattr(main_window, 'context'):
+                color_space_manager = main_window.context.color_space_manager
+                working_colorspace = color_space_manager.get_current_working_space()
+            else:
+                color_space_manager = None
+                working_colorspace = 'ACEScg'  # fallback
             
-            if not file_path.exists():
-                raise FileNotFoundError(f"色卡文件不存在: {file_path}")
-            
-            # 读取JSON文件
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # 使用与优化器相同的加载器，获取经过CAT变换的数据
+            reference_data = load_colorchecker_reference(
+                filename, 
+                working_colorspace,
+                color_space_manager
+            )
             
             # 提取24个色块的RGB值（按A1..D6顺序）
             patch_order = [
@@ -839,18 +847,23 @@ class PreviewWidget(QWidget):
             
             rgb_values = []
             for patch_id in patch_order:
-                if patch_id in data.get('data', {}):
-                    rgb_values.append(data['data'][patch_id])
+                if patch_id in reference_data:
+                    rgb_values.append(reference_data[patch_id])
                 else:
                     # 如果某个色块缺失，使用默认颜色
                     rgb_values.append([0.5, 0.5, 0.5])
             
-            # 使用现有的色彩空间管理器进行正确的转换
-            return self._convert_colorchecker_to_display_colors(rgb_values, data.get('color_space', ''))
+            # 现在数据是在working colorspace中，需要转换到显示空间
+            return self._convert_colorchecker_to_display_colors(rgb_values, working_colorspace)
+            
+        except WorkspaceValidationError as e:
+            # 专门处理工作空间验证错误，弹出对话框并回滚
+            return self._handle_workspace_validation_error(e, filename)
             
         except Exception as e:
             print(f"加载色卡颜色失败: {e}")
-            return None
+            # 如果新方法失败，尝试fallback到旧方法
+            return self._load_colorchecker_colors_legacy(filename)
 
     def _convert_colorchecker_to_display_colors(self, rgb_values: list, source_color_space: str) -> list:
         """使用现有的色彩空间管理器转换色卡颜色到显示空间"""
@@ -864,11 +877,9 @@ class PreviewWidget(QWidget):
             # 重塑为 (24, 1, 3) 以便处理
             rgb_array_reshaped = rgb_array.reshape(24, 1, 3)
             
-            # 根据源色彩空间确定输入色彩空间
-            if 'ACEScg' in source_color_space or '胶片敏感度响应空间' in source_color_space:
-                input_space = "ACEScg"
-            else:
-                input_space = "ACEScg"  # 默认假设为ACEScg
+            # 使用传入的source_color_space作为输入色彩空间
+            # 这样确保从正确的working colorspace转换到显示空间
+            input_space = source_color_space
             
             # 创建虚拟ImageData对象
             virtual_image = ImageData(
@@ -917,6 +928,84 @@ class PreviewWidget(QWidget):
             b = int(np.clip(rgb[2], 0, 1) * 255 + 0.5)
             colors.append(QColor(r, g, b))
         return colors
+
+    def _load_colorchecker_colors_legacy(self, filename: str):
+        """旧版色卡加载方法（fallback）"""
+        try:
+            import json
+            from pathlib import Path
+            
+            # 构建文件路径
+            colorchecker_dir = Path(__file__).parent.parent / "config" / "colorchecker"
+            file_path = colorchecker_dir / filename
+            
+            if not file_path.exists():
+                raise FileNotFoundError(f"色卡文件不存在: {file_path}")
+            
+            # 读取JSON文件
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 提取24个色块的RGB值（按A1..D6顺序）
+            patch_order = [
+                'A1', 'A2', 'A3', 'A4', 'A5', 'A6',
+                'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 
+                'C1', 'C2', 'C3', 'C4', 'C5', 'C6',
+                'D1', 'D2', 'D3', 'D4', 'D5', 'D6'
+            ]
+            
+            rgb_values = []
+            for patch_id in patch_order:
+                if patch_id in data.get('data', {}):
+                    rgb_values.append(data['data'][patch_id])
+                else:
+                    # 如果某个色块缺失，使用默认颜色
+                    rgb_values.append([0.5, 0.5, 0.5])
+            
+            # 使用旧的色彩空间转换逻辑
+            return self._convert_colorchecker_to_display_colors(rgb_values, data.get('color_space', 'ACEScg'))
+            
+        except Exception as e:
+            print(f"Legacy加载色卡颜色失败: {e}")
+            return self._simple_rgb_to_qcolor([[0.5, 0.5, 0.5]] * 24)
+
+    def _handle_workspace_validation_error(self, error: Exception, filename: str):
+        """
+        处理工作空间验证错误，显示对话框并回滚到之前的选择
+        """
+        from PySide6.QtWidgets import QMessageBox
+        from divere.ui.main_window import MainWindow
+        
+        # 显示错误对话框
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("工作空间不兼容")
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setText(f"无法加载色卡文件: {filename}")
+        msg_box.setDetailedText(str(error))
+        msg_box.setInformativeText(
+            "EnduraDensityExp类型的色卡需要KodakEnduraPremier工作空间。\n"
+            "请选择其他色卡文件或切换到正确的工作空间。"
+        )
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        
+        # 显示对话框
+        msg_box.exec()
+        
+        # 回滚到上一个有效的色卡选择
+        try:
+            main_window = self.window()
+            if hasattr(main_window, 'parameter_panel'):
+                # 触发参数面板回滚到默认或上一个有效选择
+                main_window.parameter_panel.revert_colorchecker_selection()
+        except Exception as e:
+            print(f"回滚色卡选择失败: {e}")
+        
+        # 返回默认色卡显示
+        try:
+            from divere.core.color_science import colorchecker_display_p3_qcolors
+            return colorchecker_display_p3_qcolors()
+        except Exception:
+            return self._simple_rgb_to_qcolor([[0.5, 0.5, 0.5]] * 24)
 
     def on_colorchecker_changed(self, filename: str):
         """当色卡类型改变时，重新生成参考色块"""

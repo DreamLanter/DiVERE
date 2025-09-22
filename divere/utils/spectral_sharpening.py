@@ -48,7 +48,7 @@ def run(
     correction_matrix: Optional[np.ndarray],
     optimizer_max_iter: int = 300,
     optimizer_tolerance: float = 1e-8,
-    reference_file: str = "colorchecker_acescg_rgb_values.json",
+    reference_file: str = "original_color_cc24data.json",
     sharpening_config: Optional[Any] = None,  # SpectralSharpeningConfig
     ui_params: Optional[Dict] = None,  # 来自UI的当前参数
     status_callback: Optional[callable] = None,  # 状态回调函数

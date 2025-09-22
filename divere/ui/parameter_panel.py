@@ -22,6 +22,7 @@ from divere.ui.curve_editor_widget import CurveEditorWidget
 from divere.ui.ucs_triangle_widget import UcsTriangleWidget
 from divere.core.color_space import xy_to_uv, uv_to_xy
 from divere.utils.enhanced_config_manager import enhanced_config_manager
+from divere.utils.colorchecker_loader import validate_colorchecker_workspace_compatibility
 
 
 class ParameterPanel(QWidget):
@@ -60,7 +61,7 @@ class ParameterPanel(QWidget):
         self.context = context
         self.current_params = self.context.get_current_params().copy()
         self.current_film_type = "color_negative_c41"  # Default film type
-        self.selected_colorchecker_file = "colorchecker_acescg_rgb_values.json"  # Default reference
+        self.selected_colorchecker_file = "original_color_cc24data.json"  # Default reference
         
         self._is_updating_ui = False
         self.context.params_changed.connect(self.on_context_params_changed)
@@ -250,7 +251,7 @@ class ParameterPanel(QWidget):
             
         # 扫描色卡文件（两种格式）
         chart_files = []
-        for file_path in colorchecker_dir.glob("*_rgb_values.json"):
+        for file_path in colorchecker_dir.glob("*_cc24data.json"):
             chart_files.append(file_path.name)
         for file_path in colorchecker_dir.glob("*_colorchecker_format.json"):
             chart_files.append(file_path.name)
@@ -262,14 +263,14 @@ class ParameterPanel(QWidget):
             self.colorchecker_combo.addItem(display_name, filename)
             
         # 设置默认选择
-        default_index = self.colorchecker_combo.findData("colorchecker_acescg_rgb_values.json")
+        default_index = self.colorchecker_combo.findData("original_color_cc24data.json")
         if default_index >= 0:
             self.colorchecker_combo.setCurrentIndex(default_index)
     
     def _format_colorchecker_display_name(self, filename: str) -> str:
         """将文件名格式化为显示名称"""
         # 移除后缀
-        name = filename.replace("_rgb_values.json", "").replace("_colorchecker_format.json", "")
+        name = filename.replace("_cc24data.json", "").replace("_colorchecker_format.json", "")
         
         # 处理特殊情况
         if name == "colorchecker_acescg":
@@ -289,6 +290,24 @@ class ParameterPanel(QWidget):
     def get_selected_colorchecker_file(self) -> str:
         """获取当前选择的色卡参考文件"""
         return self.selected_colorchecker_file
+
+    def revert_colorchecker_selection(self):
+        """回滚到默认或上一个有效的色卡选择"""
+        try:
+            # 首先尝试回滚到默认选择
+            default_index = self.colorchecker_combo.findData("original_color_cc24data.json")
+            if default_index >= 0:
+                self.colorchecker_combo.setCurrentIndex(default_index)
+                self.selected_colorchecker_file = "original_color_cc24data.json"
+                print("已回滚到默认色卡: original_color_cc24data.json")
+            else:
+                # 如果没有默认选择，选择第一个可用的
+                if self.colorchecker_combo.count() > 0:
+                    self.colorchecker_combo.setCurrentIndex(0)
+                    self.selected_colorchecker_file = self.colorchecker_combo.itemData(0)
+                    print(f"已回滚到第一个可用色卡: {self.selected_colorchecker_file}")
+        except Exception as e:
+            print(f"回滚色卡选择失败: {e}")
 
     def _create_density_tab(self) -> QWidget:
         widget = QWidget()
@@ -759,7 +778,7 @@ class ParameterPanel(QWidget):
         # 获取对应的参考文件
         reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
             film_type, 
-            "colorchecker_acescg_rgb_values.json"
+            "original_color_cc24data.json"
         )
         
         # 更新选中的参考文件
@@ -1095,8 +1114,79 @@ class ParameterPanel(QWidget):
             return
         filename = self.colorchecker_combo.currentData()
         if filename:
+            # 验证工作空间兼容性
+            if not self._validate_colorchecker_workspace_compatibility(filename):
+                return  # 验证失败，已回滚选择
+            
             self.selected_colorchecker_file = filename
             self.colorchecker_changed.emit(filename) # 发出色卡类型变化信号
+
+    def _validate_colorchecker_workspace_compatibility(self, filename: str) -> bool:
+        """
+        验证ColorChecker文件与当前工作空间的兼容性
+        如果验证失败，显示对话框并回滚dropdown选择
+        
+        Returns:
+            True: 验证通过
+            False: 验证失败，已回滚选择
+        """
+        try:
+            # 获取当前工作空间名称
+            working_colorspace = self.current_params.input_color_space_name
+            
+            # 验证兼容性
+            is_compatible, error_message = validate_colorchecker_workspace_compatibility(
+                filename, working_colorspace
+            )
+            
+            if not is_compatible:
+                # 显示错误对话框
+                QMessageBox.warning(
+                    self, 
+                    "工作空间不兼容", 
+                    error_message or "ColorChecker文件与当前工作空间不兼容"
+                )
+                
+                # 回滚dropdown选择到上一个选项
+                self._rollback_colorchecker_selection()
+                return False
+            
+            return True
+            
+        except Exception as e:
+            # 处理验证过程中的异常
+            QMessageBox.warning(
+                self,
+                "验证失败",
+                f"无法验证ColorChecker兼容性: {e}"
+            )
+            self._rollback_colorchecker_selection()
+            return False
+
+    def _rollback_colorchecker_selection(self):
+        """回滚ColorChecker下拉菜单选择到上一个有效选项"""
+        try:
+            # 查找当前记录的有效文件名
+            previous_filename = self.selected_colorchecker_file
+            
+            # 在下拉菜单中找到对应的项目并选择
+            for i in range(self.colorchecker_combo.count()):
+                if self.colorchecker_combo.itemData(i) == previous_filename:
+                    self._is_updating_ui = True
+                    self.colorchecker_combo.setCurrentIndex(i)
+                    self._is_updating_ui = False
+                    break
+            else:
+                # 如果找不到上一个选项，回滚到默认选项
+                default_index = self.colorchecker_combo.findData("original_color_cc24data.json")
+                if default_index >= 0:
+                    self._is_updating_ui = True
+                    self.colorchecker_combo.setCurrentIndex(default_index)
+                    self._is_updating_ui = False
+                    self.selected_colorchecker_file = "original_color_cc24data.json"
+                    
+        except Exception as e:
+            print(f"回滚ColorChecker选择失败: {e}")
     
     def get_spectral_sharpening_config(self):
         """获取当前的光谱锐化配置（优先使用用户选择的参考文件）"""
@@ -1110,7 +1200,7 @@ class ParameterPanel(QWidget):
             film_type = self.get_current_film_type()
             reference_file = FILM_TYPE_COLORCHECKER_MAPPING.get(
                 film_type, 
-                "colorchecker_acescg_rgb_values.json"  # 默认值
+                "original_color_cc24data.json"  # 默认值
             )
         
         return SpectralSharpeningConfig(

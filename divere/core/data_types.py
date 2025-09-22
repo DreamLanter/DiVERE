@@ -968,16 +968,16 @@ class SpectralSharpeningConfig:
     # 优化器参数
     max_iter: int = 3000
     tolerance: float = 1e-8
-    reference_file: str = "colorchecker_acescg_rgb_values.json"
+    reference_file: str = "original_color_cc24data.json"
 
 # 胶片类型与colorchecker参考文件的映射
 FILM_TYPE_COLORCHECKER_MAPPING = {
-    "color_negative_c41": "kodak_portra_400_rgb_values.json",
-    "color_negative_ecn2": "kodak_vision3_250d_rgb_values.json", 
-    "color_reversal": "colorchecker_acescg_rgb_values.json",  # 反转片使用通用参考
-    "b&w_negative": "colorchecker_acescg_rgb_values.json",    # 黑白使用通用参考
-    "b&w_reversal": "colorchecker_acescg_rgb_values.json",    # 黑白使用通用参考
-    "digital": "colorchecker_acescg_rgb_values.json"          # 数字使用通用参考
+    "color_negative_c41": "kodak_portra_400_cc24data.json",
+    "color_negative_ecn2": "kodak_vision3_250d_cc24data.json", 
+    "color_reversal": "original_color_cc24data.json",  # 反转片使用通用参考
+    "b&w_negative": "original_color_cc24data.json",    # 黑白使用通用参考
+    "b&w_reversal": "original_color_cc24data.json",    # 黑白使用通用参考
+    "digital": "original_color_cc24data.json"          # 数字使用通用参考
 }
 
 
@@ -985,5 +985,5 @@ def get_colorchecker_reference_for_film_type(film_type: str) -> str:
     """根据胶片类型获取对应的colorchecker参考文件"""
     return FILM_TYPE_COLORCHECKER_MAPPING.get(
         film_type, 
-        "colorchecker_acescg_rgb_values.json"
+        "original_color_cc24data.json"
     )

@@ -39,13 +39,6 @@ class MainWindow(QMainWindow):
         
         # 初始化核心组件
         self.context = ApplicationContext(self)
-        
-        # 当前状态
-        # self.current_image: Optional[ImageData] = None # 已迁移
-        # self.current_proxy: Optional[ImageData] = None # 已迁移
-        # self.current_params = ColorGradingParams() # 已迁移
-        # self.input_color_space: str = "CCFLGeneric_Linear"  # 已迁移
-        # self.current_orientation: int = 0 # 已迁移
 
         # 设置窗口
         self.setWindowTitle("DiVERE - 数字彩色放大机")
@@ -1314,7 +1307,7 @@ class MainWindow(QMainWindow):
                 from pathlib import Path
                 default_dir = str(Path(__file__).parent.parent / "config" / "colorchecker")
             
-            filename = f"{save_name}_rgb_values.json"
+            filename = f"{save_name}_cc24data.json"
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "保存色卡颜色文件",

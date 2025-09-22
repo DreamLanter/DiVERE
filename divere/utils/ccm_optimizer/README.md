@@ -23,7 +23,7 @@ ccm_optimizer/
 ├── pipeline.py           # DiVERE管线模拟器
 ├── extractor.py          # 色块提取器
 ├── example_usage.py      # 使用示例
-├── colorchecker_acescg_rgb_values.json  # 参考RGB值
+├── original_color_cc24data.json  # 参考RGB值
 └── README.md            # 说明文档
 ```
 

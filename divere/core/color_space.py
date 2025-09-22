@@ -420,6 +420,69 @@ class ColorSpaceManager:
         """获取当前工作空间"""
         return self._working_space
     
+    def get_working_space_white_point(self) -> str:
+        """
+        获取当前工作空间的白点字符串
+        
+        Returns:
+            白点字符串 ("D50", "D55", "D60", "D65")
+        """
+        return self.get_colorspace_white_point(self._working_space)
+    
+    def get_colorspace_white_point(self, colorspace_name: str) -> str:
+        """
+        获取指定色彩空间的白点字符串
+        
+        Args:
+            colorspace_name: 色彩空间名称
+            
+        Returns:
+            白点字符串 ("D50", "D55", "D60", "D65")
+        """
+        if colorspace_name not in self._color_spaces:
+            # 默认返回D65（最常见的白点）
+            return "D65"
+        
+        space = self._color_spaces[colorspace_name]
+        white_point_xy = space.get('white_point')
+        
+        if white_point_xy is None:
+            return "D65"
+        
+        # 将xy坐标转换为标准光源名称
+        return self._xy_to_illuminant_name(white_point_xy)
+    
+    def _xy_to_illuminant_name(self, white_point_xy: np.ndarray) -> str:
+        """
+        将xy白点坐标转换为标准光源名称
+        
+        Args:
+            white_point_xy: [x, y] 坐标
+            
+        Returns:
+            最接近的标准光源名称
+        """
+        from divere.core.color_science import STANDARD_ILLUMINANTS
+        
+        # 将标准光源的XYZ转换为xy坐标进行比较
+        def xyz_to_xy(xyz):
+            total = xyz.sum()
+            if total == 0:
+                return np.array([0.3127, 0.3290])  # D65 fallback
+            return xyz[:2] / total
+        
+        min_distance = float('inf')
+        closest_illuminant = "D65"
+        
+        for name, xyz in STANDARD_ILLUMINANTS.items():
+            standard_xy = xyz_to_xy(xyz)
+            distance = np.linalg.norm(white_point_xy - standard_xy)
+            if distance < min_distance:
+                min_distance = distance
+                closest_illuminant = name
+        
+        return closest_illuminant
+    
     def set_working_space(self, space_name: str) -> bool:
         """设置工作空间（验证类型）"""
         if space_name in self.get_working_color_spaces():

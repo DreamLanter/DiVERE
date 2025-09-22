@@ -77,6 +77,10 @@ class ColorSpaceManager:
         self._convert_cache: Dict[Any, Tuple[np.ndarray, np.ndarray]] = {}
         # Profiling 开关
         self._profiling_enabled: bool = False
+        
+        # 工作空间管理
+        self._working_space: str = "ACEScg"  # 默认工作空间
+        self._load_working_space_from_config()
     def set_profiling_enabled(self, enabled: bool) -> None:
         self._profiling_enabled = bool(enabled)
 
@@ -401,6 +405,86 @@ class ColorSpaceManager:
                 regular_spaces.append(name)
         return sorted(regular_spaces)
     
+    def get_working_color_spaces(self) -> list:
+        """获取可用的工作色彩空间（type包含'working_space'的色彩空间）"""
+        working_spaces = []
+        for name, space in self._color_spaces.items():
+            space_type = space.get("type", [])
+            if isinstance(space_type, str):
+                space_type = [space_type]
+            if "working_space" in space_type:
+                working_spaces.append(name)
+        return sorted(working_spaces)
+    
+    def get_current_working_space(self) -> str:
+        """获取当前工作空间"""
+        return self._working_space
+    
+    def set_working_space(self, space_name: str) -> bool:
+        """设置工作空间（验证类型）"""
+        if space_name in self.get_working_color_spaces():
+            if self._working_space != space_name:
+                self._working_space = space_name
+                self._convert_cache.clear()  # 清空转换缓存
+                self._save_working_space_to_config(space_name)  # 保存到配置文件
+                if self._verbose_logs:
+                    print(f"工作空间已切换到: {space_name}")
+            return True
+        if self._verbose_logs:
+            print(f"无效的工作空间: {space_name}")
+        return False
+    
+    def _load_working_space_from_config(self):
+        """从配置文件加载工作空间设置"""
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            config = enhanced_config_manager.load_config_file(Path("app_settings.json"))
+            if config and "defaults" in config:
+                working_space = config["defaults"].get("working_color_space", "ACEScg")
+                if self.set_working_space(working_space):
+                    return
+        except Exception:
+            pass
+        
+        # 回退到默认值
+        self._working_space = "ACEScg"
+        if self._verbose_logs:
+            print(f"使用默认工作空间: {self._working_space}")
+    
+    def _save_working_space_to_config(self, space_name: str) -> bool:
+        """保存工作空间设置到配置文件"""
+        try:
+            from divere.utils.enhanced_config_manager import enhanced_config_manager
+            import json
+            
+            # 读取现有配置
+            config_path = Path("app_settings.json")
+            config = enhanced_config_manager.load_config_file(config_path) or {}
+            
+            # 确保 defaults 部分存在
+            if "defaults" not in config:
+                config["defaults"] = {}
+            
+            # 更新工作空间设置
+            config["defaults"]["working_color_space"] = space_name
+            
+            # 保存配置
+            try:
+                config_full_path = enhanced_config_manager.config_dir / config_path
+                with open(config_full_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                
+                if self._verbose_logs:
+                    print(f"工作空间配置已保存: {space_name}")
+                return True
+            except Exception as e:
+                if self._verbose_logs:
+                    print(f"保存配置失败: {e}")
+                return False
+                
+        except Exception:
+            return False
+    
     def reload_config(self):
         """重新加载色彩空间配置文件"""
         self._color_spaces.clear()
@@ -470,13 +554,13 @@ class ColorSpaceManager:
     
     def convert_to_working_space(self, image: ImageData, source_profile: str = None,
                                  skip_gamma_inverse: bool = False) -> ImageData:
-        """转换到工作色彩空间（ACEScg Linear）
+        """转换到工作色彩空间
         Args:
             image: 输入图像
             source_profile: 源空间名（默认使用 image.color_space）
             skip_gamma_inverse: 为 True 时跳过逆伽马线性化，仅做矩阵与白点变换
         """
-        if image.color_space == "ACEScg":
+        if image.color_space == self._working_space:
             return image
         
         # 如果指定了source_profile参数，使用它；否则使用图像的color_space
@@ -505,11 +589,11 @@ class ColorSpaceManager:
             linear_image = self._convert_to_linear(image, source_space)
             t1 = time.time()
         
-        # 然后转换到ACEScg
-        if source_space != "ACEScg":
+        # 然后转换到工作空间
+        if source_space != self._working_space:
             # 使用在线计算的转换矩阵和增益向量
             t2 = time.time()
-            conversion_matrix, gain_vector = self.calculate_color_space_conversion(source_space, "ACEScg")
+            conversion_matrix, gain_vector = self.calculate_color_space_conversion(source_space, self._working_space)
             t3 = time.time()
             linear_image.array = self._apply_color_conversion(linear_image.array, conversion_matrix, gain_vector)
             t4 = time.time()
@@ -520,20 +604,21 @@ class ColorSpaceManager:
                 )
                 print(msg)
         
-        linear_image.color_space = "ACEScg"
+        linear_image.color_space = self._working_space
         return linear_image
     
     def convert_to_display_space(self, image: ImageData, target_space: str = "sRGB") -> ImageData:
         """转换到显示色彩空间"""
+        import time
+        
         if image.color_space == target_space:
             return image
         
-        # 从ACEScg转换到目标空间
-        if image.color_space == "ACEScg":
+        # 从工作空间转换到目标空间
+        if image.color_space == self._working_space:
             # 使用在线计算的转换矩阵和增益向量
-            import time
             t0 = time.time()
-            conversion_matrix, gain_vector = self.calculate_color_space_conversion("ACEScg", target_space)
+            conversion_matrix, gain_vector = self.calculate_color_space_conversion(self._working_space, target_space)
             t1 = time.time()
             image.array = self._apply_color_conversion(image.array, conversion_matrix, gain_vector)
             t2 = time.time()

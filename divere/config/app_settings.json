@@ -17,6 +17,7 @@
   },
   "defaults": {
     "input_color_space": "ACEScg",
-    "output_color_space": "sRGB"
+    "output_color_space": "sRGB",
+    "working_color_space": "KodakEnduraPremier"
   }
 }

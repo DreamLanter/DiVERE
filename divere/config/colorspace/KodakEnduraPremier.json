@@ -1,6 +1,6 @@
 {
     "name": "KodakEnduraPremier",
-    "type": ["regular"],
+    "type": ["IDT","regular","working_space"],
     "icc_profile": "sRGB Profile.icc",
     "primaries": {
         "R": [0.687734022695131, 0.30984781800386696],

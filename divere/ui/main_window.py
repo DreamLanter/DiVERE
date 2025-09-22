@@ -10,7 +10,8 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QMenuBar, QToolBar, QStatusBar, QFileDialog, QMessageBox,
-    QSplitter, QLabel, QDockWidget, QDialog, QApplication, QPushButton
+    QSplitter, QLabel, QDockWidget, QDialog, QApplication, QPushButton,
+    QInputDialog
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal, QRunnable, Slot, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
@@ -281,6 +282,11 @@ class MainWindow(QMainWindow):
         colorspace_action = QAction("设置输入色彩变换", self)
         colorspace_action.triggered.connect(self._select_input_color_space)
         file_menu.addAction(colorspace_action)
+        
+        # 设置工作色彩空间
+        working_space_action = QAction("设置工作色彩空间", self)
+        working_space_action.triggered.connect(self._select_working_color_space)
+        file_menu.addAction(working_space_action)
         
         file_menu.addSeparator()
         
@@ -810,37 +816,53 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"设置色彩空间失败: {str(e)}")
     
+    def _select_working_color_space(self):
+        """选择工作色彩空间（全局设置）"""
+        # 获取可用的工作色彩空间列表
+        working_spaces = self.context.color_space_manager.get_working_color_spaces()
+        
+        if not working_spaces:
+            QMessageBox.information(self, "提示", "没有可用的工作色彩空间")
+            return
+        
+        # 获取当前工作空间
+        current_working_space = self.context.color_space_manager.get_current_working_space()
+        
+        # 显示选择对话框
+        selected_space, ok = QInputDialog.getItem(
+            self, 
+            "选择工作色彩空间", 
+            "请选择应用程序的工作色彩空间:", 
+            working_spaces, 
+            working_spaces.index(current_working_space) if current_working_space in working_spaces else 0, 
+            False
+        )
+        
+        if ok and selected_space and selected_space != current_working_space:
+            try:
+                # 设置新的工作空间
+                success = self.context.color_space_manager.set_working_space(selected_space)
+                if success:
+                    # 更新状态栏
+                    self.statusBar().showMessage(f"工作色彩空间已切换至: {selected_space}")
+                    
+                    # 如果有图像加载，重新处理预览
+                    if self.context.get_current_image():
+                        self._reload_with_color_space()
+                else:
+                    QMessageBox.warning(self, "警告", f"无法设置工作空间: {selected_space}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"设置工作色彩空间失败: {str(e)}")
+    
     def _reload_with_icc(self):
         """使用新的ICC配置文件重新加载图像"""
         if not self.context.get_current_image():
             return
             
         try:
-            # 重新生成代理（使用统一配置中的代理尺寸）
-            self.context.current_proxy = self.context.image_manager.generate_proxy(
-                self.context.current_image,
-                self.context.the_enlarger.preview_config.get_proxy_size_tuple()
-            )
-            
-            # 应用ICC配置文件
-            if self.context.input_icc_profile:
-                self.context.current_proxy = self.context.color_space_manager.apply_icc_profile_to_image(
-                    self.context.current_proxy, self.context.input_icc_profile
-                )
-            
-            # 转换到工作色彩空间
-            source_color_space = self.context.current_proxy.color_space
-            self.context.current_proxy = self.context.color_space_manager.convert_to_working_space(
-                self.context.current_proxy, source_color_space
-            )
-            
-            # 重新生成小代理（如果需要）
-            proxy_size = self.context.the_enlarger.preview_config.get_proxy_size_tuple()
-            
-            self.context.current_proxy = self.context.image_manager.generate_proxy(self.context.current_proxy, proxy_size)
-            
-            # 更新预览
-            self.context._trigger_preview_update()
+            # 简单触发参数更新，让系统重新处理图像和ICC配置
+            current_params = self.context.get_current_params()
+            self.context.update_params(current_params)
             
             # 自动适应窗口大小
             self.preview_widget.fit_to_window()
@@ -854,29 +876,9 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # 重新生成代理（使用统一配置中的代理尺寸）
-            self.context.current_proxy = self.context.image_manager.generate_proxy(
-                self.context.current_image,
-                self.context.the_enlarger.preview_config.get_proxy_size_tuple()
-            )
-            
-            # 设置新的色彩空间
-            self.context.current_proxy = self.context.color_space_manager.set_image_color_space(
-                self.context.current_proxy, self.context.get_input_color_space()
-            )
-            
-            # 转换到工作色彩空间
-            self.context.current_proxy = self.context.color_space_manager.convert_to_working_space(
-                self.context.current_proxy
-            )
-            
-            # 生成更小的代理图像用于实时预览（统一读取自PreviewConfig）
-            proxy_size = self.context.the_enlarger.preview_config.get_proxy_size_tuple()
-            
-            self.context.current_proxy = self.context.image_manager.generate_proxy(self.context.current_proxy, proxy_size)
-            
-            # 重新处理预览
-            self.context._trigger_preview_update()
+            # 简单触发参数更新，让系统重新处理图像和工作空间
+            current_params = self.context.get_current_params()
+            self.context.update_params(current_params)
             
             # 自动适应窗口大小
             self.preview_widget.fit_to_window()

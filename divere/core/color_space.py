@@ -438,11 +438,9 @@ class ColorSpaceManager:
         """从配置文件加载工作空间设置"""
         try:
             from divere.utils.enhanced_config_manager import enhanced_config_manager
-            config = enhanced_config_manager.load_config_file(Path("app_settings.json"))
-            if config and "defaults" in config:
-                working_space = config["defaults"].get("working_color_space", "ACEScg")
-                if self.set_working_space(working_space):
-                    return
+            working_space = enhanced_config_manager.get_default_setting("working_color_space", "ACEScg")
+            if self.set_working_space(working_space):
+                return
         except Exception:
             pass
         
@@ -455,34 +453,14 @@ class ColorSpaceManager:
         """保存工作空间设置到配置文件"""
         try:
             from divere.utils.enhanced_config_manager import enhanced_config_manager
-            import json
+            enhanced_config_manager.set_default_setting("working_color_space", space_name)
             
-            # 读取现有配置
-            config_path = Path("app_settings.json")
-            config = enhanced_config_manager.load_config_file(config_path) or {}
-            
-            # 确保 defaults 部分存在
-            if "defaults" not in config:
-                config["defaults"] = {}
-            
-            # 更新工作空间设置
-            config["defaults"]["working_color_space"] = space_name
-            
-            # 保存配置
-            try:
-                config_full_path = enhanced_config_manager.config_dir / config_path
-                with open(config_full_path, 'w', encoding='utf-8') as f:
-                    json.dump(config, f, indent=2, ensure_ascii=False)
-                
-                if self._verbose_logs:
-                    print(f"工作空间配置已保存: {space_name}")
-                return True
-            except Exception as e:
-                if self._verbose_logs:
-                    print(f"保存配置失败: {e}")
-                return False
-                
-        except Exception:
+            if self._verbose_logs:
+                print(f"工作空间配置已保存: {space_name}")
+            return True
+        except Exception as e:
+            if self._verbose_logs:
+                print(f"保存配置失败: {e}")
             return False
     
     def reload_config(self):
@@ -532,9 +510,9 @@ class ColorSpaceManager:
                 print(f"无效的色彩空间: {color_space}，使用默认值")
             try:
                 from divere.utils.defaults import load_default_preset
-                color_space = load_default_preset().input_transformation.name or "CCFLGeneric_Linear"
+                color_space = load_default_preset().input_transformation.name or "KodakEnduraPremier"
             except Exception:
-                color_space = "CCFLGeneric_Linear"
+                color_space = "KodakEnduraPremier"
         
         # 创建新的图像数据对象，更新色彩空间信息
         new_image = ImageData(
@@ -724,9 +702,9 @@ class ColorSpaceManager:
         """获取默认色彩空间（集中读取 default preset）"""
         try:
             from divere.utils.defaults import load_default_preset
-            return load_default_preset().input_transformation.name or "CCFLGeneric_Linear"
+            return load_default_preset().input_transformation.name or "KodakEnduraPremier"
         except Exception:
-            return "CCFLGeneric_Linear"
+            return "KodakEnduraPremier"
     
 
     

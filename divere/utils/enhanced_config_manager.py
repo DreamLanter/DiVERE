@@ -60,8 +60,10 @@ class EnhancedConfigManager:
         
         debug(f"app_config_dir exists: {self.app_config_dir.exists()}", "EnhancedConfigManager")
         
-        # 应用设置文件
-        self.app_settings_file = self.user_config_dir / "config" / "app_settings.json"
+        # 应用设置文件（从软件config目录读取，与colorspace、curves等保持一致）
+        self.app_settings_file = self.app_config_dir / "app_settings.json"
+        debug(f"app_settings_file path: {self.app_settings_file}", "EnhancedConfigManager")
+        debug(f"app_settings_file exists: {self.app_settings_file.exists()}", "EnhancedConfigManager")
         self.app_settings = self._load_app_settings()
     
     def _get_user_config_dir(self) -> Path:
@@ -103,13 +105,16 @@ class EnhancedConfigManager:
         
         if self.app_settings_file.exists():
             try:
+                log_file_operation("read", self.app_settings_file, success=True, module="EnhancedConfigManager")
                 with open(self.app_settings_file, 'r', encoding='utf-8') as f:
                     loaded_settings = json.load(f)
                     return self._merge_configs(default_settings, loaded_settings)
             except Exception as e:
-                print(f"加载应用设置失败: {e}")
+                log_file_operation("read", self.app_settings_file, success=False, err=str(e), module="EnhancedConfigManager")
+                error(f"加载应用设置失败: {e}", "EnhancedConfigManager")
                 return default_settings
         else:
+            info(f"app_settings.json不存在，将创建默认配置: {self.app_settings_file}", "EnhancedConfigManager")
             # 保存默认设置
             self._save_app_settings(default_settings)
             return default_settings
@@ -120,10 +125,14 @@ class EnhancedConfigManager:
             settings = self.app_settings
         
         try:
+            # 确保目录存在
+            self.app_settings_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.app_settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
+            log_file_operation("write", self.app_settings_file, success=True, module="EnhancedConfigManager")
         except Exception as e:
-            print(f"保存应用设置失败: {e}")
+            log_file_operation("write", self.app_settings_file, success=False, err=str(e), module="EnhancedConfigManager")
+            error(f"保存应用设置失败: {e}", "EnhancedConfigManager")
     
     def _merge_configs(self, default: Dict[str, Any], loaded: Dict[str, Any]) -> Dict[str, Any]:
         """递归合并配置"""

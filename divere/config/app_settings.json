@@ -19,5 +19,9 @@
     "input_color_space": "ACEScg",
     "output_color_space": "sRGB",
     "working_color_space": "KodakEnduraPremier"
+  },
+  "config": {
+    "show_user_config_dir": true,
+    "auto_backup_config": true
   }
 }

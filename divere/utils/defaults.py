@@ -76,7 +76,7 @@ def load_default_preset() -> Preset:
         name="default",
         raw_file="default.tif",
         input_transformation=InputTransformationDefinition(
-            name="CCFLGeneric_Linear",
+            name="KodakEnduraPremier",
             definition={
                 "gamma": 1.0,
                 "white": {"x": 0.3127, "y": 0.3290},

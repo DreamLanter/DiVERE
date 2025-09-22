@@ -494,7 +494,7 @@ class FileClassificationManager(QMainWindow):
                     "crop": [0.0, 0.0, 1.0, 1.0]
                 },
                 "idt": {
-                    "name": "CCFLGeneric_Linear",
+                    "name": "KodakEnduraPremier",
                     "gamma": 1.0,
                     "white": {"x": 0.3127, "y": 0.3290},
                     "primitives": {

@@ -269,78 +269,14 @@ def _convert_xyz_to_working_space_rgb(
     Returns:
         RGB值，shape与输入相同
     """
-    # 如果有ColorSpaceManager，使用其转换功能
+    # 使用ColorSpaceManager的XYZ到RGB转换方法
     if color_space_manager is not None:
         try:
-            # 使用ColorSpaceManager的转换矩阵
-            return _convert_xyz_via_color_space_manager(xyz, working_colorspace, color_space_manager)
-        except Exception:
-            # fallback到手动计算
-            pass
+            return color_space_manager.convert_xyz_to_working_space_rgb(xyz, working_colorspace)
+        except Exception as e:
+            raise ColorCheckerLoadError(f"XYZ到RGB转换失败: {e}")
     
-    # fallback: 使用colour库进行转换
-    return _convert_xyz_via_colour_library(xyz, working_colorspace)
+    # 如果没有ColorSpaceManager，抛出错误
+    raise ColorCheckerLoadError("需要ColorSpaceManager实例进行XYZ到RGB转换")
 
 
-def _convert_xyz_via_color_space_manager(
-    xyz: np.ndarray, 
-    working_colorspace: str, 
-    color_space_manager: Any
-) -> np.ndarray:
-    """使用ColorSpaceManager进行XYZ到RGB转换"""
-    # 获取工作空间的色彩空间定义
-    if hasattr(color_space_manager, 'get_colorspace_definition'):
-        space_def = color_space_manager.get_colorspace_definition(working_colorspace)
-        if space_def and 'primaries' in space_def:
-            # 使用colour库计算转换矩阵
-            import colour
-            
-            # 从定义中提取primaries
-            primaries = space_def['primaries']
-            white_point = space_def.get('white_point', 'D65')
-            
-            # 构建colour RGB色彩空间
-            rgb_colourspace = colour.RGB_Colourspace(
-                name=working_colorspace,
-                primaries=primaries,
-                whitepoint=colour.CCS_ILLUMINANTS['CIE 1931 2 Degree Standard Observer'][white_point]
-            )
-            
-            # 执行XYZ到RGB转换
-            return colour.XYZ_to_RGB(
-                xyz, 
-                rgb_colourspace,
-                apply_cctf_encoding=False  # 保持线性
-            )
-    
-    raise Exception("无法通过ColorSpaceManager获取色彩空间定义")
-
-
-def _convert_xyz_via_colour_library(xyz: np.ndarray, working_colorspace: str) -> np.ndarray:
-    """使用colour库的预定义色彩空间进行XYZ到RGB转换"""
-    import colour
-    
-    # 映射工作空间名称到colour库的色彩空间
-    colour_space_mapping = {
-        'ACEScg': 'ACES2065-1',  # 使用ACES2065-1作为ACEScg的近似
-        'sRGB': 'sRGB',
-        'Rec2020': 'ITU-R BT.2020',
-        'ProPhoto': 'ProPhoto RGB',
-        'Display P3': 'Display P3'
-    }
-    
-    colour_space_name = colour_space_mapping.get(working_colorspace)
-    if colour_space_name and colour_space_name in colour.RGB_COLOURSPACES:
-        rgb_colourspace = colour.RGB_COLOURSPACES[colour_space_name]
-        return colour.XYZ_to_RGB(
-            xyz, 
-            rgb_colourspace,
-            apply_cctf_encoding=False  # 保持线性
-        )
-    
-    # 如果找不到匹配的色彩空间，fallback到sRGB
-    return colour.XYZ_to_RGB(
-        xyz,
-        colour.RGB_COLOURSPACES['sRGB'],
-        apply_cctf_encoding=False
-    )

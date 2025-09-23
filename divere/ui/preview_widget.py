@@ -814,28 +814,19 @@ class PreviewWidget(QWidget):
 
     def _load_colorchecker_colors(self, filename: str):
         """
-        使用colorchecker_loader加载颜色值，确保与优化器数据一致
-        自动处理白点变换，然后转换到显示空间
+        使用ApplicationContext共享的reference color数据，确保与优化器数据一致
+        避免重复加载和XYZ转换，直接复用已缓存的工作空间RGB值
         """
         try:
-            from divere.utils.colorchecker_loader import load_colorchecker_reference, WorkspaceValidationError
-            from divere.ui.main_window import MainWindow
+            from divere.utils.colorchecker_loader import WorkspaceValidationError
             
-            # 获取ColorSpaceManager和工作空间信息
-            main_window = self.window()
-            if hasattr(main_window, 'context'):
-                color_space_manager = main_window.context.color_space_manager
-                working_colorspace = color_space_manager.get_current_working_space()
+            # 从ApplicationContext获取已转换的reference colors
+            if self.context and hasattr(self.context, 'get_reference_colors'):
+                reference_data = self.context.get_reference_colors(filename)
+                working_colorspace = self.context.color_space_manager.get_current_working_space()
             else:
-                color_space_manager = None
-                working_colorspace = 'ACEScg'  # fallback
-            
-            # 使用与优化器相同的加载器，获取经过CAT变换的数据
-            reference_data = load_colorchecker_reference(
-                filename, 
-                working_colorspace,
-                color_space_manager
-            )
+                # fallback到旧方法
+                return self._load_colorchecker_colors_legacy(filename)
             
             # 提取24个色块的RGB值（按A1..D6顺序）
             patch_order = [
@@ -853,7 +844,7 @@ class PreviewWidget(QWidget):
                     # 如果某个色块缺失，使用默认颜色
                     rgb_values.append([0.5, 0.5, 0.5])
             
-            # 现在数据是在working colorspace中，需要转换到显示空间
+            # 数据已经在working colorspace中，直接转换到显示空间
             return self._convert_colorchecker_to_display_colors(rgb_values, working_colorspace)
             
         except WorkspaceValidationError as e:
@@ -930,21 +921,26 @@ class PreviewWidget(QWidget):
         return colors
 
     def _load_colorchecker_colors_legacy(self, filename: str):
-        """旧版色卡加载方法（fallback）"""
+        """旧版色卡加载方法（fallback），使用独立的colorchecker_loader调用"""
         try:
-            import json
-            from pathlib import Path
+            from divere.utils.colorchecker_loader import load_colorchecker_reference, WorkspaceValidationError
+            from divere.ui.main_window import MainWindow
             
-            # 构建文件路径
-            colorchecker_dir = Path(__file__).parent.parent / "config" / "colorchecker"
-            file_path = colorchecker_dir / filename
+            # 获取ColorSpaceManager和工作空间信息
+            main_window = self.window()
+            if hasattr(main_window, 'context'):
+                color_space_manager = main_window.context.color_space_manager
+                working_colorspace = color_space_manager.get_current_working_space()
+            else:
+                color_space_manager = None
+                working_colorspace = 'ACEScg'  # fallback
             
-            if not file_path.exists():
-                raise FileNotFoundError(f"色卡文件不存在: {file_path}")
-            
-            # 读取JSON文件
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # 独立调用colorchecker_loader（不使用缓存）
+            reference_data = load_colorchecker_reference(
+                filename, 
+                working_colorspace,
+                color_space_manager
+            )
             
             # 提取24个色块的RGB值（按A1..D6顺序）
             patch_order = [
@@ -956,17 +952,18 @@ class PreviewWidget(QWidget):
             
             rgb_values = []
             for patch_id in patch_order:
-                if patch_id in data.get('data', {}):
-                    rgb_values.append(data['data'][patch_id])
+                if patch_id in reference_data:
+                    rgb_values.append(reference_data[patch_id])
                 else:
                     # 如果某个色块缺失，使用默认颜色
                     rgb_values.append([0.5, 0.5, 0.5])
             
-            # 使用旧的色彩空间转换逻辑
-            return self._convert_colorchecker_to_display_colors(rgb_values, data.get('color_space', 'ACEScg'))
+            # 数据是在working colorspace中，转换到显示空间
+            return self._convert_colorchecker_to_display_colors(rgb_values, working_colorspace)
             
         except Exception as e:
             print(f"Legacy加载色卡颜色失败: {e}")
+            # 最终fallback：使用简单的RGB转换
             return self._simple_rgb_to_qcolor([[0.5, 0.5, 0.5]] * 24)
 
     def _handle_workspace_validation_error(self, error: Exception, filename: str):

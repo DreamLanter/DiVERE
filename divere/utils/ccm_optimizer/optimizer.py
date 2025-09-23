@@ -72,12 +72,12 @@ class CCMOptimizer:
                 sharpening_config = DefaultConfig()
         
         self.sharpening_config = sharpening_config
-        self.pipeline = DiVEREPipelineSimulator(verbose=False)
         
-        # 保存ColorSpaceManager和工作空间信息
+        # 保存ColorSpaceManager和工作空间信息（必须在加载参考值之前）
         self._color_space_manager = color_space_manager
         self._working_colorspace = working_colorspace or 'ACEScg'
         
+        self.pipeline = DiVEREPipelineSimulator(verbose=False)
         self.reference_values = self._load_reference_values(reference_file)
         # 加载权重配置（可选）。默认使用内置的 config/colorchecker/weights.json
         self._weights_config = self._load_weights_config(weights_config_path)
@@ -240,17 +240,23 @@ class CCMOptimizer:
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
         """
-        使用新的colorchecker_loader加载参考RGB值
-        支持XYZ和EnduraDensityExp类型的自动处理
+        加载参考RGB值，优先使用ApplicationContext的共享缓存
+        确保与Preview显示的reference color数据完全一致
         """
         try:
+            # 优先尝试从ApplicationContext获取共享的reference color数据
+            if (self._color_space_manager and 
+                hasattr(self._color_space_manager, 'context') and
+                hasattr(self._color_space_manager.context, 'get_reference_colors')):
+                
+                return self._color_space_manager.context.get_reference_colors(reference_file)
+            
+            # 如果没有ApplicationContext，直接使用colorchecker_loader
             from divere.utils.colorchecker_loader import load_colorchecker_reference
             
-            # 使用构造函数中保存的工作空间和ColorSpaceManager
             working_colorspace = self._working_colorspace
             color_space_manager = self._color_space_manager
             
-            # 使用新的加载器，自动处理白点变换
             return load_colorchecker_reference(
                 reference_file, 
                 working_colorspace,
@@ -547,7 +553,7 @@ class CCMOptimizer:
                 self.reference_values,
                 output_patches,
                 weights_dict,
-                'ACEScg'
+                self._working_colorspace
             )
             
             return weighted_avg_delta_e
@@ -645,8 +651,8 @@ class CCMOptimizer:
                 delta_e = calculate_delta_e_1994(
                     ref_rgb.tolist(), 
                     out_rgb.tolist(), 
-                    'ACEScg', 
-                    'ACEScg'
+                    self._working_colorspace, 
+                    self._working_colorspace
                 )
                 
                 # 为了兼容性，也计算传统的RGB误差
@@ -740,15 +746,17 @@ class CCMOptimizer:
         x0 = self._dict_to_params(self.initial_params)
         lb, ub, span = self._build_bounds_arrays()
 
-        sigma0 = 0.15
+        sigma0 = 0.8  # 增大初始步长以提高搜索范围
         opts = {
             'bounds': [lb.tolist(), ub.tolist()],
             'scaling_of_variables': span.tolist(),
             'maxiter': int(max_iter),
-            'ftarget': float(tolerance),
+            'ftarget': max(float(tolerance), 1e-8),  # 防止收敛条件过严
             'verb_disp': 0,  # 禁用CMA-ES内置显示
             'verbose': -1,   # 禁用详细输出
-            'popsize': int(8 + 4 * np.log(len(x0))),
+            'popsize': max(int(8 + 4 * np.log(len(x0))), 20),  # 增加最小种群大小
+            'tolfun': 1e-12,  # 设置函数值变化容差
+            'tolx': 1e-12,    # 设置解向量变化容差
         }
 
         es = cma.CMAEvolutionStrategy(x0, sigma0, opts)

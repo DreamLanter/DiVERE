@@ -761,6 +761,54 @@ class ColorSpaceManager:
         """应用色彩矩阵变换（保留用于向后兼容）"""
         return self._apply_color_conversion(image_array, matrix, np.array([1.0, 1.0, 1.0]))
     
+    def convert_xyz_to_working_space_rgb(self, xyz: np.ndarray, working_colorspace: str) -> np.ndarray:
+        """
+        将XYZ值转换为工作色彩空间RGB
+        
+        Args:
+            xyz: XYZ值 (shape可以是(3,)或(N,3))
+            working_colorspace: 工作色彩空间名称
+            
+        Returns:
+            RGB值，shape与输入相同
+        """
+        # 获取工作色彩空间定义
+        workspace_info = self._color_spaces.get(working_colorspace)
+        if workspace_info is None:
+            if self._verbose_logs:
+                print(f"警告: 未找到工作色彩空间定义 {working_colorspace}，使用sRGB")
+            workspace_info = self._color_spaces.get("sRGB")
+            if workspace_info is None:
+                raise ValueError(f"无法找到工作色彩空间定义: {working_colorspace}")
+        
+        try:
+            # 计算工作空间的RGB到XYZ矩阵
+            rgb_to_xyz_matrix = self._calculate_rgb_to_xyz_matrix(workspace_info)
+            
+            # 计算XYZ到RGB矩阵（RGB到XYZ矩阵的逆）
+            xyz_to_rgb_matrix = np.linalg.inv(rgb_to_xyz_matrix)
+            
+            # 准备XYZ数据进行矩阵运算
+            xyz = np.asarray(xyz, dtype=np.float64)
+            original_shape = xyz.shape
+            
+            if len(original_shape) == 1:
+                # 单个XYZ值 (3,)
+                rgb = xyz_to_rgb_matrix @ xyz
+                return rgb
+            elif len(original_shape) == 2 and original_shape[1] == 3:
+                # 多个XYZ值 (N, 3)
+                rgb = (xyz_to_rgb_matrix @ xyz.T).T
+                return rgb
+            else:
+                raise ValueError(f"不支持的XYZ数据形状: {original_shape}")
+                
+        except Exception as e:
+            if self._verbose_logs:
+                print(f"XYZ到RGB转换失败: {e}")
+            # 作为最后手段，返回输入值（假设已经是RGB）
+            return np.asarray(xyz, dtype=np.float64)
+    
     def get_default_color_space(self) -> str:
         """获取默认色彩空间（集中读取 default preset）"""
         try:

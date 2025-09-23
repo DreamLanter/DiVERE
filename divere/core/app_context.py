@@ -84,6 +84,9 @@ class ApplicationContext(QObject):
         self.film_type_controller = FilmTypeController()
         self.folder_navigator = FolderNavigator(self.image_manager)
         self.auto_preset_manager = AutoPresetManager()
+        
+        # 为ColorSpaceManager添加ApplicationContext引用，以便CCMOptimizer访问共享数据
+        self.color_space_manager.context = self
 
         # =================
         # 状态变量
@@ -111,6 +114,11 @@ class ApplicationContext(QObject):
         
         # 色卡优化状态管理
         self._ccm_optimization_active = False
+        
+        # Reference Color缓存（用于确保Preview和Optimizer数据一致性）
+        self._cached_reference_colors = None
+        self._reference_colorspace = None
+        self._reference_filename = None
 
         # 防抖自动保存
         self._autosave_timer = QTimer()
@@ -1673,3 +1681,62 @@ class ApplicationContext(QObject):
             self.status_message_changed.emit("配置文件已重新加载")
         except Exception as e:
             self.status_message_changed.emit(f"重新加载配置失败: {e}")
+    
+    def get_reference_colors(self, filename: str):
+        """
+        获取ColorChecker参考色彩数据，确保Preview和Optimizer使用相同的数据
+        
+        Args:
+            filename: ColorChecker JSON文件名
+            
+        Returns:
+            Dict[str, List[float]]: 色块ID到工作空间RGB值的映射
+        """
+        from typing import Dict, List
+        
+        try:
+            # 获取当前工作空间
+            current_workspace = self.color_space_manager.get_current_working_space()
+            
+            # 检查缓存是否有效
+            cache_valid = (self._cached_reference_colors is not None and 
+                          self._reference_colorspace == current_workspace and
+                          self._reference_filename == filename)
+            
+            if cache_valid:
+                print(f"[DEBUG] 使用cached reference colors: {filename} @ {current_workspace}")
+                return self._cached_reference_colors
+            else:
+                print(f"[DEBUG] 重新加载reference colors: {filename} @ {current_workspace}")
+                print(f"[DEBUG] 缓存状态: colors={self._cached_reference_colors is not None}, "
+                      f"space_match={self._reference_colorspace == current_workspace}, "
+                      f"file_match={self._reference_filename == filename}")
+                
+                # 重新加载并缓存
+                from divere.utils.colorchecker_loader import load_colorchecker_reference
+                
+                self._cached_reference_colors = load_colorchecker_reference(
+                    filename, 
+                    current_workspace,
+                    self.color_space_manager
+                )
+                self._reference_colorspace = current_workspace
+                self._reference_filename = filename
+                
+                print(f"[DEBUG] 成功缓存reference colors: {len(self._cached_reference_colors)} patches")
+                
+            return self._cached_reference_colors
+            
+        except Exception as e:
+            print(f"获取reference colors失败: {e}")
+            import traceback
+            print(f"[DEBUG] 错误详情: {traceback.format_exc()}")
+            return {}
+    
+    def clear_reference_color_cache(self):
+        """清除reference color缓存（当工作空间或ColorChecker文件变化时调用）"""
+        if self._cached_reference_colors is not None:
+            print(f"[DEBUG] 清除reference color缓存: {self._reference_filename} @ {self._reference_colorspace}")
+        self._cached_reference_colors = None
+        self._reference_colorspace = None
+        self._reference_filename = None

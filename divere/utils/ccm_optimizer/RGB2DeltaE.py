@@ -33,17 +33,28 @@ def _init_colorspace_cache():
     global _COLORSPACE_CACHE
     
     if not _COLORSPACE_CACHE:
-        for cs_name in ['ACEScg', 'sRGB', 'Display P3']:
+        # 扩展支持的色彩空间列表，包括更多常用工作空间
+        supported_spaces = [
+            'ACEScg', 'sRGB', 'Display P3', 'Rec. 2020', 'Adobe RGB (1998)', 
+            'ProPhoto RGB', 'DCI-P3', 'Apple RGB', 'ColorMatch RGB',
+            'NTSC (1953)', 'PAL/SECAM', 'CIE RGB'
+        ]
+        
+        for cs_name in supported_spaces:
             if cs_name in RGB_COLOURSPACES:
-                cs = RGB_COLOURSPACES[cs_name]
-                # 将xy白点转换为XYZ白点 (Y=1)
-                wp_xy = np.array(cs.whitepoint, dtype=np.float32)
-                wp_xyz = np.array([wp_xy[0]/wp_xy[1], 1.0, (1-wp_xy[0]-wp_xy[1])/wp_xy[1]], dtype=np.float32)
-                
-                _COLORSPACE_CACHE[cs_name] = {
-                    'matrix_rgb_to_xyz': np.array(cs.matrix_RGB_to_XYZ, dtype=np.float32),
-                    'whitepoint_xyz': wp_xyz
-                }
+                try:
+                    cs = RGB_COLOURSPACES[cs_name]
+                    # 将xy白点转换为XYZ白点 (Y=1)
+                    wp_xy = np.array(cs.whitepoint, dtype=np.float32)
+                    wp_xyz = np.array([wp_xy[0]/wp_xy[1], 1.0, (1-wp_xy[0]-wp_xy[1])/wp_xy[1]], dtype=np.float32)
+                    
+                    _COLORSPACE_CACHE[cs_name] = {
+                        'matrix_rgb_to_xyz': np.array(cs.matrix_RGB_to_XYZ, dtype=np.float32),
+                        'whitepoint_xyz': wp_xyz
+                    }
+                except Exception:
+                    # 如果某个色彩空间初始化失败，跳过它
+                    continue
 
 
 @lru_cache(maxsize=128)

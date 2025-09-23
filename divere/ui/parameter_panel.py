@@ -1131,8 +1131,8 @@ class ParameterPanel(QWidget):
             False: 验证失败，已回滚选择
         """
         try:
-            # 获取当前工作空间名称
-            working_colorspace = self.current_params.input_color_space_name
+            # 获取当前工作空间名称（使用实时UI状态）
+            working_colorspace = self.input_colorspace_combo.currentData() or self.input_colorspace_combo.currentText().strip('*')
             
             # 验证兼容性
             is_compatible, error_message = validate_colorchecker_workspace_compatibility(

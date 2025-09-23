@@ -52,6 +52,8 @@ def run(
     sharpening_config: Optional[Any] = None,  # SpectralSharpeningConfig
     ui_params: Optional[Dict] = None,  # 来自UI的当前参数
     status_callback: Optional[callable] = None,  # 状态回调函数
+    color_space_manager: Optional[Any] = None,  # ColorSpaceManager实例
+    working_colorspace: Optional[str] = None,  # 工作色彩空间
 ) -> Dict[str, Any]:
     """
     执行光谱锐化优化，返回优化结果（不改动核心算法）。
@@ -67,6 +69,8 @@ def run(
         reference_file: 参考色卡 RGB 文件名。
         sharpening_config: 光谱锐化配置对象，控制优化参数。
         ui_params: 来自UI的当前参数，用作优化初值。
+        color_space_manager: ColorSpaceManager实例，用于访问ApplicationContext。
+        working_colorspace: 当前工作色彩空间名称。
 
     Returns:
         dict: {
@@ -96,13 +100,20 @@ def run(
         optimizer = CCMOptimizer(
             reference_file=sharpening_config.reference_file,
             sharpening_config=sharpening_config,
-            status_callback=status_callback
+            status_callback=status_callback,
+            color_space_manager=color_space_manager,
+            working_colorspace=working_colorspace
         )
         max_iter = sharpening_config.max_iter
         tolerance = sharpening_config.tolerance
     else:
         # 向后兼容：使用传统参数
-        optimizer = CCMOptimizer(reference_file=reference_file, status_callback=status_callback)
+        optimizer = CCMOptimizer(
+            reference_file=reference_file, 
+            status_callback=status_callback,
+            color_space_manager=color_space_manager,
+            working_colorspace=working_colorspace
+        )
         max_iter = optimizer_max_iter
         tolerance = optimizer_tolerance
 

@@ -46,12 +46,12 @@ def _create_preview_proxy(self, image_array: np.ndarray) -> Tuple[np.ndarray, fl
         intermediate_w = int(w * intermediate_factor)
         
         temp_proxy = cv2.resize(image_array, (intermediate_w, intermediate_h), 
-                              interpolation=cv2.INTER_CUBIC)
+                              interpolation=cv2.INTER_LINEAR)
         proxy = cv2.resize(temp_proxy, (new_w, new_h), 
-                         interpolation=cv2.INTER_CUBIC)
+                         interpolation=cv2.INTER_LINEAR)
     else:
         proxy = cv2.resize(image_array, (new_w, new_h), 
-                         interpolation=cv2.INTER_CUBIC)
+                         interpolation=cv2.INTER_LINEAR)
     
     return proxy, scale_factor
 ```

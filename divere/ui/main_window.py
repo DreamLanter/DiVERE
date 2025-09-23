@@ -175,6 +175,8 @@ class MainWindow(QMainWindow):
         self.parameter_panel.cc_rotate_right_requested.connect(self.preview_widget.rotate_colorchecker_right)
         # 色卡类型变化信号连接
         self.parameter_panel.colorchecker_changed.connect(self.preview_widget.on_colorchecker_changed)
+        # 清除ApplicationContext的reference color缓存以确保数据一致性
+        self.parameter_panel.colorchecker_changed.connect(self.context.clear_reference_color_cache)
         # 屏幕反光补偿交互信号连接
         self.parameter_panel.glare_compensation_interaction_started.connect(self._on_glare_compensation_interaction_started)
         self.parameter_panel.glare_compensation_interaction_ended.connect(self._on_glare_compensation_interaction_ended)
@@ -836,6 +838,9 @@ class MainWindow(QMainWindow):
                 # 设置新的工作空间
                 success = self.context.color_space_manager.set_working_space(selected_space)
                 if success:
+                    # 清除reference color缓存，确保下次使用新工作空间
+                    self.context.clear_reference_color_cache()
+                    
                     # 更新状态栏
                     self.statusBar().showMessage(f"工作色彩空间已切换至: {selected_space}")
                     
@@ -966,7 +971,7 @@ class MainWindow(QMainWindow):
 
         # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
         class _CCMWorker(QRunnable):
-            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params, status_callback=None):
+            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params, status_callback=None, color_space_manager=None, working_colorspace=None):
                 super().__init__()
                 self.image_array = image_array
                 self.corners = corners
@@ -976,6 +981,8 @@ class MainWindow(QMainWindow):
                 self.config = config
                 self.ui_params = ui_params
                 self.status_callback = status_callback
+                self.color_space_manager = color_space_manager
+                self.working_colorspace = working_colorspace
                 self.result = None
                 self.error = None
             @Slot()
@@ -993,6 +1000,8 @@ class MainWindow(QMainWindow):
                         sharpening_config=self.config,
                         ui_params=self.ui_params,
                         status_callback=self.status_callback,
+                        color_space_manager=self.color_space_manager,
+                        working_colorspace=self.working_colorspace,
                     )
                 except Exception as e:
                     import traceback
@@ -1019,7 +1028,18 @@ class MainWindow(QMainWindow):
                 
                 QTimer.singleShot(0, update_progress_dialog)
         
-        worker = _CCMWorker(source_image.array, cc_corners_source, input_gamma, use_mat, corr_mat, sharpening_config, ui_params, thread_safe_status_callback)
+        worker = _CCMWorker(
+            source_image.array, 
+            cc_corners_source, 
+            input_gamma, 
+            use_mat, 
+            corr_mat, 
+            sharpening_config, 
+            ui_params, 
+            thread_safe_status_callback,
+            color_space_manager=self.context.color_space_manager,
+            working_colorspace=self.context.color_space_manager.get_current_working_space()
+        )
 
         def _on_done():
             try:

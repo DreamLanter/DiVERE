@@ -1,6 +1,6 @@
 """
 CMA-ES 优化进度对话框
-显示优化迭代进度、Delta E 值和其他相关信息
+显示优化迭代进度、log-RMSE 值和其他相关信息
 """
 
 from PySide6.QtWidgets import (
@@ -28,8 +28,8 @@ class CMAESProgressDialog(QDialog):
         self.is_running = False
         self.current_iteration = 0
         self.max_iterations = 300  # 默认值
-        self.best_delta_e = float('inf')
-        self.current_delta_e = float('inf')
+        self.best_log_rmse = float('inf')
+        self.current_log_rmse = float('inf')
         
         self._setup_ui()
         
@@ -62,14 +62,14 @@ class CMAESProgressDialog(QDialog):
         # 进度信息标签
         info_layout = QHBoxLayout()
         self.iteration_label = QLabel("迭代: 0 / 300")
-        self.delta_e_label = QLabel("当前 Delta E: --")
-        self.best_delta_e_label = QLabel("最佳 Delta E: --")
+        self.log_rmse_label = QLabel("当前 log-RMSE: --")
+        self.best_log_rmse_label = QLabel("最佳 log-RMSE: --")
         
         info_layout.addWidget(self.iteration_label)
         info_layout.addStretch()
-        info_layout.addWidget(self.delta_e_label)
+        info_layout.addWidget(self.log_rmse_label)
         info_layout.addStretch()
-        info_layout.addWidget(self.best_delta_e_label)
+        info_layout.addWidget(self.best_log_rmse_label)
         
         progress_layout.addLayout(info_layout)
         layout.addWidget(progress_group)
@@ -109,8 +109,8 @@ class CMAESProgressDialog(QDialog):
         """开始优化"""
         self.is_running = True
         self.current_iteration = 0
-        self.best_delta_e = float('inf')
-        self.current_delta_e = float('inf')
+        self.best_log_rmse = float('inf')
+        self.current_log_rmse = float('inf')
         
         self.cancel_button.setEnabled(True)
         self.close_button.setEnabled(False)
@@ -119,15 +119,15 @@ class CMAESProgressDialog(QDialog):
         self.log_text.clear()
         self.add_log_message("开始CMA-ES优化...")
         
-    def finish_optimization(self, success: bool, final_delta_e: float = None):
+    def finish_optimization(self, success: bool, final_log_rmse: float = None):
         """完成优化"""
         self.is_running = False
         self.cancel_button.setEnabled(False)
         self.close_button.setEnabled(True)
         
         if success:
-            if final_delta_e is not None:
-                self.add_log_message(f"✓ 优化成功完成！最终 Delta E: {final_delta_e:.6f}")
+            if final_log_rmse is not None:
+                self.add_log_message(f"✓ 优化成功完成！最终 log-RMSE: {final_log_rmse:.6f}")
             else:
                 self.add_log_message("✓ 优化成功完成！")
             self.progress_bar.setValue(100)
@@ -170,11 +170,11 @@ class CMAESProgressDialog(QDialog):
         
     def _parse_iteration_message(self, message: str):
         """解析迭代消息"""
-        # 尝试提取迭代数和Delta E值
+        # 尝试提取迭代数和log-RMSE值
         patterns = [
-            r'迭代\s*(\d+)\s*:\s*Delta E=([\d.]+)',
-            r'迭代\s+(\d+)\s*:\s*Delta E=([\d.]+)',
-            r'迭代.*?(\d+).*?Delta E=(\d*\.?\d+)',
+            r'迭代\s*(\d+)\s*:\s*log-RMSE=([\d.]+)',
+            r'迭代\s+(\d+)\s*:\s*log-RMSE=([\d.]+)',
+            r'迭代.*?(\d+).*?log-RMSE=(\d*\.?\d+)',
         ]
         
         for pattern in patterns:
@@ -182,18 +182,18 @@ class CMAESProgressDialog(QDialog):
             if match and len(match.groups()) >= 2:
                 try:
                     iteration = int(match.group(1))
-                    delta_e = float(match.group(2))
+                    log_rmse = float(match.group(2))
                     
                     self.current_iteration = iteration
-                    self.current_delta_e = delta_e
+                    self.current_log_rmse = log_rmse
                     
-                    if delta_e < self.best_delta_e:
-                        self.best_delta_e = delta_e
+                    if log_rmse < self.best_log_rmse:
+                        self.best_log_rmse = log_rmse
                     
                     # 更新界面
                     self.iteration_label.setText(f"迭代: {iteration} / {self.max_iterations}")
-                    self.delta_e_label.setText(f"当前 Delta E: {delta_e:.6f}")
-                    self.best_delta_e_label.setText(f"最佳 Delta E: {self.best_delta_e:.6f}")
+                    self.log_rmse_label.setText(f"当前 log-RMSE: {log_rmse:.6f}")
+                    self.best_log_rmse_label.setText(f"最佳 log-RMSE: {self.best_log_rmse:.6f}")
                     
                     # 更新进度条
                     if self.max_iterations > 0:

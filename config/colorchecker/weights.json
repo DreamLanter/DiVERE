@@ -8,8 +8,8 @@
         "color_weight": 1.0
     },
     "individual_weights": {
-        "D2": 5.0,
-        "D5": 5.0
+        "C3": 1.0,
+        "D5": 1.0
     },
     "patch_categories": {
         "grayscale": ["D1", "D3", "D4", "D6"],

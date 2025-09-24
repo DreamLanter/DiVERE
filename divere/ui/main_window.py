@@ -971,7 +971,7 @@ class MainWindow(QMainWindow):
 
         # 在UI线程直接调用会卡顿。这里用QRunnable封装，复用全局线程池。
         class _CCMWorker(QRunnable):
-            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params, status_callback=None, color_space_manager=None, working_colorspace=None):
+            def __init__(self, image_array, corners, gamma, use_mat, mat, config, ui_params, status_callback=None, color_space_manager=None, working_colorspace=None, app_context=None):
                 super().__init__()
                 self.image_array = image_array
                 self.corners = corners
@@ -983,6 +983,7 @@ class MainWindow(QMainWindow):
                 self.status_callback = status_callback
                 self.color_space_manager = color_space_manager
                 self.working_colorspace = working_colorspace
+                self.app_context = app_context
                 self.result = None
                 self.error = None
             @Slot()
@@ -1002,6 +1003,7 @@ class MainWindow(QMainWindow):
                         status_callback=self.status_callback,
                         color_space_manager=self.color_space_manager,
                         working_colorspace=self.working_colorspace,
+                        app_context=self.app_context,
                     )
                 except Exception as e:
                     import traceback
@@ -1038,7 +1040,8 @@ class MainWindow(QMainWindow):
             ui_params, 
             thread_safe_status_callback,
             color_space_manager=self.context.color_space_manager,
-            working_colorspace=self.context.color_space_manager.get_current_working_space()
+            working_colorspace=self.context.color_space_manager.get_current_working_space(),
+            app_context=self.context
         )
 
         def _on_done():
@@ -1099,13 +1102,13 @@ class MainWindow(QMainWindow):
                     new_params.density_matrix_name = "optimized_custom"
 
                 self.context.update_params(new_params)
-                final_delta_e = float(res.get('rmse', 0.0))
+                final_log_rmse = float(res.get('rmse', 0.0))
                 
                 # 结束优化状态
                 self.context.set_ccm_optimization_active(False)
-                progress_dialog.finish_optimization(True, final_delta_e)
+                progress_dialog.finish_optimization(True, final_log_rmse)
                 
-                completion_message = f"光谱锐化完成：最终Delta E={final_delta_e:.4f}"
+                completion_message = f"光谱锐化完成：最终log-RMSE={final_log_rmse:.4f}"
                 self.statusBar().showMessage(completion_message)
                 print(f"[DEBUG] 优化完成，显示消息: '{completion_message}'")
             finally:

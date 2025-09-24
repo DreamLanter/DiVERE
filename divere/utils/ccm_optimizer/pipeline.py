@@ -38,11 +38,39 @@ except ImportError as e:
 class DiVEREPipelineSimulator:
     """DiVERE色彩处理管线模拟器"""
     
-    def __init__(self, verbose=False):
-        """初始化管线模拟器"""
+    def __init__(self, verbose=False, working_colorspace="ACEScg", color_space_manager=None):
+        """初始化管线模拟器
+        
+        Args:
+            verbose: 控制详细输出
+            working_colorspace: 当前工作色彩空间名称
+            color_space_manager: ColorSpaceManager实例，用于获取工作空间信息
+        """
         self.verbose = verbose  # 控制详细输出
+        self.working_colorspace = working_colorspace
+        self.color_space_manager = color_space_manager
         # 初始化真实的DiVERE数学运算引擎
         self.math_ops = FilmMathOps()
+        
+        # 获取工作空间的基色和白点信息
+        self._working_space_info = self._get_working_space_info()
+    
+    def _get_working_space_info(self):
+        """获取工作空间的基色和白点信息"""
+        if self.color_space_manager:
+            try:
+                space_info = self.color_space_manager.get_color_space_info(self.working_colorspace)
+                if space_info:
+                    return space_info
+                else:
+                    raise ValueError(f"找不到工作空间定义: {self.working_colorspace}")
+            except Exception as e:
+                if self.verbose:
+                    print(f"错误: 无法获取工作空间信息 {self.working_colorspace}: {e}")
+                raise ValueError(f"无法获取工作空间信息 {self.working_colorspace}: {e}")
+        
+        # 不应该回退到默认值，应该抛出错误
+        raise ValueError(f"ColorSpaceManager未提供，无法获取工作空间信息: {self.working_colorspace}")
 
     @staticmethod
     def primaries_to_xyz_matrix(primaries, white_point):
@@ -99,7 +127,7 @@ class DiVEREPipelineSimulator:
         一体化DiVERE管线模拟器 - 所有操作在一个函数内完成。
         
         完整流程:
-        1. 注册输入色彩变换，转换到工作空间(ACEScg)
+        1. 注册输入色彩变换，转换到当前工作空间
         2. original_density = -log10(safe_rgb)  
         3. adjusted_density = pivot + (original_density - pivot) * gamma - dmax
         4. 应用密度校正矩阵 (如果有)
@@ -125,22 +153,19 @@ class DiVEREPipelineSimulator:
         if white_point_xy is None:
             white_point_xy = np.array([0.3127, 0.3290])  # D65
         
-        # 直接从primaries和white_point转换到ACEScg
-        # ACEScg的基色和白点定义
-        acescg_primaries = np.array([
-            [0.713, 0.293],  # Red
-            [0.165, 0.830],  # Green  
-            [0.128, 0.044]   # Blue
-        ])
-        acescg_white_point = np.array([0.32168, 0.33767])  # ACEScg白点
+        # 从primaries和white_point转换到当前工作空间
+        # 获取当前工作空间的基色和白点定义
+        ws_info = self._working_space_info
+        working_primaries = ws_info['primaries']  # 已经是numpy数组格式
+        working_white_point = np.array(ws_info['white_point'])
         
         # 计算转换矩阵
         input_to_xyz = self.primaries_to_xyz_matrix(primaries_xy, white_point_xy)
-        acescg_to_xyz = self.primaries_to_xyz_matrix(acescg_primaries, acescg_white_point)
-        xyz_to_acescg = np.linalg.inv(acescg_to_xyz)
+        working_to_xyz = self.primaries_to_xyz_matrix(working_primaries, working_white_point)
+        xyz_to_working = np.linalg.inv(working_to_xyz)
         
-        # 组合转换矩阵：输入空间 -> XYZ -> ACEScg
-        input_to_acescg = xyz_to_acescg @ input_to_xyz
+        # 组合转换矩阵：输入空间 -> XYZ -> 当前工作空间
+        input_to_working = xyz_to_working @ input_to_xyz
 
         # 与主管线一致：白点适应增益（简化版，匹配 ColorSpaceManager 的实现）
         def _xy_to_XYZ_normalized(xy):
@@ -153,7 +178,7 @@ class DiVEREPipelineSimulator:
             return np.array([X, Y, Z], dtype=float)
 
         src_white = np.array(white_point_xy if white_point_xy is not None else [0.3127, 0.3290], dtype=float)
-        dst_white = acescg_white_point
+        dst_white = working_white_point
         src_white_XYZ = _xy_to_XYZ_normalized(src_white)
         dst_white_XYZ = _xy_to_XYZ_normalized(dst_white)
         # 简化增益：分量比值并裁剪
@@ -161,14 +186,14 @@ class DiVEREPipelineSimulator:
             gain_vector = np.divide(dst_white_XYZ, src_white_XYZ)
         gain_vector = np.clip(gain_vector, 0.1, 10.0)
         
-        # 转换到工作空间 (ACEScg) 并应用白点增益（与主管线一致在矩阵转换阶段进行）
+        # 转换到当前工作空间并应用白点增益（与主管线一致在矩阵转换阶段进行）
         working_space_patches = {}
         for patch_id, (r, g, b) in input_rgb_patches.items():
             input_rgb = np.array([r, g, b])
-            acescg_rgb = input_to_acescg @ input_rgb
+            working_rgb = input_to_working @ input_rgb
             # 应用白点适应增益（逐分量）
-            acescg_rgb = acescg_rgb * gain_vector
-            working_space_patches[patch_id] = tuple(acescg_rgb.tolist())
+            working_rgb = working_rgb * gain_vector
+            working_space_patches[patch_id] = tuple(working_rgb.tolist())
         
         # ===== 步骤2-6: 使用真实的DiVERE核心处理 =====
         

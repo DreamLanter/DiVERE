@@ -52,8 +52,9 @@ def run(
     sharpening_config: Optional[Any] = None,  # SpectralSharpeningConfig
     ui_params: Optional[Dict] = None,  # 来自UI的当前参数
     status_callback: Optional[callable] = None,  # 状态回调函数
-    color_space_manager: Optional[Any] = None,  # ColorSpaceManager实例
-    working_colorspace: Optional[str] = None,  # 工作色彩空间
+    color_space_manager: Optional[Any] = None,  # 已废弃，保留以兼容调用
+    working_colorspace: Optional[str] = None,  # 已废弃，保留以兼容调用
+    app_context: Any = None,  # ApplicationContext实例（必需），用于获取统一reference color
 ) -> Dict[str, Any]:
     """
     执行光谱锐化优化，返回优化结果（不改动核心算法）。
@@ -69,8 +70,9 @@ def run(
         reference_file: 参考色卡 RGB 文件名。
         sharpening_config: 光谱锐化配置对象，控制优化参数。
         ui_params: 来自UI的当前参数，用作优化初值。
-        color_space_manager: ColorSpaceManager实例，用于访问ApplicationContext。
-        working_colorspace: 当前工作色彩空间名称。
+        color_space_manager: 已废弃参数，log-RMSE不需要色彩空间管理器。
+        working_colorspace: 已废弃参数，log-RMSE直接在RGB空间操作。
+        app_context: ApplicationContext实例（必需），用于获取与Preview一致的reference color数据。
 
     Returns:
         dict: {
@@ -84,6 +86,19 @@ def run(
         }
     """
 
+    # 检查必需参数
+    if app_context is None:
+        raise ValueError(
+            "app_context 是必需参数。光谱锐化需要 ApplicationContext "
+            "以确保与 Preview 显示使用相同的 reference color 数据。"
+        )
+    
+    if not hasattr(app_context, 'get_reference_colors'):
+        raise ValueError(
+            "app_context 必须具有 get_reference_colors 方法。"
+            "请传入有效的 ApplicationContext 实例。"
+        )
+    
     is_valid, msg = validate_extraction_setup(image_array, cc_corners)
     if not is_valid:
         raise ValueError(f"色卡提取前置条件不满足: {msg}")
@@ -101,8 +116,7 @@ def run(
             reference_file=sharpening_config.reference_file,
             sharpening_config=sharpening_config,
             status_callback=status_callback,
-            color_space_manager=color_space_manager,
-            working_colorspace=working_colorspace
+            app_context=app_context
         )
         max_iter = sharpening_config.max_iter
         tolerance = sharpening_config.tolerance
@@ -111,8 +125,7 @@ def run(
         optimizer = CCMOptimizer(
             reference_file=reference_file, 
             status_callback=status_callback,
-            color_space_manager=color_space_manager,
-            working_colorspace=working_colorspace
+            app_context=app_context
         )
         max_iter = optimizer_max_iter
         tolerance = optimizer_tolerance

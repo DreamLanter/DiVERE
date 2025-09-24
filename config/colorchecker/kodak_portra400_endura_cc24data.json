@@ -1,13 +1,6 @@
 {
-    "description": "ColorChecker 24色块在ACEScg色彩空间的RGB值",
+    "description": "ColorChecker 24+CIE E光源在portra400->endura打印流程下，在endura相纸上得到的理论密度（并取指数）",
     "type": "EnduraDensityExp",
-    "color_space": "ACEScg (AP1 primaries, D60 white point)",
-    "conversion_path": "Lab(D50) → XYZ(D50) → XYZ(D60) [Bradford] → ACEScg RGB",
-    "white_point": "D50",
-    "film_profile": "kodak_portra_400_auc",
-    "paper_profile": "kodak_endura_premier_uc",
-    "export_timestamp": "2025-09-08T17:18:13.146534",
-    "processing_time_seconds": 0.0,
     "data": {
         "A1": [
             0.106119757423142,

@@ -16,8 +16,10 @@ def _exe_dir() -> Path:
 
 
 def _pkg_root() -> Path:
-    """Return package root path: <repo>/divere"""
-    return Path(__file__).resolve().parent.parent
+    """Return project root path: <repo>"""
+    # 从 divere/__init__.py 获取项目根目录
+    import divere
+    return Path(divere.__file__).resolve().parent.parent
 
 
 def resolve_data_path(*parts: str) -> Path:

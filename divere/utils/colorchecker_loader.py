@@ -95,30 +95,15 @@ def _get_working_space_white_point(working_colorspace: str, color_space_manager:
 
 def _load_colorchecker_json(filename: str) -> Dict[str, Any]:
     """加载ColorChecker JSON文件"""
-    # 尝试多个路径位置
-    candidates = []
-    
     try:
-        # 优先使用统一数据路径
-        candidates.append(resolve_data_path("config", "colorchecker", filename))
-    except Exception:
-        pass
-    
-    # 备用路径
-    candidates.extend([
-        Path(__file__).parent.parent / "config" / "colorchecker" / filename,
-        Path(__file__).parent / "ccm_optimizer" / filename,  # 向后兼容
-    ])
-    
-    for file_path in candidates:
-        if file_path.exists():
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                continue
-    
-    raise ColorCheckerLoadError(f"无法加载ColorChecker文件: {filename}")
+        # 使用修正后的统一数据路径
+        file_path = resolve_data_path("config", "colorchecker", filename)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise ColorCheckerLoadError(f"无法加载ColorChecker文件: {filename}")
+    except (json.JSONDecodeError, IOError) as e:
+        raise ColorCheckerLoadError(f"ColorChecker文件格式错误: {filename} - {e}")
 
 
 def _validate_colorchecker_schema(data: Dict[str, Any], filename: str) -> None:

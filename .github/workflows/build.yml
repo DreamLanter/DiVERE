@@ -157,7 +157,7 @@ jobs:
           --windowed \
           --name "DiVERE" \
           ${ICON_ARG} \
-          --add-data "divere/config${DATA_SEP}config" \
+          --add-data "config${DATA_SEP}config" \
           --add-data "divere/assets${DATA_SEP}assets" \
           --add-data "divere/models${DATA_SEP}models" \
           --collect-all onnxruntime \
@@ -193,7 +193,7 @@ jobs:
         if (!(Test-Path $mdl)) { New-Item -ItemType Directory -Path $mdl | Out-Null }
         if (!(Test-Path $ast)) { New-Item -ItemType Directory -Path $ast | Out-Null }
         # Copy from repo if PyInstaller didn't place them
-        Copy-Item -Recurse -Force "divere/config/*" $cfg -ErrorAction SilentlyContinue
+        Copy-Item -Recurse -Force "config/*" $cfg -ErrorAction SilentlyContinue
         Copy-Item -Recurse -Force "divere/models/*" $mdl 2>$null
         Copy-Item -Recurse -Force "divere/assets/*" $ast 2>$null
 

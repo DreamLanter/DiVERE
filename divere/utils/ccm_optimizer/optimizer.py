@@ -10,7 +10,7 @@ CCM参数优化器
 - r_gain: R通道增益
 - b_gain: B通道增益
 
-目标：最小化24个 ColorChecker 色块的 Delta E 1994色差
+目标：最小化24个 ColorChecker 色块的 log-RMSE 损失
 """
 
 import numpy as np
@@ -26,17 +26,17 @@ project_root = Path(__file__).parent.parent.parent
 try:
     from divere.utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
     from divere.utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
-    from divere.utils.ccm_optimizer.RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
+    from divere.utils.ccm_optimizer.log_rmse_loss import calculate_log_rmse, calculate_colorchecker_log_rmse  # type: ignore
 except Exception:
     try:
         from .pipeline import DiVEREPipelineSimulator  # type: ignore
         from .extractor import extract_colorchecker_patches  # type: ignore
-        from .RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
+        from .log_rmse_loss import calculate_log_rmse, calculate_colorchecker_log_rmse  # type: ignore
     except Exception:
         try:
             from utils.ccm_optimizer.pipeline import DiVEREPipelineSimulator  # type: ignore
             from utils.ccm_optimizer.extractor import extract_colorchecker_patches  # type: ignore
-            from utils.ccm_optimizer.RGB2DeltaE import calculate_delta_e_1994, calculate_colorchecker_delta_e_optimized  # type: ignore
+            from utils.ccm_optimizer.log_rmse_loss import calculate_log_rmse, calculate_colorchecker_log_rmse  # type: ignore
         except Exception as e:
             raise ImportError(f"无法导入CCM优化器依赖: {e}")
 
@@ -48,8 +48,7 @@ class CCMOptimizer:
                  bounds_config_path: Optional[str] = None,
                  sharpening_config: Optional['SpectralSharpeningConfig'] = None,
                  status_callback: Optional[callable] = None,
-                 color_space_manager: Optional[Any] = None,
-                 working_colorspace: Optional[str] = None):
+                 app_context: Any = None):
         """
         初始化优化器
         
@@ -58,6 +57,8 @@ class CCMOptimizer:
             weights_config_path: 权重配置文件路径
             bounds_config_path: 参数边界配置文件路径
             sharpening_config: 光谱锐化配置，决定哪些参数参与优化
+            status_callback: 状态回调函数
+            app_context: ApplicationContext实例（必需），用于获取统一的reference color数据
         """
         # 导入配置类（避免循环导入）
         if sharpening_config is None:
@@ -73,11 +74,35 @@ class CCMOptimizer:
         
         self.sharpening_config = sharpening_config
         
-        # 保存ColorSpaceManager和工作空间信息（必须在加载参考值之前）
-        self._color_space_manager = color_space_manager
-        self._working_colorspace = working_colorspace or 'ACEScg'
+        # 检查必需参数
+        if app_context is None:
+            raise ValueError(
+                "app_context 是必需参数。CCMOptimizer 需要 ApplicationContext "
+                "以确保与 Preview 显示使用相同的 reference color 数据。"
+            )
         
-        self.pipeline = DiVEREPipelineSimulator(verbose=False)
+        if not hasattr(app_context, 'get_reference_colors'):
+            raise ValueError(
+                "app_context 必须具有 get_reference_colors 方法。"
+                "请传入有效的 ApplicationContext 实例。"
+            )
+        
+        self.app_context = app_context
+        self.reference_file = reference_file
+        
+        # 获取当前工作空间信息
+        working_colorspace = "ACEScg"  # 默认值
+        color_space_manager = None
+        if app_context and hasattr(app_context, 'color_space_manager'):
+            color_space_manager = app_context.color_space_manager
+            if hasattr(color_space_manager, 'get_current_working_space'):
+                working_colorspace = color_space_manager.get_current_working_space()
+        
+        self.pipeline = DiVEREPipelineSimulator(
+            verbose=False, 
+            working_colorspace=working_colorspace,
+            color_space_manager=color_space_manager
+        )
         self.reference_values = self._load_reference_values(reference_file)
         # 加载权重配置（可选）。默认使用内置的 config/colorchecker/weights.json
         self._weights_config = self._load_weights_config(weights_config_path)
@@ -240,69 +265,37 @@ class CCMOptimizer:
     
     def _load_reference_values(self, reference_file: str) -> Dict[str, List[float]]:
         """
-        加载参考RGB值，优先使用ApplicationContext的共享缓存
-        确保与Preview显示的reference color数据完全一致
+        加载参考RGB值，使用ApplicationContext的统一数据源
+        确保与Preview显示的reference color完全一致
+        包括type=XYZ时的工作空间转换逻辑
         """
         try:
-            # 优先尝试从ApplicationContext获取共享的reference color数据
-            if (self._color_space_manager and 
-                hasattr(self._color_space_manager, 'context') and
-                hasattr(self._color_space_manager.context, 'get_reference_colors')):
-                
-                return self._color_space_manager.context.get_reference_colors(reference_file)
+            # 使用ApplicationContext的统一reference color数据
+            # 这确保了与Preview显示完全相同的数据（包括所有转换逻辑）
+            reference_data = self.app_context.get_reference_colors(reference_file)
             
-            # 如果没有ApplicationContext，直接使用colorchecker_loader
-            from divere.utils.colorchecker_loader import load_colorchecker_reference
+            if not reference_data:
+                raise ValueError(f"无法从 ApplicationContext 获取 reference colors: {reference_file}")
             
-            working_colorspace = self._working_colorspace
-            color_space_manager = self._color_space_manager
+            # 转换为优化器需要的格式 Dict[str, List[float]]
+            result = {}
+            for patch_id, rgb_tuple in reference_data.items():
+                if isinstance(rgb_tuple, (list, tuple)) and len(rgb_tuple) >= 3:
+                    result[patch_id] = [float(rgb_tuple[0]), float(rgb_tuple[1]), float(rgb_tuple[2])]
+                else:
+                    raise ValueError(f"无效的RGB数据格式 (patch {patch_id}): {type(rgb_tuple)}")
             
-            return load_colorchecker_reference(
-                reference_file, 
-                working_colorspace,
-                color_space_manager
-            )
+            if not result:
+                raise ValueError(f"未找到有效的色块数据: {reference_file}")
+            
+            return result
             
         except Exception as e:
-            print(f"警告：使用新加载器失败，回退到旧方法: {e}")
-            return self._load_reference_values_legacy(reference_file)
-
-    def _load_reference_values_legacy(self, reference_file: str) -> Dict[str, List[float]]:
-        """
-        旧版参考值加载方法（向后兼容）
-        """
-        candidates: List[Path] = []
-        # 允许外部传绝对路径
-        rf = Path(reference_file)
-        if rf.is_absolute():
-            candidates.append(rf)
-        else:
-            # 1) 统一资源定位：config/colorchecker/<name>
-            try:
-                from divere.utils.app_paths import resolve_data_path  # type: ignore
-                candidates.append(resolve_data_path("config", "colorchecker", reference_file))
-            except Exception:
-                pass
-            # 2) 包内同目录（兼容旧路径）
-            candidates.append(Path(__file__).parent / reference_file)
-            # 3) 包内标准位置：divere/config/colorchecker/<name>
-            candidates.append(project_root / "config" / "colorchecker" / reference_file)
-
-        for p in candidates:
-            try:
-                if p.exists():
-                    with open(p, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        return data.get('data', {})
-            except Exception:
-                # 继续尝试下一个候选
-                pass
-
-        print(
-            f"警告：无法加载参考文件 {reference_file}: 未在以下位置找到可用文件: "
-            f"{[str(x) for x in candidates]}"
-        )
-        return {}
+            raise RuntimeError(
+                f"从 ApplicationContext 加载 reference colors 失败: {e}\n"
+                f"文件: {reference_file}\n"
+                f"请检查 ApplicationContext 和 ColorChecker 文件是否正常。"
+            )
 
     # ===== 权重：加载与查询 =====
     def _load_weights_config(self, weights_config_path: Optional[str]) -> Dict[str, Any]:
@@ -511,14 +504,14 @@ class CCMOptimizer:
     def objective_function(self, params: np.ndarray, 
                           input_patches: Dict[str, Tuple[float, float, float]]) -> float:
         """
-        目标函数：计算Delta E 1994色差
+        目标函数：计算 log-RMSE 损失
         
         Args:
             params: 优化参数数组
             input_patches: 输入色块RGB值
             
         Returns:
-            加权平均Delta E值
+            加权平均 log-RMSE 值
         """
         # 兼容旧签名：默认不使用校正矩阵
         return self.compute_rmse(params, input_patches, correction_matrix=None)
@@ -526,7 +519,7 @@ class CCMOptimizer:
     def compute_rmse(self, params: np.ndarray,
                      input_patches: Dict[str, Tuple[float, float, float]],
                      correction_matrix: Optional[np.ndarray] = None) -> float:
-        """计算给定参数与可选密度校正矩阵下的全局Delta E 1994色差。"""
+        """计算给定参数与可选密度校正矩阵下的全局 log-RMSE 损失。"""
         try:
             params_dict = self._params_to_dict(params)
             
@@ -545,18 +538,19 @@ class CCMOptimizer:
                 b_gain=params_dict['b_gain'],
                 correction_matrix=actual_correction_matrix,
             )
-            # 使用ColorChecker专用优化函数
+            
+            # 使用 log-RMSE 计算损失
             weights_dict = {patch_id: self._get_patch_weight(patch_id) 
                            for patch_id in self.reference_values.keys()}
             
-            weighted_avg_delta_e, _ = calculate_colorchecker_delta_e_optimized(
+            weighted_avg_log_rmse, _ = calculate_colorchecker_log_rmse(
                 self.reference_values,
                 output_patches,
                 weights_dict,
-                self._working_colorspace
+                channel_weights=self._channel_weights
             )
             
-            return weighted_avg_delta_e
+            return weighted_avg_log_rmse
         except Exception as e:
             print(f"目标函数计算错误: {e}")
             return float('inf')
@@ -597,7 +591,7 @@ class CCMOptimizer:
                 callback("使用默认初始参数（未提供UI参数）")
             
         if callback:
-            callback(f"开始优化，目标：最小化24个色块的Delta E 1994色差")
+            callback(f"开始优化，目标：最小化24个色块的 log-RMSE 损失")
             callback(f"优化方法: {method}")
             callback(f"最大迭代: {max_iter}")
             callback(f"收敛容差: {tolerance}")
@@ -637,8 +631,8 @@ class CCMOptimizer:
         
         # 计算每个色块的误差
         patch_errors: Dict[str, Any] = {}
-        total_mse = 0.0
-        total_weighted_mse = 0.0
+        total_log_rmse = 0.0
+        total_weighted_log_rmse = 0.0
         total_weight = 0.0
         valid_patches = 0
         
@@ -647,12 +641,11 @@ class CCMOptimizer:
                 ref_rgb = np.array(self.reference_values[patch_id])
                 out_rgb = np.array(output_patches[patch_id])
                 
-                # 计算Delta E 1994色差
-                delta_e = calculate_delta_e_1994(
-                    ref_rgb.tolist(), 
-                    out_rgb.tolist(), 
-                    self._working_colorspace, 
-                    self._working_colorspace
+                # 计算 log-RMSE 损失
+                log_rmse = calculate_log_rmse(
+                    ref_rgb, 
+                    out_rgb, 
+                    weights=self._channel_weights
                 )
                 
                 # 为了兼容性，也计算传统的RGB误差
@@ -672,26 +665,22 @@ class CCMOptimizer:
                     'error': error.tolist(),
                     'mse': float(mse),
                     'rmse': rmse,
-                    'delta_e': float(delta_e),
+                    'log_rmse': float(log_rmse),
                     'weight': float(w)
                 }
                 
-                # 使用Delta E进行优化目标计算
-                total_mse += delta_e  # 现在用Delta E替代MSE
-                total_weighted_mse += float(w) * float(delta_e)
+                # 使用 log-RMSE 进行优化目标计算
+                total_log_rmse += log_rmse
+                total_weighted_log_rmse += float(w) * float(log_rmse)
                 total_weight += float(w)
                 valid_patches += 1
         
-        avg_mse = total_mse / valid_patches if valid_patches > 0 else float('inf')
-        avg_rmse = float(np.sqrt(avg_mse)) if np.isfinite(avg_mse) else float('inf')
-        weighted_avg_mse = (total_weighted_mse / total_weight) if total_weight > 0 else float('inf')
-        weighted_avg_rmse = float(np.sqrt(weighted_avg_mse)) if np.isfinite(weighted_avg_mse) else float('inf')
+        avg_log_rmse = total_log_rmse / valid_patches if valid_patches > 0 else float('inf')
+        weighted_avg_log_rmse = (total_weighted_log_rmse / total_weight) if total_weight > 0 else float('inf')
         
         return {
-            'average_mse': avg_mse,
-            'average_rmse': avg_rmse,
-            'weighted_average_mse': weighted_avg_mse,
-            'weighted_average_rmse': weighted_avg_rmse,
+            'average_log_rmse': avg_log_rmse,
+            'weighted_average_log_rmse': weighted_avg_log_rmse,
             'patch_errors': patch_errors,
             'valid_patches': valid_patches
         }
@@ -746,7 +735,7 @@ class CCMOptimizer:
         x0 = self._dict_to_params(self.initial_params)
         lb, ub, span = self._build_bounds_arrays()
 
-        sigma0 = 0.8  # 增大初始步长以提高搜索范围
+        sigma0 = 0.3  # 增大初始步长以提高搜索范围
         opts = {
             'bounds': [lb.tolist(), ub.tolist()],
             'scaling_of_variables': span.tolist(),
@@ -754,22 +743,22 @@ class CCMOptimizer:
             'ftarget': max(float(tolerance), 1e-8),  # 防止收敛条件过严
             'verb_disp': 0,  # 禁用CMA-ES内置显示
             'verbose': -1,   # 禁用详细输出
-            'popsize': max(int(8 + 4 * np.log(len(x0))), 20),  # 增加最小种群大小
+            'popsize': max(int(8 + 4 * np.log(len(x0))), 50),  # 增加最小种群大小
             'tolfun': 1e-12,  # 设置函数值变化容差
             'tolx': 1e-12,    # 设置解向量变化容差
         }
 
         es = cma.CMAEvolutionStrategy(x0, sigma0, opts)
-        best_delta_e = float('inf')
+        best_log_rmse = float('inf')
         while not es.stop():
             xs = es.ask()
             fs = [float(self.compute_rmse(x, input_patches, correction_matrix=correction_matrix)) for x in xs]
             es.tell(xs, fs)
             # es.disp()  # 禁用CMA-ES内置显示，使用我们自己的状态回调
             gen_best = float(np.min(fs))
-            if gen_best < best_delta_e:
-                best_delta_e = gen_best
-            message = f"迭代 {es.countiter:3d}: Delta E={gen_best:.6f}  (累计最优={best_delta_e:.6f})"
+            if gen_best < best_log_rmse:
+                best_log_rmse = gen_best
+            message = f"迭代 {es.countiter:3d}: log-RMSE={gen_best:.6f}  (累计最优={best_log_rmse:.6f})"
             if status_callback:
                 status_callback(message)
             else:
@@ -782,7 +771,7 @@ class CCMOptimizer:
         optimal_params = self._params_to_dict(xbest)
         
         completion_message = "✓ 优化成功完成"
-        final_message = f"最终Delta E: {fbest:.6f}"
+        final_message = f"最终 log-RMSE: {fbest:.6f}"
         iterations_message = f"迭代次数: {nit}"
         
         if status_callback:
@@ -796,7 +785,7 @@ class CCMOptimizer:
             
         return {
             'success': True,
-            'rmse': fbest,  # 保持字段名为rmse以兼容现有代码，但实际是Delta E
+            'rmse': fbest,  # 保持字段名为rmse以兼容现有代码，但实际是log-RMSE
             'iterations': nit,
             'parameters': optimal_params,
             'raw_result': res,
@@ -819,7 +808,7 @@ def optimize_from_image(image_array: np.ndarray,
         优化结果字典
     """
     # 提取色块
-    # status_callback 已经在上面被 pop 出来了
+    status_callback = optimizer_kwargs.get('status_callback', None)
     
     message = "提取ColorChecker色块..."
     if status_callback:
@@ -864,11 +853,11 @@ if __name__ == "__main__":
     
     # 测试目标函数
     test_params = optimizer._dict_to_params(optimizer.initial_params)
-    rmse = optimizer.objective_function(test_params, test_patches)
-    print(f"初始参数Delta E: {rmse:.6f}")
+    log_rmse = optimizer.objective_function(test_params, test_patches)
+    print(f"初始参数log-RMSE: {log_rmse:.6f}")
     
     # 测试优化
     print("\n开始测试优化...")
     result = optimizer.optimize(test_patches, max_iter=10)
     print(f"优化结果: {result['success']}")
-    print(f"最终Delta E: {result['rmse']:.6f}")
+    print(f"最终log-RMSE: {result['rmse']:.6f}")

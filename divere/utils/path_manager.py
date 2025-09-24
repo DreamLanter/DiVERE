@@ -66,38 +66,38 @@ class PathManager:
         
         # 配置路径
         config_paths = [
-            os.path.join(project_root, "divere", "config"),
-            os.path.join(project_root, "divere", "config", "defaults"),
-            os.path.join(project_root, "divere", "config", "colorchecker"),
-            os.path.join(project_root, "divere", "config", "colorspace"),
-            os.path.join(project_root, "divere", "config", "curves"),
-            os.path.join(project_root, "divere", "config", "matrices")
+            os.path.join(project_root, "config"),
+            os.path.join(project_root, "config", "defaults"),
+            os.path.join(project_root, "config", "colorchecker"),
+            os.path.join(project_root, "config", "colorspace"),
+            os.path.join(project_root, "config", "curves"),
+            os.path.join(project_root, "config", "matrices")
         ]
         self._paths["config"].extend(config_paths)
         debug(f"Config paths: {config_paths}", "PathManager")
         
         # 默认预设路径
         defaults_paths = [
-            os.path.join(project_root, "divere", "config", "defaults")
+            os.path.join(project_root, "config", "defaults")
         ]
         self._paths["defaults"].extend(defaults_paths)
         debug(f"Defaults paths: {defaults_paths}", "PathManager")
         
         # 色彩空间路径
         self._paths["colorspace"].extend([
-            os.path.join(project_root, "divere", "config", "colorspace"),
-            os.path.join(project_root, "divere", "config", "colorspace", "legacy"),
-            os.path.join(project_root, "divere", "config", "colorspace", "icc")
+            os.path.join(project_root, "config", "colorspace"),
+            os.path.join(project_root, "config", "colorspace", "legacy"),
+            os.path.join(project_root, "config", "colorspace", "icc")
         ])
         
         # 曲线路径
         self._paths["curves"].extend([
-            os.path.join(project_root, "divere", "config", "curves")
+            os.path.join(project_root, "config", "curves")
         ])
         
         # 矩阵路径
         self._paths["matrices"].extend([
-            os.path.join(project_root, "divere", "config", "matrices")
+            os.path.join(project_root, "config", "matrices")
         ])
         
         # 资源路径

@@ -1,8 +1,6 @@
 {
     "description": "ColorChecker 24色块原始测量值在XYZ色彩空间的数值",
     "type": "XYZ",
-    "color_space": "XYZ(D50)",
-    "conversion_path": "Lab(D50) → XYZ(D50)",
     "white_point": "D50",
     "source": "ColorChecker24_After_Nov2014.txt (X-Rite official measurement)",
     "data": {

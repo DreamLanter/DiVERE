@@ -1,6 +1,7 @@
 {
     "description": "ColorChecker 24+CIE D55光源在fujifilm_pro_400h_auc->kodak_endura_premier_d60_uc打印流程下，相纸上得到的理论密度（并取指数）",
-    "type": "EnduraDensityExp",
+    "type": "DensityExp",
+    "required_working_colorspace": "KodakEnduraPremier",
     "Illuminant": "CIE D55",
     "data": {
         "A1": [

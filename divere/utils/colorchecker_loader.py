@@ -4,7 +4,7 @@ ColorChecker参考色加载器
 
 处理新的ColorChecker JSON schema，包含type判断和色彩变换逻辑：
 - type: "XYZ" -> 执行Bradford CAT变换到working colorspace
-- type: "EnduraDensityExp" -> 检查working colorspace是否为KodakEnduraPremier
+- type: "DensityExp" -> 检查working colorspace是否与required_working_colorspace字段匹配
 
 职责：
 - 加载和验证ColorChecker JSON文件
@@ -67,8 +67,8 @@ def load_colorchecker_reference(
     
     if colorchecker_type == "XYZ":
         return _process_xyz_type(data, target_illuminant, working_colorspace, color_space_manager)
-    elif colorchecker_type == "EnduraDensityExp":
-        return _process_endura_density_type(data, working_colorspace)
+    elif colorchecker_type == "DensityExp":
+        return _process_density_exp_type(data, working_colorspace)
     else:
         raise ColorCheckerLoadError(f"不支持的ColorChecker类型: {colorchecker_type}")
 
@@ -116,7 +116,7 @@ def _validate_colorchecker_schema(data: Dict[str, Any], filename: str) -> None:
             raise ColorCheckerLoadError(f"ColorChecker文件 {filename} 缺少必需字段: {field}")
     
     # 验证type字段
-    valid_types = ["XYZ", "EnduraDensityExp"]
+    valid_types = ["XYZ", "DensityExp"]
     colorchecker_type = data["type"]
     if colorchecker_type not in valid_types:
         raise ColorCheckerLoadError(f"无效的type字段: {colorchecker_type}, 支持: {valid_types}")
@@ -133,6 +133,18 @@ def _validate_colorchecker_schema(data: Dict[str, Any], filename: str) -> None:
         valid_illuminants = ["D50", "D55", "D60", "D65"]
         if wb not in valid_illuminants:
             raise ColorCheckerLoadError(f"无效的white_point值: {wb}, 支持: {valid_illuminants}")
+    
+    # 验证required_working_colorspace字段（仅DensityExp类型需要）
+    if colorchecker_type == "DensityExp":
+        if "required_working_colorspace" not in data:
+            raise ColorCheckerLoadError(f"DensityExp类型的ColorChecker文件 {filename} 缺少必需字段: required_working_colorspace")
+        
+        required_ws = data["required_working_colorspace"]
+        if not isinstance(required_ws, str):
+            raise ColorCheckerLoadError(f"required_working_colorspace字段必须是字符串，当前类型: {type(required_ws)}")
+        
+        if not required_ws.strip():
+            raise ColorCheckerLoadError("required_working_colorspace字段不能为空")
     
     # 验证data字段
     if not isinstance(data["data"], dict):
@@ -182,19 +194,22 @@ def _process_xyz_type(
     return result
 
 
-def _process_endura_density_type(
+def _process_density_exp_type(
     data: Dict[str, Any], 
     working_colorspace: str
 ) -> Dict[str, List[float]]:
     """
-    处理EnduraDensityExp类型的ColorChecker数据
-    检查working colorspace是否为KodakEnduraPremier
+    处理DensityExp类型的ColorChecker数据
+    检查working colorspace是否与required_working_colorspace字段匹配
     """
+    # 获取要求的工作色彩空间
+    required_workspace = data.get("required_working_colorspace", "").strip()
+    
     # 检查工作空间（标准化比较）
     normalized_workspace = working_colorspace.strip() if working_colorspace else ""
-    if normalized_workspace != "KodakEnduraPremier":
+    if normalized_workspace != required_workspace:
         raise WorkspaceValidationError(
-            f"EnduraDensityExp类型要求工作色彩空间为KodakEnduraPremier，当前为: {working_colorspace}"
+            f"DensityExp类型要求工作色彩空间为{required_workspace}，当前为: {working_colorspace}"
         )
     
     # 工作空间正确，直接返回数据
@@ -235,13 +250,16 @@ def validate_colorchecker_workspace_compatibility(
     try:
         colorchecker_type = get_colorchecker_type(filename)
         
-        if colorchecker_type == "EnduraDensityExp":
-            # 标准化工作空间名称进行比较（去除空白字符，大小写不敏感）
+        if colorchecker_type == "DensityExp":
+            # 加载JSON文件获取required_working_colorspace
+            data = _load_colorchecker_json(filename)
+            required_workspace = data.get("required_working_colorspace", "").strip()
+            
+            # 标准化工作空间名称进行比较（去除空白字符）
             normalized_workspace = working_colorspace.strip() if working_colorspace else ""
             
-            
-            if normalized_workspace != "KodakEnduraPremier":
-                return False, "需要将工作色彩空间设为KodakEnduraPremier"
+            if normalized_workspace != required_workspace:
+                return False, f"需要将工作色彩空间设为{required_workspace}"
         
         return True, None
         

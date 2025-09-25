@@ -108,7 +108,8 @@ def _load_colorchecker_json(filename: str) -> Dict[str, Any]:
 
 def _validate_colorchecker_schema(data: Dict[str, Any], filename: str) -> None:
     """验证ColorChecker JSON schema"""
-    required_fields = ["type", "white_point", "data"]
+    # 基础必需字段：所有类型都需要
+    required_fields = ["type", "data"]
     
     for field in required_fields:
         if field not in data:
@@ -116,17 +117,22 @@ def _validate_colorchecker_schema(data: Dict[str, Any], filename: str) -> None:
     
     # 验证type字段
     valid_types = ["XYZ", "EnduraDensityExp"]
-    if data["type"] not in valid_types:
-        raise ColorCheckerLoadError(f"无效的type字段: {data['type']}, 支持: {valid_types}")
+    colorchecker_type = data["type"]
+    if colorchecker_type not in valid_types:
+        raise ColorCheckerLoadError(f"无效的type字段: {colorchecker_type}, 支持: {valid_types}")
     
-    # 验证white_point字段（现在应该是字符串）
-    wb = data["white_point"]
-    if not isinstance(wb, str):
-        raise ColorCheckerLoadError(f"white_point字段必须是字符串，当前类型: {type(wb)}")
-    
-    valid_illuminants = ["D50", "D55", "D60", "D65"]
-    if wb not in valid_illuminants:
-        raise ColorCheckerLoadError(f"无效的white_point值: {wb}, 支持: {valid_illuminants}")
+    # 验证white_point字段（仅XYZ类型需要）
+    if colorchecker_type == "XYZ":
+        if "white_point" not in data:
+            raise ColorCheckerLoadError(f"XYZ类型的ColorChecker文件 {filename} 缺少必需字段: white_point")
+        
+        wb = data["white_point"]
+        if not isinstance(wb, str):
+            raise ColorCheckerLoadError(f"white_point字段必须是字符串，当前类型: {type(wb)}")
+        
+        valid_illuminants = ["D50", "D55", "D60", "D65"]
+        if wb not in valid_illuminants:
+            raise ColorCheckerLoadError(f"无效的white_point值: {wb}, 支持: {valid_illuminants}")
     
     # 验证data字段
     if not isinstance(data["data"], dict):
@@ -184,8 +190,9 @@ def _process_endura_density_type(
     处理EnduraDensityExp类型的ColorChecker数据
     检查working colorspace是否为KodakEnduraPremier
     """
-    # 检查工作空间
-    if working_colorspace != "KodakEnduraPremier":
+    # 检查工作空间（标准化比较）
+    normalized_workspace = working_colorspace.strip() if working_colorspace else ""
+    if normalized_workspace != "KodakEnduraPremier":
         raise WorkspaceValidationError(
             f"EnduraDensityExp类型要求工作色彩空间为KodakEnduraPremier，当前为: {working_colorspace}"
         )
@@ -229,7 +236,11 @@ def validate_colorchecker_workspace_compatibility(
         colorchecker_type = get_colorchecker_type(filename)
         
         if colorchecker_type == "EnduraDensityExp":
-            if working_colorspace != "KodakEnduraPremier":
+            # 标准化工作空间名称进行比较（去除空白字符，大小写不敏感）
+            normalized_workspace = working_colorspace.strip() if working_colorspace else ""
+            
+            
+            if normalized_workspace != "KodakEnduraPremier":
                 return False, "需要将工作色彩空间设为KodakEnduraPremier"
         
         return True, None

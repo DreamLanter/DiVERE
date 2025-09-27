@@ -102,6 +102,7 @@ class ApplicationContext(QObject):
         # =================
         self._preview_busy: bool = False
         self._preview_pending: bool = False
+        self._loading_image: bool = False  # 图像加载状态标志
         self.thread_pool: QThreadPool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(1)
         # 设置线程栈大小为8MB以避免macOS ARM版本打包后的栈溢出问题
@@ -705,6 +706,7 @@ class ApplicationContext(QObject):
     # =================
     def load_image(self, file_path: str):
         try:
+            self._loading_image = True  # 设置加载标志，延迟预览更新
             self.status_message_changed.emit(f"正在加载图像: {file_path}...")
             self._current_image = self.image_manager.load_image(file_path)
             
@@ -723,10 +725,8 @@ class ApplicationContext(QObject):
                 self.set_current_film_type(target_film_type, apply_defaults=True)
                 self.status_message_changed.emit(f"检测到单色图像，已自动切换为黑白模式")
             
-            # 重置contactsheet朝向和裁剪
-            self._contactsheet_profile.orientation = 0
+            # 重置裁剪（orientation延迟重置，让预设系统先处理）
             self._contactsheet_profile.crop_rect = None
-            # 重置裁剪
             self._crops = []
             self._active_crop_id = None
             self._crop_focused = False
@@ -749,32 +749,36 @@ class ApplicationContext(QObject):
                     # The preset's values should be preserved as-is
                     # self._apply_film_type_override_if_needed()
                     
-                    # 统一在此处强制按当前参数重建一次预览（确保顺序正确）
+                    # DEBUG信息
                     try:
                         print(f"[DEBUG] after load_preset(user): input={self._current_params.input_color_space_name}, gamma={self._current_params.density_gamma}, dmax={self._current_params.density_dmax}, rgb={self._current_params.rgb_gains}")
                     except Exception:
                         pass
-                    self._prepare_proxy(); self._trigger_preview_update()
                 else:
                     # 如果没有预设，则使用智能分类器选择默认预设
                     try:
                         self._load_smart_default_preset(file_path)
-                        # 强制按智能默认预设重建一次预览
-                        self._prepare_proxy(); self._trigger_preview_update()
                     except Exception:
                         # 智能分类失败时，回退到通用默认
                         try:
                             self._load_generic_default_preset()
                             self.status_message_changed.emit("未找到预设，已应用通用默认预设")
-                            self._prepare_proxy(); self._trigger_preview_update()
                         except Exception:
                             self.reset_params()
                             self.status_message_changed.emit("未找到预设，已应用默认参数（回退）")
 
+
+            # 清除加载标志并触发最终预览更新
+            self._loading_image = False
+            if self._current_image:
+                self._prepare_proxy()
+                self._trigger_preview_update()
+            
             # 通知UI：图像已加载完成
             self.image_loaded.emit()
 
         except Exception as e:
+            self._loading_image = False  # 确保异常情况下也清除标志
             import traceback
             print(traceback.format_exc())
             self.status_message_changed.emit(f"无法加载图像: {e}")
@@ -898,6 +902,12 @@ class ApplicationContext(QObject):
                 except Exception:
                     pass
         
+        # 在更新参数前先设置orientation，避免预览闪烁
+        try:
+            self._contactsheet_profile.orientation = preset.orientation
+        except Exception:
+            pass
+        
         # 确保在更新参数前先准备好proxy，避免使用旧proxy导致预览暗淡
         if self._current_image:
             self._prepare_proxy()
@@ -907,8 +917,6 @@ class ApplicationContext(QObject):
 
         # 4. 加载crop和orientation（完全分离模型）
         try:
-            # 设置contactsheet的orientation
-            self._contactsheet_profile.orientation = preset.orientation
 
             # 再加载crop（使用新的CropInstance接口）
             crop_instances = preset.get_crop_instances()
@@ -929,8 +937,8 @@ class ApplicationContext(QObject):
                 except Exception:
                     self._contactsheet_profile.crop_rect = None
         except Exception:
-            # 最终回退：只设置contactsheet的orientation
-            self._contactsheet_profile.orientation = preset.orientation
+            # orientation 已在前面设置，这里无需重复
+            pass
         
         # 切换到 contactsheet profile
         self._current_profile_kind = 'contactsheet'
@@ -1169,7 +1177,7 @@ class ApplicationContext(QObject):
         
         # 触发参数更新和预览刷新
         self.params_changed.emit(self._current_params)
-        if self._current_image:
+        if self._current_image and not getattr(self, '_loading_image', False):
             self._prepare_proxy()
             self._trigger_preview_update()
     
@@ -1253,6 +1261,9 @@ class ApplicationContext(QObject):
 
     def reset_params(self):
         """重置参数：根据当前图像类型选择智能默认预设"""
+        # 保存当前orientation，避免被预设重置
+        saved_orientation = self._contactsheet_profile.orientation
+        
         if self._current_image:
             # 有图像时，使用智能分类器选择默认预设
             try:
@@ -1279,6 +1290,14 @@ class ApplicationContext(QObject):
                 self._contactsheet_profile.params = self._current_params.copy()
                 self.params_changed.emit(self._current_params)
                 self.status_message_changed.emit("参数已重置（回退内部默认）")
+        
+        # 恢复保存的orientation
+        self._contactsheet_profile.orientation = saved_orientation
+        
+        # 重新更新预览，确保使用正确的orientation
+        if self._current_image:
+            self._prepare_proxy()
+            self._trigger_preview_update()
 
     def set_current_as_folder_default(self):
         """将当前参数设置为文件夹默认设置"""

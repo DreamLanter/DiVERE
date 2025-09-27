@@ -1,7 +1,7 @@
 {
     "name": "Kodak2383",
     "type": ["IDT","regular","working_space"],
-    "icc_profile": "sRGB Profile.icc",
+    "icc_profile": "Kodak2383_Linear.icc",
     "primaries": {
         "R": [0.6793722285220385, 0.3144251767600739],
         "G": [0.25249108689540845,0.6898080814131717],

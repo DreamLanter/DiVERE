@@ -806,13 +806,49 @@ class ApplicationContext(QObject):
         if preset.input_transformation and preset.input_transformation.name:
             # 同步输入色彩空间名称
             new_params.input_color_space_name = preset.input_transformation.name
-            # 将预设中的 idt.gamma 写入 ColorSpaceManager（内存覆盖，不持久化）
+            # 将预设中的 idt 数据写入 ColorSpaceManager（内存覆盖，不持久化）
             try:
                 cs_def = preset.input_transformation.definition or {}
-                if 'gamma' in cs_def:
-                    self.color_space_manager.update_color_space_gamma(preset.input_transformation.name, float(cs_def['gamma']))
-            except Exception:
-                pass
+                cs_name = preset.input_transformation.name
+                
+                # 检查是否包含完整的色彩空间定义
+                if 'primitives' in cs_def and 'white' in cs_def:
+                    # 检查是否已存在预定义色彩空间，避免覆盖丢失type等属性
+                    existing_info = self.color_space_manager.get_color_space_info(cs_name)
+                    if existing_info and existing_info.get('type'):
+                        # 如果是预定义色彩空间，只更新gamma，不覆盖整个定义
+                        print(f"Debug: 跳过注册预定义色彩空间 {cs_name}，仅更新gamma")
+                        gamma = cs_def.get('gamma', 1.0)
+                        self.color_space_manager.update_color_space_gamma(cs_name, gamma)
+                    else:
+                        # 转换格式：从preset格式转换为register_custom_colorspace所需格式
+                        primitives = cs_def['primitives']  # {"r": {"x": ..., "y": ...}, ...}
+                        white = cs_def['white']           # {"x": ..., "y": ...}
+                        gamma = cs_def.get('gamma', 1.0)
+                        
+                        # 转换为numpy数组格式
+                        primaries_xy = np.array([
+                            [primitives['r']['x'], primitives['r']['y']],
+                            [primitives['g']['x'], primitives['g']['y']], 
+                            [primitives['b']['x'], primitives['b']['y']]
+                        ])
+                        white_point_xy = np.array([white['x'], white['y']])
+                        
+                        # 注册完整的自定义色彩空间（仅对真正的自定义色彩空间）
+                        print(f"Debug: 注册自定义色彩空间 {cs_name}: primaries={primaries_xy.tolist()}, white={white_point_xy.tolist()}, gamma={gamma}")
+                        self.color_space_manager.register_custom_colorspace(
+                            name=cs_name,
+                            primaries_xy=primaries_xy,
+                            white_point_xy=white_point_xy,
+                            gamma=gamma
+                        )
+                elif 'gamma' in cs_def:
+                    # 只有gamma，仅更新gamma
+                    self.color_space_manager.update_color_space_gamma(cs_name, float(cs_def['gamma']))
+            except Exception as e:
+                print(f"处理input_transformation失败: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 兼容处理矩阵和曲线
         if preset.density_matrix:
@@ -932,13 +968,49 @@ class ApplicationContext(QObject):
                 # 同步 input colorspace 与显式矩阵等
                 if entry.preset.input_transformation and entry.preset.input_transformation.name:
                     params.input_color_space_name = entry.preset.input_transformation.name
-                    # 将 per-crop 预设中的 idt.gamma 写入 ColorSpaceManager（内存覆盖）
+                    # 将 per-crop 预设中的 idt 数据写入 ColorSpaceManager（内存覆盖）
                     try:
                         cs_def = entry.preset.input_transformation.definition or {}
-                        if 'gamma' in cs_def:
-                            self.color_space_manager.update_color_space_gamma(entry.preset.input_transformation.name, float(cs_def['gamma']))
-                    except Exception:
-                        pass
+                        cs_name = entry.preset.input_transformation.name
+                        
+                        # 检查是否包含完整的色彩空间定义
+                        if 'primitives' in cs_def and 'white' in cs_def:
+                            # 检查是否已存在预定义色彩空间，避免覆盖丢失type等属性
+                            existing_info = self.color_space_manager.get_color_space_info(cs_name)
+                            if existing_info and existing_info.get('type'):
+                                # 如果是预定义色彩空间，只更新gamma，不覆盖整个定义
+                                print(f"Debug: 跳过注册预定义色彩空间 {cs_name} (crop)，仅更新gamma")
+                                gamma = cs_def.get('gamma', 1.0)
+                                self.color_space_manager.update_color_space_gamma(cs_name, gamma)
+                            else:
+                                # 转换格式：从preset格式转换为register_custom_colorspace所需格式
+                                primitives = cs_def['primitives']  # {"r": {"x": ..., "y": ...}, ...}
+                                white = cs_def['white']           # {"x": ..., "y": ...}
+                                gamma = cs_def.get('gamma', 1.0)
+                                
+                                # 转换为numpy数组格式
+                                primaries_xy = np.array([
+                                    [primitives['r']['x'], primitives['r']['y']],
+                                    [primitives['g']['x'], primitives['g']['y']], 
+                                    [primitives['b']['x'], primitives['b']['y']]
+                                ])
+                                white_point_xy = np.array([white['x'], white['y']])
+                                
+                                # 注册完整的自定义色彩空间（仅对真正的自定义色彩空间）
+                                print(f"Debug: 注册自定义色彩空间 {cs_name} (crop): primaries={primaries_xy.tolist()}, white={white_point_xy.tolist()}, gamma={gamma}")
+                                self.color_space_manager.register_custom_colorspace(
+                                    name=cs_name,
+                                    primaries_xy=primaries_xy,
+                                    white_point_xy=white_point_xy,
+                                    gamma=gamma
+                                )
+                        elif 'gamma' in cs_def:
+                            # 只有gamma，仅更新gamma
+                            self.color_space_manager.update_color_space_gamma(cs_name, float(cs_def['gamma']))
+                    except Exception as e:
+                        print(f"处理per-crop input_transformation失败: {e}")
+                        import traceback
+                        traceback.print_exc()
                 if entry.preset.density_matrix:
                     params.density_matrix_name = entry.preset.density_matrix.name
                     if entry.preset.density_matrix.values:
@@ -1232,10 +1304,19 @@ class ApplicationContext(QObject):
             }
             
             # 添加白点和基色信息（如果存在）
-            if "white" in cs_info:
-                idt_data["white"] = cs_info["white"]
-            if "primitives" in cs_info:
-                idt_data["primitives"] = cs_info["primitives"]
+            if "white_point" in cs_info:
+                white_point = cs_info["white_point"]
+                if isinstance(white_point, np.ndarray):
+                    idt_data["white"] = {"x": float(white_point[0]), "y": float(white_point[1])}
+
+            if "primaries" in cs_info:
+                primaries = cs_info["primaries"]
+                if isinstance(primaries, np.ndarray):
+                    idt_data["primitives"] = {
+                        "r": {"x": float(primaries[0][0]), "y": float(primaries[0][1])},
+                        "g": {"x": float(primaries[1][0]), "y": float(primaries[1][1])},
+                        "b": {"x": float(primaries[2][0]), "y": float(primaries[2][1])}
+                    }
             
             # 提取当前的cc_params数据
             cc_params_data = {

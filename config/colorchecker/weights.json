@@ -3,13 +3,13 @@
     "version": "1.0",
     "weights": {
         "grayscale_weight": 1.0,
-        "skin_weight": 1.0,
+        "skin_weight": 5.0,
         "primaries_weight": 1.0,
         "color_weight": 1.0
     },
     "individual_weights": {
-        "C3": 1.0,
-        "D5": 1.0
+        "D2": 20.0,
+        "D5": 20.0
     },
     "patch_categories": {
         "grayscale": ["D1", "D3", "D4", "D6"],

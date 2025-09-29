@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QSlider, QDoubleSpinBox, QComboBox,
     QGroupBox, QPushButton, QCheckBox, QTabWidget,
-    QScrollArea, QMessageBox, QInputDialog, QFileDialog
+    QScrollArea, QMessageBox, QInputDialog, QFileDialog,
+    QApplication
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -23,6 +24,63 @@ from divere.ui.ucs_triangle_widget import UcsTriangleWidget
 from divere.core.color_space import xy_to_uv, uv_to_xy
 from divere.utils.enhanced_config_manager import enhanced_config_manager
 from divere.utils.colorchecker_loader import validate_colorchecker_workspace_compatibility
+
+
+class PrecisionSlider(QSlider):
+    """支持Command/Ctrl键精细调整的自定义滑块"""
+    
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._precision_mode = False
+        self._accumulated_delta = 0.0  # 累积的鼠标移动
+        self._last_mouse_pos = None
+        self._precision_ratio = 5  # 5:1的精细比例
+        
+    def mousePressEvent(self, event):
+        modifiers = QApplication.keyboardModifiers()
+        self._precision_mode = bool(modifiers & Qt.ControlModifier)
+        
+        if self._precision_mode:
+            # 精细模式：记录起始位置，不调用父类
+            self._last_mouse_pos = event.pos().x()
+            self._accumulated_delta = 0.0
+            # 在精细模式下，我们仍然需要处理点击位置来移动滑块
+            # 但是要阻止默认的跳转行为
+            self.setSliderDown(True)
+        else:
+            # 正常模式：完全交给父类处理
+            super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if self._precision_mode and self._last_mouse_pos is not None:
+            # 精细模式：自定义移动逻辑
+            current_pos = event.pos().x()
+            mouse_delta = current_pos - self._last_mouse_pos
+            
+            # 累积鼠标移动（10:1比例）
+            self._accumulated_delta += mouse_delta / self._precision_ratio
+            
+            # 当累积移动超过1个slider单位时才实际移动
+            if abs(self._accumulated_delta) >= 1.0:
+                slider_delta = int(self._accumulated_delta)
+                new_value = self.value() + slider_delta
+                new_value = max(self.minimum(), min(self.maximum(), new_value))
+                self.setValue(new_value)
+                self._accumulated_delta -= slider_delta  # 保留小数部分
+            
+            self._last_mouse_pos = current_pos
+        else:
+            # 正常模式：完全交给父类处理
+            super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if self._precision_mode:
+            # 清理精细模式状态
+            self._precision_mode = False
+            self._accumulated_delta = 0.0
+            self._last_mouse_pos = None
+            self.setSliderDown(False)
+        super().mouseReleaseEvent(event)
 
 
 class ParameterPanel(QWidget):
@@ -112,7 +170,7 @@ class ParameterPanel(QWidget):
         colorspace_group = QGroupBox("输入色彩变换")
         colorspace_layout = QGridLayout(colorspace_group)
         # IDT Gamma（在下拉菜单上方）
-        self.idt_gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.idt_gamma_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.idt_gamma_spinbox = QDoubleSpinBox()
         self._setup_slider_spinbox(self.idt_gamma_slider, self.idt_gamma_spinbox, 500, 2800, 0.5, 2.8, 0.005)
         colorspace_layout.addWidget(QLabel("IDT Gamma:"), 0, 0)
@@ -314,9 +372,9 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(widget)
         inversion_group = QGroupBox("密度反相")
         inversion_layout = QGridLayout(inversion_group)
-        self.density_gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.density_gamma_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.density_gamma_spinbox = QDoubleSpinBox()
-        self.density_dmax_slider = QSlider(Qt.Orientation.Horizontal)
+        self.density_dmax_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.density_dmax_spinbox = QDoubleSpinBox()
         self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 100, 4000, 0.1, 4.0, 0.005)
         self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 4800, 0.0, 4.8, 0.005)
@@ -368,11 +426,11 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(widget)
         rgb_group = QGroupBox("RGB曝光调整")
         rgb_layout = QGridLayout(rgb_group)
-        self.red_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self.red_gain_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.red_gain_spinbox = QDoubleSpinBox()
-        self.green_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self.green_gain_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.green_gain_spinbox = QDoubleSpinBox()
-        self.blue_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self.blue_gain_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.blue_gain_spinbox = QDoubleSpinBox()
         self._setup_slider_spinbox(self.red_gain_slider, self.red_gain_spinbox, -3000, 3000, -3.0, 3.0, 0.005)
         self._setup_slider_spinbox(self.green_gain_slider, self.green_gain_spinbox, -3000, 3000, -3.0, 3.0, 0.005)
@@ -398,7 +456,7 @@ class ParameterPanel(QWidget):
         glare_group = QGroupBox("屏幕反光补偿")
         glare_layout = QGridLayout(glare_group)
         
-        self.glare_compensation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.glare_compensation_slider = PrecisionSlider(Qt.Orientation.Horizontal)
         self.glare_compensation_spinbox = QDoubleSpinBox()
         self._setup_slider_spinbox(self.glare_compensation_slider, self.glare_compensation_spinbox, 0, 5000, 0.0, 5.0, 0.005)
         self.glare_compensation_spinbox.setSuffix("%")

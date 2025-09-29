@@ -107,7 +107,6 @@ class CCMOptimizer:
         # 加载权重配置（可选）。默认使用内置的 config/colorchecker/weights.json
         self._weights_config = self._load_weights_config(weights_config_path)
         self._patch_weight_map = self._build_patch_weight_map(self._weights_config)
-        self._channel_weights = self._load_channel_weights(self._weights_config)
         # 加载参数边界配置
         self._bounds_config = self._load_optimization_bounds(bounds_config_path)
         
@@ -325,27 +324,34 @@ class CCMOptimizer:
         }
 
     def _build_patch_weight_map(self, cfg: Dict[str, Any]) -> Dict[str, float]:
-        """根据类别配置生成每个色块到权重的映射。
-        通用化：对 cfg['patch_categories'] 中的每个类别 cat，优先查找
-        cfg['weights'][f"{cat}_weight"] 作为该类别权重（缺省=1）。
-        支持自定义类别，例如 'primaries' + 'primaries_weight'。
-        支持individual_weights覆盖特定色块权重。
+        """根据配置生成每个色块到权重的映射。
+        新版本：直接从 cfg['weights'] 读取色块ID到权重的映射。
+        向后兼容：如果是旧格式（包含patch_categories），使用旧逻辑。
         """
         mapping: Dict[str, float] = {}
         try:
-            w = cfg.get("weights", {}) or {}
-            cats = cfg.get("patch_categories", {}) or {}
-            # 首先根据类别设置权重
-            for cat, ids in cats.items():
-                weight_key = f"{cat}_weight"
-                wv = float(w.get(weight_key, 1.0))
-                for pid in ids or []:
-                    mapping[str(pid)] = wv
+            weights = cfg.get("weights", {}) or {}
             
-            # 然后应用个别权重覆盖（优先级更高）
-            individual_weights = cfg.get("individual_weights", {}) or {}
-            for patch_id, weight in individual_weights.items():
-                mapping[str(patch_id)] = float(weight)
+            # 检查是否为新格式（直接的色块权重映射）
+            # 新格式的weights字段包含类似"A1": 1.0的映射
+            if weights and any(key.upper() in ['A1', 'A2', 'B1', 'C1', 'D1'] for key in weights.keys()):
+                # 新格式：直接读取色块权重
+                for patch_id, weight in weights.items():
+                    mapping[str(patch_id)] = float(weight)
+            else:
+                # 旧格式：使用原有的分组逻辑（向后兼容）
+                cats = cfg.get("patch_categories", {}) or {}
+                # 首先根据类别设置权重
+                for cat, ids in cats.items():
+                    weight_key = f"{cat}_weight"
+                    wv = float(weights.get(weight_key, 1.0))
+                    for pid in ids or []:
+                        mapping[str(pid)] = wv
+                
+                # 然后应用个别权重覆盖（优先级更高）
+                individual_weights = cfg.get("individual_weights", {}) or {}
+                for patch_id, weight in individual_weights.items():
+                    mapping[str(patch_id)] = float(weight)
         except Exception:
             pass
         return mapping
@@ -353,28 +359,104 @@ class CCMOptimizer:
     def _get_patch_weight(self, patch_id: str) -> float:
         return float(self._patch_weight_map.get(patch_id, 1.0))
 
-    def _load_channel_weights(self, cfg: Dict[str, Any]) -> np.ndarray:
-        """加载每通道主色权重（R/G/B）。缺省为[1,1,1]。支持
-        cfg['primary_weight'] = {"R": w_r, "G": w_g, "B": w_b}
-        """
+    def _print_patch_details(self, input_patches: Dict[str, Tuple[float, float, float]], 
+                           optimal_params: Dict, correction_matrix: Optional[np.ndarray] = None):
+        """打印所有色块的详细误差信息"""
+        
+        # 加载色块信息
         try:
-            p = cfg.get('primary_weight', {}) or {}
-            # 兼容大小写与数组形式
-            if isinstance(p, dict):
-                wr = float(p.get('R', p.get('r', 1.0)))
-                wg = float(p.get('G', p.get('g', 1.0)))
-                wb = float(p.get('B', p.get('b', 1.0)))
-                v = np.array([wr, wg, wb], dtype=float)
-            elif isinstance(p, (list, tuple)) and len(p) == 3:
-                v = np.array([float(p[0]), float(p[1]), float(p[2])], dtype=float)
-            else:
-                v = np.array([1.0, 1.0, 1.0], dtype=float)
+            from divere.utils.app_paths import resolve_data_path
+            weights_path = resolve_data_path("config", "colorchecker", "weights.json")
         except Exception:
-            v = np.array([1.0, 1.0, 1.0], dtype=float)
-        # 避免全零
-        if not np.isfinite(v).all() or float(v.sum()) <= 0.0:
-            v = np.array([1.0, 1.0, 1.0], dtype=float)
-        return v
+            weights_path = Path(__file__).parent.parent.parent / "config" / "colorchecker" / "weights.json"
+        
+        # 读取色块说明信息
+        patch_info = {}
+        try:
+            import json
+            if weights_path.exists():
+                with open(weights_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    patch_info = config.get('info', {})
+        except Exception:
+            pass
+        
+        # 运行管线获取输出结果
+        output_patches = self.pipeline.simulate_full_pipeline(
+            input_patches,
+            primaries_xy=optimal_params['primaries_xy'],
+            gamma=optimal_params['gamma'],
+            dmax=optimal_params['dmax'],
+            r_gain=optimal_params['r_gain'],
+            b_gain=optimal_params['b_gain'],
+            correction_matrix=correction_matrix if correction_matrix is not None else optimal_params.get('density_matrix'),
+        )
+        
+        # 首先打印优化参数结果
+        print("\n" + "="*80)
+        print("优化参数结果")
+        print("="*80)
+        
+        print("\n基础参数:")
+        print(f"  gamma: {optimal_params['gamma']:.6f}")
+        print(f"  dmax: {optimal_params['dmax']:.6f}")
+        print(f"  r_gain: {optimal_params['r_gain']:.6f}")
+        print(f"  b_gain: {optimal_params['b_gain']:.6f}")
+        
+        # 打印IDT基色坐标（如果存在）
+        if 'primaries_xy' in optimal_params and optimal_params['primaries_xy'] is not None:
+            primaries = optimal_params['primaries_xy']
+            print(f"\nIDT基色坐标:")
+            print(f"  红色 (R): x={primaries[0,0]:.6f}, y={primaries[0,1]:.6f}")
+            print(f"  绿色 (G): x={primaries[1,0]:.6f}, y={primaries[1,1]:.6f}")
+            print(f"  蓝色 (B): x={primaries[2,0]:.6f}, y={primaries[2,1]:.6f}")
+        
+        # 打印密度校正矩阵（如果存在）
+        if 'density_matrix' in optimal_params and optimal_params['density_matrix'] is not None:
+            matrix = optimal_params['density_matrix']
+            print(f"\n密度校正矩阵:")
+            for i in range(3):
+                row_str = "  [" + ", ".join([f"{matrix[i,j]:8.6f}" for j in range(3)]) + "]"
+                print(row_str)
+        
+        print("\n" + "="*80)
+        print("ColorChecker 24色块详细误差报告")
+        print("="*80)
+        
+        # 按A1-D6顺序打印
+        all_patches = [
+            'A1', 'A2', 'A3', 'A4', 'A5', 'A6',
+            'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 
+            'C1', 'C2', 'C3', 'C4', 'C5', 'C6',
+            'D1', 'D2', 'D3', 'D4', 'D5', 'D6'
+        ]
+        
+        for patch_id in all_patches:
+            if patch_id in self.reference_values and patch_id in output_patches:
+                ref_rgb = np.array(self.reference_values[patch_id])
+                out_rgb = np.array(output_patches[patch_id])
+                
+                # 计算log-RMSE
+                log_rmse = calculate_log_rmse(ref_rgb, out_rgb)
+                
+                # 获取权重和说明
+                weight = self._get_patch_weight(patch_id)
+                info = patch_info.get(patch_id, "")
+                
+                print(f"\n{patch_id} ({info}):")
+                print(f"  目标RGB: [{ref_rgb[0]:.6f}, {ref_rgb[1]:.6f}, {ref_rgb[2]:.6f}]")
+                print(f"  结果RGB: [{out_rgb[0]:.6f}, {out_rgb[1]:.6f}, {out_rgb[2]:.6f}]")
+                print(f"  log-RMSE: {log_rmse:.8f}")
+                print(f"  权重: {weight}")
+                
+                # 如果误差较大，额外标注
+                if log_rmse > 1e-3:
+                    print(f"  ⚠️  误差较大")
+                elif log_rmse < 1e-6:
+                    print(f"  ✓  误差极小")
+        
+        print("\n" + "="*80)
+
     
     def _load_optimization_bounds(self, bounds_config_path: Optional[str]) -> Dict[str, Any]:
         """加载优化参数边界配置"""
@@ -442,8 +524,12 @@ class CCMOptimizer:
             idx_slice = self._param_indices['primaries_xy']
             result['primaries_xy'] = params[idx_slice].reshape(3, 2)
         else:
-            # 使用sRGB基色作为固定值（当不优化IDT时）
-            result['primaries_xy'] = np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06]).reshape(3, 2)
+            # 从当前管线读取IDT变换（当不优化IDT时）
+            if self.app_context and hasattr(self.app_context, 'get_current_idt_primaries'):
+                result['primaries_xy'] = self.app_context.get_current_idt_primaries()
+            else:
+                # 后备方案：使用sRGB基色（向后兼容）
+                result['primaries_xy'] = np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06]).reshape(3, 2)
         
         # density_matrix（如果启用优化）
         if 'density_matrix' in self._param_indices:
@@ -546,8 +632,7 @@ class CCMOptimizer:
             weighted_avg_log_rmse, _ = calculate_colorchecker_log_rmse(
                 self.reference_values,
                 output_patches,
-                weights_dict,
-                channel_weights=self._channel_weights
+                weights_dict
             )
             
             return weighted_avg_log_rmse
@@ -642,20 +727,11 @@ class CCMOptimizer:
                 out_rgb = np.array(output_patches[patch_id])
                 
                 # 计算 log-RMSE 损失
-                log_rmse = calculate_log_rmse(
-                    ref_rgb, 
-                    out_rgb, 
-                    weights=self._channel_weights
-                )
+                log_rmse = calculate_log_rmse(ref_rgb, out_rgb)
                 
                 # 为了兼容性，也计算传统的RGB误差
                 error = ref_rgb - out_rgb
-                wr, wg, wb = self._channel_weights
-                ch_denom = float(wr + wg + wb)
-                if ch_denom > 0.0:
-                    mse = float((wr * error[0]**2 + wg * error[1]**2 + wb * error[2]**2) / ch_denom)
-                else:
-                    mse = float(np.mean(error ** 2))
+                mse = float(np.mean(error ** 2))
                 rmse = float(np.sqrt(mse))
                 
                 w = self._get_patch_weight(patch_id)
@@ -782,6 +858,9 @@ class CCMOptimizer:
             print(completion_message)
             print(final_message)
             print(iterations_message)
+        
+        # 打印详细的色块误差信息
+        self._print_patch_details(input_patches, optimal_params, correction_matrix)
             
         return {
             'success': True,

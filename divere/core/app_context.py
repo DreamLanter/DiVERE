@@ -1608,6 +1608,34 @@ class ApplicationContext(QObject):
         except Exception:
             return 1.0
 
+    def get_current_idt_primaries(self) -> np.ndarray:
+        """读取当前输入色彩空间的IDT Primaries（无则返回sRGB）。
+        
+        Returns:
+            形状为 (3, 2) 的 numpy 数组，按 R、G、B 顺序为 xy 坐标
+        """
+        try:
+            cs_name = self._current_params.input_color_space_name
+            cs_info = self.color_space_manager.get_color_space_info(cs_name) or {}
+            
+            # 获取 primaries，期望格式为 (3, 2) 数组
+            primaries = cs_info.get("primaries")
+            if primaries is not None:
+                primaries_array = np.asarray(primaries, dtype=np.float64)
+                if primaries_array.shape == (3, 2):
+                    return primaries_array
+                else:
+                    # 记录格式问题但继续使用默认值
+                    if hasattr(self, '_verbose_logs') and self._verbose_logs:
+                        print(f"警告: 色彩空间 {cs_name} 的 primaries 格式不正确: {primaries_array.shape}")
+        except Exception as e:
+            # 记录异常但继续使用默认值
+            if hasattr(self, '_verbose_logs') and self._verbose_logs:
+                print(f"警告: 获取当前IDT primaries失败: {e}")
+        
+        # 默认返回 sRGB primaries (与原始硬编码值保持一致)
+        return np.array([0.64, 0.33, 0.30, 0.60, 0.15, 0.06], dtype=np.float64).reshape(3, 2)
+
     def _trigger_preview_update(self):
         if not self._current_proxy:
             return

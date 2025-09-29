@@ -30,7 +30,7 @@ def calculate_log_rmse(
     Args:
         color1: 第一个颜色 (R, G, B)
         color2: 第二个颜色 (R, G, B)
-        weights: 可选的通道权重 [w_r, w_g, w_b]，默认 [1, 1, 1]
+        weights: 已废弃，保留参数仅为兼容性
         epsilon: 防零常数，避免 log(0)
         
     Returns:
@@ -51,12 +51,7 @@ def calculate_log_rmse(
     # 计算差值
     diff = log1 - log2
     
-    # 应用权重（如果提供）
-    if weights is not None:
-        weights = np.asarray(weights, dtype=np.float64)
-        diff = diff * weights
-    
-    # 计算 RMSE
+    # 移除channel权重机制，直接计算RGB三通道的RMSE
     mse = np.mean(diff ** 2)
     rmse = np.sqrt(mse)
     
@@ -77,7 +72,7 @@ def calculate_colorchecker_log_rmse(
         reference_patches: 参考色块 RGB 值
         output_patches: 输出色块 RGB 值
         weights: 色块权重
-        channel_weights: 可选的RGB通道权重 [w_r, w_g, w_b]
+        channel_weights: 已废弃，保留参数仅为兼容性
         epsilon: 防零常数
         
     Returns:
@@ -118,12 +113,7 @@ def calculate_colorchecker_log_rmse(
     # 计算差值
     diff = log_ref - log_out  # shape: (N, 3)
     
-    # 应用通道权重（如果提供）
-    if channel_weights is not None:
-        channel_weights = np.asarray(channel_weights, dtype=np.float64)
-        diff = diff * channel_weights[np.newaxis, :]  # 广播到 (N, 3)
-    
-    # 计算每个色块的 RMSE
+    # 移除channel权重机制，直接计算每个色块的RMSE
     patch_rmse = np.sqrt(np.mean(diff ** 2, axis=1))  # shape: (N,)
     
     # 计算加权平均
@@ -173,12 +163,7 @@ def calculate_batch_log_rmse(
     # 计算差值
     diff = log1 - log2
     
-    # 应用通道权重
-    if channel_weights is not None:
-        channel_weights = np.asarray(channel_weights, dtype=np.float64)
-        diff = diff * channel_weights[np.newaxis, :]
-    
-    # 计算每对的 RMSE
+    # 移除channel权重机制，直接计算每对的RMSE
     rmse_values = np.sqrt(np.mean(diff ** 2, axis=1))
     
     return rmse_values.astype(np.float64)

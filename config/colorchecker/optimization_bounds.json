@@ -9,7 +9,7 @@
             "description": "密度反差参数"
         },
         "dmax": {
-            "min": 1.0,
+            "min": 0.5,
             "max": 3.5,
             "default": 2.5,
             "description": "最大密度参数"

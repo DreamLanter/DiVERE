@@ -29,6 +29,8 @@ from .save_dialog import SaveImageDialog
 from .parameter_panel import ParameterPanel
 from .theme import apply_theme, current_theme
 from .cmaes_progress_dialog import CMAESProgressDialog
+from .shortcuts import ShortcutsBinder, install_ime_brackets_fallback
+from .shortcut_help_dialog import ShortcutHelpDialog
 
 
 class MainWindow(QMainWindow):
@@ -39,6 +41,11 @@ class MainWindow(QMainWindow):
         
         # 初始化核心组件
         self.context = ApplicationContext(self)
+
+        # 导航相关属性
+        self.image_file_list = []  # 当前文件夹中的图片文件列表
+        self.current_image_index = -1  # 当前图片在列表中的索引
+        self.current_image_path = None  # 当前图片的路径
 
         # 设置窗口
         self.setWindowTitle("DiVERE - 数字彩色放大机")
@@ -90,6 +97,12 @@ class MainWindow(QMainWindow):
         
         # 自动加载测试图像（可选）
         # self._load_demo_image()
+
+        ## 快捷键支持
+        # 一行完成：注册快捷键 + 安装【】兜底
+        self._binder = ShortcutsBinder(self)
+        self._binder.setup_default_shortcuts()
+        self._ime_filter = install_ime_brackets_fallback(self._binder, install_on_app=True)
         
     def _apply_crop_and_rotation_for_export(self, src_image: ImageData, rect_norm: Optional[tuple], orientation_deg: int) -> ImageData:
         """按导出标准链路应用裁剪与旋转：先裁剪再旋转。"""
@@ -180,6 +193,8 @@ class MainWindow(QMainWindow):
         # 屏幕反光补偿交互信号连接
         self.parameter_panel.glare_compensation_interaction_started.connect(self._on_glare_compensation_interaction_started)
         self.parameter_panel.glare_compensation_interaction_ended.connect(self._on_glare_compensation_interaction_ended)
+        # Proxy尺寸变化信号连接
+        self.parameter_panel.proxy_size_changed.connect(self.context.update_proxy_max_size)
         self.parameter_panel.glare_compensation_realtime_update.connect(self._on_glare_compensation_realtime_update)
         # 当 UCS 三角拖动结束：注册/切换到一个临时 custom 输入空间，触发代理重建与预览
         self.parameter_panel.custom_primaries_changed.connect(self._on_custom_primaries_changed)
@@ -370,6 +385,15 @@ class MainWindow(QMainWindow):
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
         
+        # 快捷键参考
+        shortcuts_action = QAction("快捷键参考", self)
+        shortcuts_action.setShortcut(QKeySequence("F1"))
+        shortcuts_action.setToolTip("显示所有可用的键盘快捷键")
+        shortcuts_action.triggered.connect(self._show_shortcuts_help)
+        help_menu.addAction(shortcuts_action)
+        
+        help_menu.addSeparator()
+        
         # 关于
         about_action = QAction("关于", self)
         about_action.triggered.connect(self._show_about)
@@ -395,12 +419,12 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # 重置参数
-        reset_action = QAction("重置", self)
+        reset_action = QAction("粘贴默认", self)
         reset_action.triggered.connect(self._reset_parameters)
         toolbar.addAction(reset_action)
         
         # 设为当前文件夹默认
-        set_folder_default_action = QAction("设为当前文件夹默认", self)
+        set_folder_default_action = QAction("复制为默认", self)
         set_folder_default_action.setToolTip("将当前参数设置保存为当前文件夹的默认设置")
         set_folder_default_action.triggered.connect(self._set_folder_default)
         toolbar.addAction(set_folder_default_action)
@@ -1863,6 +1887,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法打开文件分类规则管理器: {str(e)}")
     
+    def _show_shortcuts_help(self):
+        """显示快捷键帮助对话框"""
+        try:
+            dialog = ShortcutHelpDialog(self)
+            dialog.exec()
+        except Exception as e:
+            print(f"显示快捷键帮助时出错: {e}")
+            QMessageBox.warning(
+                self,
+                "错误",
+                f"无法显示快捷键帮助：{str(e)}"
+            )
+    
     def _show_about(self):
         """显示关于对话框"""
         QMessageBox.about(
@@ -2347,6 +2384,127 @@ class MainWindow(QMainWindow):
             self.preview_widget.update_cutoff_compensation(compensation_value)
         except Exception as e:
             print(f"实时更新cut-off显示失败: {e}")
+    
+    def keyPressEvent(self, event):
+        """处理键盘快捷键"""
+        from PySide6.QtCore import Qt
+        
+        # 检测修饰符
+        modifiers = event.modifiers()
+        is_fine_adjust = bool(modifiers & Qt.ControlModifier)
+        step = 0.001 if is_fine_adjust else 0.01
+        
+        key = event.key()
+        text= event.text() # 用于检测字母大小写和全角
+        
+        try:
+            # 获取当前参数
+            params = self.context.get_current_params()
+            if params is None:
+                super().keyPressEvent(event)
+                return
+            
+            # 参数调整快捷键
+            if key == Qt.Key_Q:  # R通道降曝光（增青）
+                r, g, b = params.rgb_gains
+                new_r = max(-3.0, min(3.0, r - step))
+                params.rgb_gains = (new_r, g, b)
+                self.context.update_params(params)
+                self._show_status_message(f"R通道: {new_r:.3f}")
+                
+            elif key == Qt.Key_E:  # R通道增曝光（增红）
+                r, g, b = params.rgb_gains  
+                new_r = max(-3.0, min(3.0, r + step))
+                params.rgb_gains = (new_r, g, b)
+                self.context.update_params(params)
+                self._show_status_message(f"R通道: {new_r:.3f}")
+                
+            elif key == Qt.Key_A:  # B通道降曝光（增黄）
+                r, g, b = params.rgb_gains
+                new_b = max(-3.0, min(3.0, b - step))
+                params.rgb_gains = (r, g, new_b)
+                self.context.update_params(params)
+                self._show_status_message(f"B通道: {new_b:.3f}")
+                
+            elif key == Qt.Key_D:  # B通道增曝光（增蓝）
+                r, g, b = params.rgb_gains
+                new_b = max(-3.0, min(3.0, b + step))
+                params.rgb_gains = (r, g, new_b)
+                self.context.update_params(params)
+                self._show_status_message(f"B通道: {new_b:.3f}")
+                
+            elif key == Qt.Key_W:  # dmax降低（提升曝光）
+                new_dmax = max(0.0, min(4.8, params.density_dmax - step))
+                params.density_dmax = new_dmax
+                self.context.update_params(params)
+                self._show_status_message(f"最大密度: {new_dmax:.3f}")
+                
+            elif key == Qt.Key_S:  # dmax增大（降低曝光）
+                new_dmax = max(0.0, min(4.8, params.density_dmax + step))
+                params.density_dmax = new_dmax
+                self.context.update_params(params)
+                self._show_status_message(f"最大密度: {new_dmax:.3f}")
+                
+            elif key == Qt.Key_R:  # gamma增大（增加反差）
+                new_gamma = max(0.1, min(4.0, params.density_gamma + step))
+                params.density_gamma = new_gamma
+                self.context.update_params(params)
+                self._show_status_message(f"密度反差: {new_gamma:.3f}")
+                
+            elif key == Qt.Key_F:  # gamma减小（降低反差）
+                new_gamma = max(0.1, min(4.0, params.density_gamma - step))
+                params.density_gamma = new_gamma
+                self.context.update_params(params)
+                self._show_status_message(f"密度反差: {new_gamma:.3f}")
+                
+            # 操作功能快捷键
+            elif key == Qt.Key_BracketLeft:  # [ - 左旋转
+                self.context.rotate(90)
+                self._show_status_message("左旋转 90°")
+                
+            elif key == Qt.Key_BracketRight:  # ] - 右旋转
+                self.context.rotate(-90)
+                self._show_status_message("右旋转 90°")
+
+            elif text == "【":  # [ - 左旋转
+                self.context.rotate(90)
+                self._show_status_message("左旋转 90°")
+
+            elif text == "】":  # ] - 右旋转
+                self.context.rotate(-90)
+                self._show_status_message("右旋转 90°")
+                
+            elif key == Qt.Key_Space:  # 空格 - 重置参数
+                self._reset_parameters()
+                self._show_status_message("参数已重置")
+                
+            elif key == Qt.Key_C and is_fine_adjust:  # Ctrl/Cmd+C - 设为文件夹默认
+                self._set_folder_default()
+                self._show_status_message("已设为文件夹默认")
+                
+            # 导航快捷键
+            elif key == Qt.Key_Left:  # 左箭头 - 上一张照片
+                self.preview_widget.context.folder_navigator.navigate_previous()
+                self._show_status_message("已切换到上一张照片")
+                
+            elif key == Qt.Key_Right:  # 右箭头 - 下一张照片  
+                self.preview_widget.context.folder_navigator.navigate_next()
+                self._show_status_message("已切换到下一张照片")
+                
+            else:
+                # 未处理的按键，传递给父类
+                super().keyPressEvent(event)
+                
+        except Exception as e:
+            print(f"处理快捷键时出错: {e}")
+            super().keyPressEvent(event)
+    
+    def _show_status_message(self, message: str, timeout: int = 2000):
+        """在状态栏显示消息"""
+        try:
+            self.statusBar().showMessage(message, timeout)
+        except Exception:
+            pass
         
 # 移除 Worker 相关类定义
 # class _PreviewWorkerSignals(QObject): ...

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QSlider, QDoubleSpinBox, QComboBox,
+    QLabel, QSlider, QDoubleSpinBox, QSpinBox, QComboBox,
     QGroupBox, QPushButton, QCheckBox, QTabWidget,
     QScrollArea, QMessageBox, QInputDialog, QFileDialog,
     QApplication
@@ -98,6 +98,7 @@ class ParameterPanel(QWidget):
     save_custom_colorspace_requested = Signal(dict)
     save_density_matrix_requested = Signal(np.ndarray, str)  # 保存密度矩阵信号(矩阵, 当前名称)
     toggle_color_checker_requested = Signal(bool)
+    proxy_size_changed = Signal(int)  # Proxy长边尺寸变化信号
     # 色卡变换信号
     cc_flip_horizontal_requested = Signal()
     cc_flip_vertical_requested = Signal()
@@ -136,6 +137,10 @@ class ParameterPanel(QWidget):
         """由主窗口调用，在加载图像后设置并应用默认参数"""
         self.current_params = initial_params.copy()
         self.update_ui_from_params()
+        
+        # 设置proxy尺寸控件的初始值
+        proxy_size = enhanced_config_manager.get_ui_setting("proxy_max_size", 2000)
+        self.proxy_size_spinbox.setValue(proxy_size)
 
     def _create_ui(self):
         layout = QVBoxLayout(self)
@@ -180,7 +185,7 @@ class ParameterPanel(QWidget):
         spaces = self.context.color_space_manager.get_idt_color_spaces()
         for space in spaces:
             self.input_colorspace_combo.addItem(space, space)
-        colorspace_layout.addWidget(QLabel("色彩空间:"), 1, 0)
+        colorspace_layout.addWidget(QLabel("IDT 基色:"), 1, 0)
         colorspace_layout.addWidget(self.input_colorspace_combo, 1, 1, 1, 2)
         layout.addWidget(colorspace_group)
         
@@ -244,30 +249,36 @@ class ParameterPanel(QWidget):
 
         # 光谱锐化优化配置开关
         spectral_config_layout = QHBoxLayout()
-        self.optimize_idt_checkbox = QCheckBox("优化IDT色彩变换")
-        self.optimize_idt_checkbox.setToolTip("是否将IDT color transformation参数加入优化")
-        self.optimize_idt_checkbox.setChecked(True)  # 默认启用
+        self.optimize_idt_checkbox = QCheckBox("优化IDT基色")
+        self.optimize_idt_checkbox.setToolTip("优化IDT基色消除光源-传感器引入的串扰")
+        self.optimize_idt_checkbox.setChecked(False)  # 默认禁用
         self.optimize_idt_checkbox.setVisible(False)
         spectral_config_layout.addWidget(self.optimize_idt_checkbox)
         
-        self.optimize_density_matrix_checkbox = QCheckBox("优化密度矩阵")
-        self.optimize_density_matrix_checkbox.setToolTip("是否将density matrix参数加入优化")
+        self.optimize_density_matrix_checkbox = QCheckBox("优化数字Mask")
+        self.optimize_density_matrix_checkbox.setToolTip("优化数字Mask消除扫描仪-负片染料引入的串扰")
         self.optimize_density_matrix_checkbox.setChecked(False)  # 默认禁用
         self.optimize_density_matrix_checkbox.setVisible(False)
         spectral_config_layout.addWidget(self.optimize_density_matrix_checkbox)
         
         layout.addLayout(spectral_config_layout)
 
-        self.ccm_optimize_button = QPushButton("根据色卡计算光谱锐化转换")
+        self.ccm_optimize_button = QPushButton("开始优化")
         self.ccm_optimize_button.setToolTip("从色卡选择器读取24个颜色并优化参数")
         self.ccm_optimize_button.setVisible(False)
         self.ccm_optimize_button.setEnabled(False)
         layout.addWidget(self.ccm_optimize_button)
 
-        self.save_input_colorspace_button = QPushButton("保存输入色彩变换结果")
+        self.save_input_colorspace_button = QPushButton("保存IDT基色结果")
         self.save_input_colorspace_button.setToolTip("将当前UCS三角形对应的基色与白点保存为JSON文件")
         self.save_input_colorspace_button.setVisible(False)
         layout.addWidget(self.save_input_colorspace_button)
+
+        self.save_matrix_button_afterOpt = QPushButton("保存数字Mask结果")
+        self.save_matrix_button_afterOpt.setToolTip("将当前数字Mask保存到文件")
+        self.save_matrix_button_afterOpt.setVisible(False)
+        layout.addWidget(self.save_matrix_button_afterOpt)
+
 
         layout.addStretch()
         return widget
@@ -386,7 +397,7 @@ class ParameterPanel(QWidget):
         inversion_layout.addWidget(self.density_dmax_spinbox, 1, 2)
         layout.addWidget(inversion_group)
 
-        matrix_group = QGroupBox("密度校正矩阵")
+        matrix_group = QGroupBox("数字Mask（密度校正矩阵）")
         matrix_layout = QVBoxLayout(matrix_group)
         self.matrix_editor_widgets = []
         matrix_grid = QGridLayout()
@@ -471,6 +482,21 @@ class ParameterPanel(QWidget):
     def _create_debug_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        
+        # Proxy尺寸设置组
+        proxy_group = QGroupBox("Proxy设置")
+        proxy_layout = QHBoxLayout(proxy_group)
+        proxy_layout.addWidget(QLabel("Proxy长边尺寸:"))
+        self.proxy_size_spinbox = QSpinBox()
+        self.proxy_size_spinbox.setMinimum(500)
+        self.proxy_size_spinbox.setMaximum(8000)
+        self.proxy_size_spinbox.setValue(2000)
+        self.proxy_size_spinbox.setSuffix(" px")
+        self.proxy_size_spinbox.valueChanged.connect(self.proxy_size_changed.emit)
+        proxy_layout.addWidget(self.proxy_size_spinbox)
+        proxy_layout.addStretch()
+        layout.addWidget(proxy_group)
+        
         pipeline_group = QGroupBox("管道步骤控制")
         pipeline_layout = QVBoxLayout(pipeline_group)
         self.enable_density_inversion_checkbox = QCheckBox("启用密度反相")
@@ -594,6 +620,7 @@ class ParameterPanel(QWidget):
         self.cc_rotate_r_button.clicked.connect(self._on_cc_rotate_right)
         self.ccm_optimize_button.clicked.connect(self.ccm_optimize_requested.emit)
         self.save_input_colorspace_button.clicked.connect(self._on_save_input_colorspace_clicked)
+        self.save_matrix_button_afterOpt.clicked.connect(self._on_save_matrix_clicked)
         self.save_colorchecker_colors_button.clicked.connect(self.save_colorchecker_colors_requested.emit)
         self.colorchecker_combo.currentTextChanged.connect(self._on_colorchecker_changed)
 
@@ -1135,6 +1162,7 @@ class ParameterPanel(QWidget):
         self.optimize_density_matrix_checkbox.setVisible(checked)
         self.ccm_optimize_button.setVisible(checked)
         self.save_input_colorspace_button.setVisible(checked)
+        self.save_matrix_button_afterOpt.setVisible(checked)
         if checked:
             self._on_reset_point('R')
             self._on_reset_point('G')

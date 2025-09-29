@@ -3,13 +3,14 @@ from typing import Optional, List, Tuple
 import numpy as np
 from pathlib import Path
 
-from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig, ContactsheetProfile, CropAddDirection
+from .data_types import ImageData, ColorGradingParams, Preset, CropInstance, PresetBundle, CropPresetEntry, InputTransformationDefinition, MatrixDefinition, CurveDefinition, PipelineConfig, UIStateConfig, ContactsheetProfile, CropAddDirection, PreviewConfig
 from .image_manager import ImageManager
 from .color_space import ColorSpaceManager
 from .the_enlarger import TheEnlarger
 from .film_type_controller import FilmTypeController
 from .folder_navigator import FolderNavigator
 from ..utils.auto_preset_manager import AutoPresetManager
+from ..utils.enhanced_config_manager import enhanced_config_manager
 
 
 class _PreviewWorkerSignals(QObject):
@@ -80,7 +81,12 @@ class ApplicationContext(QObject):
         # =================
         self.image_manager = ImageManager()
         self.color_space_manager = ColorSpaceManager()
-        self.the_enlarger = TheEnlarger()
+        
+        # 从配置读取proxy尺寸设置并创建PreviewConfig
+        proxy_max_size = enhanced_config_manager.get_ui_setting("proxy_max_size", 2000)
+        preview_config = PreviewConfig(proxy_max_size=proxy_max_size)
+        self.the_enlarger = TheEnlarger(preview_config=preview_config)
+        
         self.film_type_controller = FilmTypeController()
         self.folder_navigator = FolderNavigator(self.image_manager)
         self.auto_preset_manager = AutoPresetManager()
@@ -1868,3 +1874,19 @@ class ApplicationContext(QObject):
         self._cached_reference_colors = None
         self._reference_colorspace = None
         self._reference_filename = None
+    
+    def update_proxy_max_size(self, size: int):
+        """更新代理图像最大尺寸设置"""
+        try:
+            # 保存到配置
+            enhanced_config_manager.set_ui_setting("proxy_max_size", size)
+            
+            # 更新the_enlarger的preview_config
+            self.the_enlarger.preview_config.proxy_max_size = size
+            
+            # 触发预览更新以应用新的proxy尺寸
+            self._trigger_preview_update()
+            
+            self.status_message_changed.emit(f"Proxy长边尺寸已更新为: {size}")
+        except Exception as e:
+            self.status_message_changed.emit(f"更新Proxy尺寸失败: {e}")

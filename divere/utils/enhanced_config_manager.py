@@ -91,7 +91,8 @@ class EnhancedConfigManager:
             },
             "ui": {
                 "window_size": [1200, 800],
-                "window_position": [100, 100]
+                "window_position": [100, 100],
+                "proxy_max_size": 2000
             },
             "defaults": {
                 "input_color_space": "sRGB",

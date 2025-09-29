@@ -114,7 +114,7 @@ class ParameterPanel(QWidget):
         # IDT Gamma（在下拉菜单上方）
         self.idt_gamma_slider = QSlider(Qt.Orientation.Horizontal)
         self.idt_gamma_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.idt_gamma_slider, self.idt_gamma_spinbox, 50, 280, 0.5, 2.8, 0.01)
+        self._setup_slider_spinbox(self.idt_gamma_slider, self.idt_gamma_spinbox, 500, 2800, 0.5, 2.8, 0.005)
         colorspace_layout.addWidget(QLabel("IDT Gamma:"), 0, 0)
         colorspace_layout.addWidget(self.idt_gamma_slider, 0, 1)
         colorspace_layout.addWidget(self.idt_gamma_spinbox, 0, 2)
@@ -318,8 +318,8 @@ class ParameterPanel(QWidget):
         self.density_gamma_spinbox = QDoubleSpinBox()
         self.density_dmax_slider = QSlider(Qt.Orientation.Horizontal)
         self.density_dmax_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 10, 400, 0.1, 4.0, 0.01)
-        self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 480, 0.0, 4.8, 0.01)
+        self._setup_slider_spinbox(self.density_gamma_slider, self.density_gamma_spinbox, 100, 4000, 0.1, 4.0, 0.005)
+        self._setup_slider_spinbox(self.density_dmax_slider, self.density_dmax_spinbox, 0, 4800, 0.0, 4.8, 0.005)
         inversion_layout.addWidget(QLabel("密度反差:"), 0, 0)
         inversion_layout.addWidget(self.density_gamma_slider, 0, 1)
         inversion_layout.addWidget(self.density_gamma_spinbox, 0, 2)
@@ -374,9 +374,9 @@ class ParameterPanel(QWidget):
         self.green_gain_spinbox = QDoubleSpinBox()
         self.blue_gain_slider = QSlider(Qt.Orientation.Horizontal)
         self.blue_gain_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.red_gain_slider, self.red_gain_spinbox, -300, 300, -3.0, 3.0, 0.01)
-        self._setup_slider_spinbox(self.green_gain_slider, self.green_gain_spinbox, -300, 300, -3.0, 3.0, 0.01)
-        self._setup_slider_spinbox(self.blue_gain_slider, self.blue_gain_spinbox, -300, 300, -3.0, 3.0, 0.01)
+        self._setup_slider_spinbox(self.red_gain_slider, self.red_gain_spinbox, -3000, 3000, -3.0, 3.0, 0.005)
+        self._setup_slider_spinbox(self.green_gain_slider, self.green_gain_spinbox, -3000, 3000, -3.0, 3.0, 0.005)
+        self._setup_slider_spinbox(self.blue_gain_slider, self.blue_gain_spinbox, -3000, 3000, -3.0, 3.0, 0.005)
         rgb_layout.addWidget(QLabel("R:"), 0, 0); rgb_layout.addWidget(self.red_gain_slider, 0, 1); rgb_layout.addWidget(self.red_gain_spinbox, 0, 2)
         rgb_layout.addWidget(QLabel("G:"), 1, 0); rgb_layout.addWidget(self.green_gain_slider, 1, 1); rgb_layout.addWidget(self.green_gain_spinbox, 1, 2)
         rgb_layout.addWidget(QLabel("B:"), 2, 0); rgb_layout.addWidget(self.blue_gain_slider, 2, 1); rgb_layout.addWidget(self.blue_gain_spinbox, 2, 2)
@@ -400,7 +400,7 @@ class ParameterPanel(QWidget):
         
         self.glare_compensation_slider = QSlider(Qt.Orientation.Horizontal)
         self.glare_compensation_spinbox = QDoubleSpinBox()
-        self._setup_slider_spinbox(self.glare_compensation_slider, self.glare_compensation_spinbox, 0, 500, 0.0, 5.0, 0.01)
+        self._setup_slider_spinbox(self.glare_compensation_slider, self.glare_compensation_spinbox, 0, 5000, 0.0, 5.0, 0.005)
         self.glare_compensation_spinbox.setSuffix("%")
         
         glare_layout.addWidget(QLabel("补偿强度:"), 0, 0)
@@ -476,7 +476,10 @@ class ParameterPanel(QWidget):
         slider.setRange(s_min, s_max)
         spinbox.setRange(sp_min, sp_max)
         spinbox.setSingleStep(sp_step)
-        spinbox.setDecimals(2)
+        spinbox.setDecimals(3)
+        # 设置slider步长：singleStep对应0.05，pageStep对应0.1
+        slider.setSingleStep(50)   # 0.05 * 1000 = 50
+        slider.setPageStep(100)    # 0.1 * 1000 = 100
 
     def _connect_signals(self):
         self.film_type_combo.currentTextChanged.connect(self._on_film_type_changed)
@@ -551,23 +554,23 @@ class ParameterPanel(QWidget):
                 g = float(info.get('gamma', 1.0))
             except Exception:
                 g = 1.0
-            self.idt_gamma_slider.setValue(int(g * 100))
+            self.idt_gamma_slider.setValue(int(g * 1000))
             self.idt_gamma_spinbox.setValue(g)
             
-            self.density_gamma_slider.setValue(int(params.density_gamma * 100))
+            self.density_gamma_slider.setValue(int(params.density_gamma * 1000))
             self.density_gamma_spinbox.setValue(params.density_gamma)
-            self.density_dmax_slider.setValue(int(params.density_dmax * 100))
+            self.density_dmax_slider.setValue(int(params.density_dmax * 1000))
             self.density_dmax_spinbox.setValue(params.density_dmax)
             
-            self.red_gain_slider.setValue(int(params.rgb_gains[0] * 100))
+            self.red_gain_slider.setValue(int(params.rgb_gains[0] * 1000))
             self.red_gain_spinbox.setValue(params.rgb_gains[0])
-            self.green_gain_slider.setValue(int(params.rgb_gains[1] * 100))
+            self.green_gain_slider.setValue(int(params.rgb_gains[1] * 1000))
             self.green_gain_spinbox.setValue(params.rgb_gains[1])
-            self.blue_gain_slider.setValue(int(params.rgb_gains[2] * 100))
+            self.blue_gain_slider.setValue(int(params.rgb_gains[2] * 1000))
             self.blue_gain_spinbox.setValue(params.rgb_gains[2])
             
             # 屏幕反光补偿参数同步 (0.0-0.05 -> 0-500)
-            self.glare_compensation_slider.setValue(int(params.screen_glare_compensation * 10000.0))
+            self.glare_compensation_slider.setValue(int(params.screen_glare_compensation * 100000.0))
             self.glare_compensation_spinbox.setValue(params.screen_glare_compensation * 100.0)
             
             matrix = params.density_matrix if params.density_matrix is not None else np.eye(3)
@@ -860,87 +863,87 @@ class ParameterPanel(QWidget):
     def _on_gamma_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.density_gamma_spinbox.blockSignals(True)
-        self.density_gamma_spinbox.setValue(value / 100.0)
+        self.density_gamma_spinbox.setValue(value / 1000.0)
         self.density_gamma_spinbox.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_gamma_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.density_gamma_slider.blockSignals(True)
-        self.density_gamma_slider.setValue(int(value * 100))
+        self.density_gamma_slider.setValue(int(value * 1000))
         self.density_gamma_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_dmax_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.density_dmax_spinbox.blockSignals(True)
-        self.density_dmax_spinbox.setValue(value / 100.0)
+        self.density_dmax_spinbox.setValue(value / 1000.0)
         self.density_dmax_spinbox.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_dmax_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.density_dmax_slider.blockSignals(True)
-        self.density_dmax_slider.setValue(int(value * 100))
+        self.density_dmax_slider.setValue(int(value * 1000))
         self.density_dmax_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_red_gain_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.red_gain_spinbox.blockSignals(True)
-        self.red_gain_spinbox.setValue(value / 100.0)
+        self.red_gain_spinbox.setValue(value / 1000.0)
         self.red_gain_spinbox.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_red_gain_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.red_gain_slider.blockSignals(True)
-        self.red_gain_slider.setValue(int(value * 100))
+        self.red_gain_slider.setValue(int(value * 1000))
         self.red_gain_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_green_gain_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.green_gain_spinbox.blockSignals(True)
-        self.green_gain_spinbox.setValue(value / 100.0)
+        self.green_gain_spinbox.setValue(value / 1000.0)
         self.green_gain_spinbox.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_green_gain_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.green_gain_slider.blockSignals(True)
-        self.green_gain_slider.setValue(int(value * 100))
+        self.green_gain_slider.setValue(int(value * 1000))
         self.green_gain_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_blue_gain_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.blue_gain_spinbox.blockSignals(True)
-        self.blue_gain_spinbox.setValue(value / 100.0)
+        self.blue_gain_spinbox.setValue(value / 1000.0)
         self.blue_gain_spinbox.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_blue_gain_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.blue_gain_slider.blockSignals(True)
-        self.blue_gain_slider.setValue(int(value * 100))
+        self.blue_gain_slider.setValue(int(value * 1000))
         self.blue_gain_slider.blockSignals(False)
         self.parameter_changed.emit()
 
     def _on_glare_compensation_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.glare_compensation_spinbox.blockSignals(True)
-        self.glare_compensation_spinbox.setValue(value / 100.0)  # Slider 0-500 -> SpinBox 0-5.0
+        self.glare_compensation_spinbox.setValue(value / 1000.0)  # Slider 0-5000 -> SpinBox 0-5.0
         self.glare_compensation_spinbox.blockSignals(False)
         self.parameter_changed.emit()
         # 发送实时更新信号（用于cut-off显示）
-        compensation_value = value / 10000.0  # 转换为0.0-0.05范围
+        compensation_value = value / 100000.0  # 转换为0.0-0.05范围
         self.glare_compensation_realtime_update.emit(compensation_value)
 
     def _on_glare_compensation_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.glare_compensation_slider.blockSignals(True)
-        self.glare_compensation_slider.setValue(int(value * 100.0))  # SpinBox 0-5.0 -> Slider 0-500
+        self.glare_compensation_slider.setValue(int(value * 1000.0))  # SpinBox 0-5.0 -> Slider 0-5000
         self.glare_compensation_slider.blockSignals(False)
         self.parameter_changed.emit()
         # 发送实时更新信号（用于cut-off显示）
@@ -980,7 +983,7 @@ class ParameterPanel(QWidget):
             
             # 更新UI（避免触发信号循环）
             self._is_updating_ui = True
-            self.idt_gamma_slider.setValue(int(gamma * 100))
+            self.idt_gamma_slider.setValue(int(gamma * 1000))
             self.idt_gamma_spinbox.setValue(gamma)
             self._is_updating_ui = False
             
@@ -1038,14 +1041,14 @@ class ParameterPanel(QWidget):
     def _on_idt_gamma_slider_changed(self, value: int):
         if self._is_updating_ui: return
         self.idt_gamma_spinbox.blockSignals(True)
-        self.idt_gamma_spinbox.setValue(value / 100.0)
+        self.idt_gamma_spinbox.setValue(value / 1000.0)
         self.idt_gamma_spinbox.blockSignals(False)
         self._apply_idt_gamma_to_colorspace()
 
     def _on_idt_gamma_spinbox_changed(self, value: float):
         if self._is_updating_ui: return
         self.idt_gamma_slider.blockSignals(True)
-        self.idt_gamma_slider.setValue(int(value * 100))
+        self.idt_gamma_slider.setValue(int(value * 1000))
         self.idt_gamma_slider.blockSignals(False)
         self._apply_idt_gamma_to_colorspace()
 
@@ -1377,13 +1380,13 @@ class ParameterPanel(QWidget):
         if obj in (self.glare_compensation_slider, self.glare_compensation_spinbox):
             if event.type() == QEvent.Type.MouseButtonPress:
                 # 获取当前补偿值
-                current_value = self.glare_compensation_slider.value() / 10000.0
+                current_value = self.glare_compensation_slider.value() / 100000.0
                 self.glare_compensation_interaction_started.emit(current_value)
             elif event.type() == QEvent.Type.MouseButtonRelease:
                 self.glare_compensation_interaction_ended.emit()
             elif event.type() == QEvent.Type.FocusIn:
                 # spinbox获得焦点时也开始交互
-                current_value = self.glare_compensation_slider.value() / 10000.0
+                current_value = self.glare_compensation_slider.value() / 100000.0
                 self.glare_compensation_interaction_started.emit(current_value)
             elif event.type() == QEvent.Type.FocusOut:
                 # spinbox失去焦点时结束交互

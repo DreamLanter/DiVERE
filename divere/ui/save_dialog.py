@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QRadioButton, QComboBox, QCheckBox, QPushButton,
     QLabel, QGridLayout, QDialogButtonBox, QSplitter,
-    QTreeWidget, QTreeWidgetItem, QProgressDialog
+    QTreeWidget, QTreeWidgetItem, QProgressDialog, QSlider
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from pathlib import Path
@@ -15,6 +15,12 @@ from typing import Dict, List, Optional, Set
 
 class SaveImageDialog(QDialog):
     """保存图像对话框"""
+    
+    # JPEG质量等级映射（个位数1-10到实际质量值）
+    QUALITY_MAPPING = {
+        1: 60, 2: 65, 3: 70, 4: 75, 5: 80,
+        6: 85, 7: 90, 8: 93, 9: 95, 10: 100
+    }
     
     def __init__(self, parent=None, color_spaces=None, is_bw_mode=False, color_space_manager=None, app_context=None):
         super().__init__(parent)
@@ -43,6 +49,28 @@ class SaveImageDialog(QDialog):
         
         # 设置默认值
         self._set_defaults()
+    
+    def _quality_level_to_jpeg(self, level: int) -> int:
+        """将质量等级(1-10)转换为JPEG质量值"""
+        return self.QUALITY_MAPPING.get(level, 95)
+    
+    def _jpeg_to_quality_level(self, jpeg_quality: int) -> int:
+        """将JPEG质量值转换为质量等级(1-10)"""
+        # 找到最接近的质量等级
+        best_level = 9  # 默认等级9(95质量)
+        min_diff = float('inf')
+        for level, quality in self.QUALITY_MAPPING.items():
+            diff = abs(quality - jpeg_quality)
+            if diff < min_diff:
+                min_diff = diff
+                best_level = level
+        return best_level
+    
+    def _update_quality_label(self):
+        """更新质量标签显示"""
+        level = self.jpeg_quality_slider.value()
+        jpeg_quality = self._quality_level_to_jpeg(level)
+        self.jpeg_quality_label.setText(f"{level} ({jpeg_quality}%)")
         
     def _create_ui(self):
         """创建用户界面"""
@@ -91,6 +119,7 @@ class SaveImageDialog(QDialog):
         # 连接信号
         self.tiff_16bit_radio.toggled.connect(self._on_format_changed)
         self.jpeg_8bit_radio.toggled.connect(self._on_format_changed)
+        self.jpeg_quality_slider.valueChanged.connect(self._update_quality_label)
         
         # 初始化文件树
         self._load_file_tree()
@@ -140,8 +169,28 @@ class SaveImageDialog(QDialog):
                         break
         
         # 加载保存的JPEG质量设置
-        saved_jpeg_quality = self._config_manager.get_default_setting("jpeg_quality", "95")
-        self.jpeg_quality_combo.setCurrentText(str(saved_jpeg_quality))
+        # 先尝试加载新格式（质量等级）
+        saved_quality_level = self._config_manager.get_default_setting("jpeg_quality_level", None)
+        if saved_quality_level is not None:
+            # 使用新格式的质量等级
+            try:
+                level = int(saved_quality_level)
+                level = max(1, min(10, level))  # 确保在有效范围内
+                self.jpeg_quality_slider.setValue(level)
+            except ValueError:
+                self.jpeg_quality_slider.setValue(9)  # 默认等级9
+        else:
+            # 向后兼容：尝试加载旧格式（实际质量值）并转换为等级
+            saved_jpeg_quality = self._config_manager.get_default_setting("jpeg_quality", "95")
+            try:
+                jpeg_quality = int(saved_jpeg_quality)
+                level = self._jpeg_to_quality_level(jpeg_quality)
+                self.jpeg_quality_slider.setValue(level)
+            except ValueError:
+                self.jpeg_quality_slider.setValue(9)  # 默认等级9
+        
+        # 更新质量标签显示
+        self._update_quality_label()
     
     def _create_left_panel(self):
         """创建左侧面板：现有的保存设置"""
@@ -176,10 +225,15 @@ class SaveImageDialog(QDialog):
         jpeg_quality_layout = QGridLayout(self.jpeg_quality_group)
         
         jpeg_quality_layout.addWidget(QLabel("质量:"), 0, 0)
-        self.jpeg_quality_combo = QComboBox()
-        self.jpeg_quality_combo.addItems(["60", "70", "80", "85", "90", "95", "100"])
-        self.jpeg_quality_combo.setCurrentText("95")  # 默认95，与当前硬编码保持一致
-        jpeg_quality_layout.addWidget(self.jpeg_quality_combo, 0, 1)
+        self.jpeg_quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.jpeg_quality_slider.setRange(1, 10)
+        self.jpeg_quality_slider.setValue(9)  # 默认等级9(对应95质量)
+        self.jpeg_quality_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.jpeg_quality_slider.setTickInterval(1)
+        jpeg_quality_layout.addWidget(self.jpeg_quality_slider, 0, 1)
+        
+        self.jpeg_quality_label = QLabel("9 (95%)")
+        jpeg_quality_layout.addWidget(self.jpeg_quality_label, 0, 2)
         
         # 初始隐藏质量设置组
         self.jpeg_quality_group.setVisible(False)
@@ -440,8 +494,11 @@ class SaveImageDialog(QDialog):
             else:
                 self._config_manager.set_default_setting("output_color_space_8bit", current_color_space)
         
-        # 保存JPEG质量设置到配置
-        self._config_manager.set_default_setting("jpeg_quality", self.jpeg_quality_combo.currentText())
+        # 保存JPEG质量设置到配置（保存等级值）
+        self._config_manager.set_default_setting("jpeg_quality_level", str(self.jpeg_quality_slider.value()))
+        
+        # 获取实际的JPEG质量值
+        jpeg_quality = self._quality_level_to_jpeg(self.jpeg_quality_slider.value()) if self.jpeg_8bit_radio.isChecked() else 95
         
         settings = {
             "format": "tiff" if self.tiff_16bit_radio.isChecked() else "jpeg",
@@ -449,7 +506,7 @@ class SaveImageDialog(QDialog):
             "color_space": current_color_space,
             "include_curve": self.include_curve_checkbox.isChecked(),
             "save_mode": self._save_mode,
-            "jpeg_quality": int(self.jpeg_quality_combo.currentText()) if self.jpeg_8bit_radio.isChecked() else 95
+            "jpeg_quality": jpeg_quality
         }
         
         # 如果是批量保存模式，添加选中的文件列表

@@ -21,7 +21,7 @@
     "output_color_space_16bit": "ACEScg",
     "output_color_space_8bit": "sRGB",
     "working_color_space": "KodakEnduraPremier",
-    "jpeg_quality": "60"
+    "jpeg_quality_level": "6"
   },
   "config": {
     "show_user_config_dir": true,

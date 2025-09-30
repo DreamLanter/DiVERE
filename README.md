@@ -4,24 +4,79 @@
 [![PySide6](https://img.shields.io/badge/PySide6-6.5+-green.svg)](https://pypi.org/project/PySide6/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-基于ACEScg Linear工作流的胶片数字化后期处理工具，为胶片摄影师提供校色解决方案。
+胶片数字化后期处理工具，为胶片摄影师提供专业的硬件校正和负片校色解决方案。
 
 ## 🌟 功能特性
 
-- 扫描仪硬件色彩管理：这一步是依靠线性变换将光源光谱x传感器光谱转换到Status M。理论上，CCFL光源（ Imacon）、窄带LED（Nikon）等等光源，或者450nm以下、650nm以上分量很少的光源+翻拍，都可以获得不错的效果。
-- 用色卡+严格的胶片校色管线，优化计算以上色彩管理的线性变换。我称之为“扫描仪光谱锐化”功能。
-- 基于密度的工作流，包括反相、密度矩阵、rgb曝光、曲线等等。支持CUDA/MPS/OpenCL加速。
-- 用了Status M to Print Density的密度矩阵。这个深入了解胶片数子化的都懂。矩阵可交互式调节，就像做dye-transfer一样（但除非你基于美学的考虑，我永远不建议你乱调！）。并且可以保存为json。
-- 用了一个机器学习模型做初步的校色。要多点几次（因为色彩正常之后cnn才能正常识别图片语义）效果比基于统计的方法强多了。
-- 一个横纵都是密度的曲线工具，可以非常自然地模拟相纸的暗部偏色特性。我内置了一个endura相纸曲线。曲线可保存为json
-- 全精度的图片输出（导出：全精度+分块并行，禁用低精度LUT）。
-- 各种精度、各种pipeline的3D LUT生成功能。以及，因为密度曲线非常好用，我单独开了一个密度曲线的1D LUT导出功能
+- 基于密度的反相、类似彩色暗房的操作、多种相纸/拷贝片的曲线预设、接触印相/裁剪模式、批量导出功能、方便的快捷键功能。
+- 基于开源机器学习算法的自动校色功能。
+- 推荐使用任何三色窄光谱光源进行翻拍/扫描。DiVERE使用了严谨的胶片数字化的硬件校正方案：IDT色彩转换和数字Mask。
+- IDT转换和数字Mask可由日光直射的24色色卡校正。参考色（实际上是参考密度）由光谱物理模拟+官方数据计算所得。
+- 底层工作空间提供三个：ACEScg（AP1）、Kodak Endura Premier相纸基色、Kodak 2383拷贝片基色。
+- 特别支持imacon的fff文件
+
+
+## 🔧 技术原则
+- 0：正视科学和美学的功能，科学提供必要的约束，美学在科学的约束下自由发挥。对科学了解得越多，美学的自由度就越高。
+- 1：负片的色罩（Mask）专门设计用来消除相纸的串扰。而数码传感器光谱响应与相纸不同，导致色罩无法正确工作，产生严重的色偏和色彩失真，需要用数字Mask来补偿。
+- 2：负片在串扰被正确补偿时，灰阶是无偏色的，校色不需要调整通道gamma，仅需要调整RGB曝光。
+
+## 🎨 硬件校正算法核心原理
+详见: https://zhuanlan.zhihu.com/p/1951558820087177534
 
 ## ☕ 支持作者
 
 如果这个工具对您的胶片摄影工作有帮助，欢迎请作者喝杯饮料或买一卷胶片！您的支持是开源项目持续发展的动力 😊
 
 <img src="donate.png" alt="donate" width="30%">
+
+## 快捷键表：
+
+### 🎯 参数调整快捷键
+| 快捷键 | 功能 | 说明 |
+|--------|------|------|
+| `Q` | R通道降曝光 | 减少红色，增加青色 (-0.01) |
+| `E` | R通道增曝光 | 增加红色，减少青色 (+0.01) |
+| `A` | B通道降曝光 | 减少蓝色，增加黄色 (-0.01) |
+| `D` | B通道增曝光 | 增加蓝色，减少黄色 (+0.01) |
+| `W` | 降低最大密度 | 提升整体曝光，图像变亮 (-0.01) |
+| `S` | 增大最大密度 | 降低整体曝光，图像变暗 (+0.01) |
+| `R` | 增加密度反差 | 增强对比度，图像更有层次 (+0.01) |
+| `F` | 降低密度反差 | 减弱对比度，图像更平坦 (-0.01) |
+
+### 🔍 精细调整模式
+在上述任意快捷键前加上 `Shift`，调整步长变为精细模式 (0.001)
+- 例如：`Shift+Q` = 精细调整R通道 (-0.001)
+
+### 🤖 AI校色功能
+| 快捷键 | 功能 | 说明 |
+|--------|------|------|
+| `空格` | AI校色一次 | 执行一次自动色彩校正 |
+| `Shift+空格` | AI校色多次 | 执行多次迭代自动色彩校正 |
+
+### 🔄 图像操作
+| 快捷键 | 功能 | 说明 |
+|--------|------|------|
+| `[` 或 `【` | 左旋转 | 将图像逆时针旋转90度 |
+| `]` 或 `】` | 右旋转 | 将图像顺时针旋转90度 |
+
+### 🔍 导航功能
+| 快捷键 | 功能 | 说明 |
+|--------|------|------|
+| `←` | 上一张照片 | 切换到上一张图片，支持循环浏览 |
+| `→` | 下一张照片 | 切换到下一张图片，支持循环浏览 |
+| `↑` | 向上切换裁剪 | 在裁剪区域间向上循环切换 |
+| `↓` | 向下切换裁剪 | 在裁剪区域间向下循环切换 |
+| `Ctrl/Cmd+=` | 添加新裁剪 | 添加新的裁剪区域 |
+
+### 🔧 参数的复制粘贴
+| 快捷键 | 功能     | 说明 |
+|--------|--------|------|
+| `Ctrl/Cmd+V` | 从默认值粘贴 | 将所有调色参数重置为默认值 |
+| `Ctrl/Cmd+C` | 复制到默认值 | 将当前参数保存为文件夹默认设置 |
+
+
+> 💡 **提示**: 状态栏会实时显示参数值和操作反馈，所有调整都会实时预览更新
 
 ## 📦 安装部署
 
@@ -146,130 +201,6 @@ cupy-cuda11x  # 按你的CUDA版本选择
 python -c "import platform, onnxruntime as ort; print(platform.machine(), ort.__version__)"
 ```
 
-## 🚀 使用指南
-
-后续将补充使用视频与文档。
-
-## 🔧 技术架构
-
-### 整体Pipeline
-
-```
-输入图像 → 色彩空间转换 → 密度反相 → 校正矩阵 → RGB增益 → 密度曲线 → 转线性 → 输出转换 → 最终图像
-    ↓           ↓           ↓         ↓         ↓         ↓         ↓
-  图像管理    色彩管理     调色引擎   调色引擎   调色引擎   调色引擎   色彩管理
-```
-
-### 核心模块
-
-#### 1. 图像管理模块 (ImageManager)
-- 功能：图像加载、代理生成、缓存管理
-- 特性：支持多种格式、代理生成、内存管理
-
-#### 2. 色彩空间管理模块 (ColorSpaceManager)
-- 功能：色彩空间转换、ICC配置文件处理
-- 特性：基于colour-science、ACEScg工作流
-
-#### 3. 调色引擎模块 (TheEnlarger)
-- 功能：密度反相、校正矩阵、RGB增益、密度曲线
-- 特性：线性处理、LUT生成
-
-#### 4. LUT处理器 (LUTProcessor)
-- 功能：3D/1D LUT生成、缓存管理
-- 特性：缓存机制、文件格式支持
-
-### 色彩处理Pipeline详解
-
-#### 1. 密度反相 (Density Inversion)
-```python
-# 公式路径（全精度导出使用公式）
-safe = clip(linear, 1e-10, 1)
-density = -log10(safe)
-adjusted = pivot + (density - pivot) * gamma - dmax
-linear_out = pow(10.0, adjusted)
-```
-
-#### 2. 校正矩阵 (Correction Matrix)
-```python
-# 应用3x3校正矩阵
-corrected_rgb = matrix @ original_rgb
-```
-
-#### 3. RGB增益 (RGB Gains)
-```python
-# 在密度空间应用增益
-adjusted_density = density - gain
-```
-
-#### 4. 密度曲线 (Density Curves)
-```python
-# 使用单调三次插值生成曲线
-curve_output = monotonic_cubic_interpolate(input, curve_points)
-```
-
-### 预览与导出精度策略
-
-- 预览：以交互速度优先，密度反相等步骤默认使用 1D LUT（32K，缓存），并支持多线程/分块。
-- 导出：强制全精度公式运算 + 分块并行（零重叠、零精度损失），禁用低精度 LUT。
-- 分块：默认在超大图（>16MP）时自动启用；可在代码中调整 tile 大小与并行度。
-
-### 统一的预览配置（PreviewConfig）
-
-通过 `PreviewConfig` 统一管理预览/代理尺寸与质量：
-
-```python
-from divere.core.data_types import PreviewConfig
-from divere.core.the_enlarger import TheEnlarger
-
-cfg = PreviewConfig(
-    preview_max_size=2048,
-    proxy_max_size=2000,
-)
-enlarger = TheEnlarger(preview_config=cfg)
-```
-
-### GPU 加速
-
-- 优先级：Metal > OpenCL > CUDA > CPU（自动选择，失败自动回退）。
-- macOS（Metal）建议安装：
-```bash
-pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders
-```
-- OpenCL 已在 requirements.txt 中包含，无需额外安装
-导出默认仍走 CPU/Metal 全精度公式路径，且开启分块以降低内存峰值。
-
-## 📁 项目结构
-
-```
-DiVERE/
-├── divere/                    # 主程序包
-│   ├── core/                 # 核心模块
-│   │   ├── image_manager.py  # 图像管理
-│   │   ├── color_space.py    # 色彩空间管理
-│   │   ├── the_enlarger.py   # 调色引擎
-│   │   ├── lut_processor.py  # LUT处理
-│   │   └── data_types.py     # 数据类型定义
-│   ├── ui/                   # 用户界面
-│   │   ├── main_window.py    # 主窗口
-│   │   ├── preview_widget.py # 预览组件
-│   │   ├── parameter_panel.py # 参数面板
-│   │   └── curve_editor_widget.py # 曲线编辑器
-│   ├── utils/                # 工具函数
-│   │   ├── config_manager.py # 配置管理
-│   │   └── lut_generator/    # LUT生成器
-│   └── models/               # AI自动校色（ONNX）
-│       ├── deep_wb_wrapper.py
-│       ├── utils/
-│       └── net_awb.onnx
-├── config/                   # 配置文件
-│   ├── colorspace/          # 色彩空间配置
-│   ├── curves/              # 预设曲线
-│   └── matrices/            # 校正矩阵
-├── requirements.txt         # Python依赖包列表
-├── pyproject.toml           # Poetry项目配置
-└── README.md                # 项目文档
-```
-
 ## 🤝 致谢
 
 ### 深度学习自动校色
@@ -282,14 +213,6 @@ DiVERE/
 - GitHub: https://github.com/mahmoudnafifi/Deep_White_Balance
 - 许可证: MIT License
 - 说明: 模型来源于上述研究，已转换为 ONNX 并随项目分发使用（`divere/models/net_awb.onnx`）。
-
-### 开源库
-
-- PySide6: GUI框架
-- NumPy: 数值计算
-- OpenCV: 图像处理
-- colour-science: 色彩科学计算
-- ONNX Runtime: 模型推理
 
 ## 📄 许可证
 
@@ -317,15 +240,5 @@ DiVERE/
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 打开 Pull Request
-
-## 📈 开发计划
-
-- [ ] 支持更多图像格式
-- [ ] 添加更多预设曲线
-- [ ] 优化性能
-- [ ] 支持批量处理
-- [ ] 添加更多AI算法
-
----
 
 **DiVERE** - 胶片校色工具 

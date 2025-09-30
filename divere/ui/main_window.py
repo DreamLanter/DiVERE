@@ -1716,7 +1716,7 @@ class MainWindow(QMainWindow):
                 result_image,
                 file_path,
                 bit_depth=effective_bit_depth,
-                quality=95,
+                quality=settings.get("jpeg_quality", 95),
                 export_color_space=settings.get("color_space")
             )
             
@@ -1795,7 +1795,7 @@ class MainWindow(QMainWindow):
                         result_image,
                         file_path,
                         bit_depth=effective_bit_depth,
-                        quality=95,
+                        quality=settings.get("jpeg_quality", 95),
                         export_color_space=settings.get("color_space")
                     )
                 self.statusBar().showMessage(f"已保存所有裁剪到: {target_dir}")
@@ -1854,7 +1854,7 @@ class MainWindow(QMainWindow):
                         result_image,
                         file_path,
                         bit_depth=effective_bit_depth,
-                        quality=95,
+                        quality=settings.get("jpeg_quality", 95),
                         export_color_space=settings.get("color_space")
                     )
                     self.statusBar().showMessage(f"已保存: {Path(file_path).name}")

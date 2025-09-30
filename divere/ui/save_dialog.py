@@ -101,8 +101,12 @@ class SaveImageDialog(QDialog):
         self._load_saved_color_space()
         
     def _on_format_changed(self):
-        """格式选择改变时更新默认色彩空间"""
+        """格式选择改变时更新默认色彩空间和JPEG质量组显示"""
         self._load_saved_color_space()
+        
+        # 控制JPEG质量组的显示
+        is_jpeg = self.jpeg_8bit_radio.isChecked()
+        self.jpeg_quality_group.setVisible(is_jpeg)
         
     def _load_saved_color_space(self):
         """加载保存的色彩空间选择"""
@@ -134,6 +138,10 @@ class SaveImageDialog(QDialog):
                     if name in self.color_spaces:
                         self.colorspace_combo.setCurrentText(name)
                         break
+        
+        # 加载保存的JPEG质量设置
+        saved_jpeg_quality = self._config_manager.get_default_setting("jpeg_quality", "95")
+        self.jpeg_quality_combo.setCurrentText(str(saved_jpeg_quality))
     
     def _create_left_panel(self):
         """创建左侧面板：现有的保存设置"""
@@ -153,7 +161,7 @@ class SaveImageDialog(QDialog):
         layout.addWidget(format_group)
         
         # 色彩空间选择
-        colorspace_group = QGroupBox("输出色彩空间")
+        colorspace_group = QGroupBox("输出色彩管理")
         colorspace_layout = QGridLayout(colorspace_group)
         
         colorspace_layout.addWidget(QLabel("色彩空间:"), 0, 0)
@@ -162,6 +170,21 @@ class SaveImageDialog(QDialog):
         colorspace_layout.addWidget(self.colorspace_combo, 0, 1)
         
         layout.addWidget(colorspace_group)
+        
+        # JPEG质量设置
+        self.jpeg_quality_group = QGroupBox("JPEG质量")
+        jpeg_quality_layout = QGridLayout(self.jpeg_quality_group)
+        
+        jpeg_quality_layout.addWidget(QLabel("质量:"), 0, 0)
+        self.jpeg_quality_combo = QComboBox()
+        self.jpeg_quality_combo.addItems(["60", "70", "80", "85", "90", "95", "100"])
+        self.jpeg_quality_combo.setCurrentText("95")  # 默认95，与当前硬编码保持一致
+        jpeg_quality_layout.addWidget(self.jpeg_quality_combo, 0, 1)
+        
+        # 初始隐藏质量设置组
+        self.jpeg_quality_group.setVisible(False)
+        
+        layout.addWidget(self.jpeg_quality_group)
         
         # 处理选项
         options_group = QGroupBox("处理选项")
@@ -417,12 +440,16 @@ class SaveImageDialog(QDialog):
             else:
                 self._config_manager.set_default_setting("output_color_space_8bit", current_color_space)
         
+        # 保存JPEG质量设置到配置
+        self._config_manager.set_default_setting("jpeg_quality", self.jpeg_quality_combo.currentText())
+        
         settings = {
             "format": "tiff" if self.tiff_16bit_radio.isChecked() else "jpeg",
             "bit_depth": 16 if self.tiff_16bit_radio.isChecked() else 8,
             "color_space": current_color_space,
             "include_curve": self.include_curve_checkbox.isChecked(),
-            "save_mode": self._save_mode
+            "save_mode": self._save_mode,
+            "jpeg_quality": int(self.jpeg_quality_combo.currentText()) if self.jpeg_8bit_radio.isChecked() else 95
         }
         
         # 如果是批量保存模式，添加选中的文件列表

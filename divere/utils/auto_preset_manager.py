@@ -6,7 +6,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 
 from divere.core.data_types import Preset, PresetBundle
 
@@ -156,3 +156,17 @@ class AutoPresetManager:
         检查当前预设文件是否存在folder_default设置。
         """
         return 'folder_default' in self._extra_data
+
+    # === 新增：获取所有预设的接口 ===
+    def get_all_presets(self) -> Dict[str, Preset]:
+        """获取所有单预设的副本"""
+        return self._presets.copy()
+
+    def get_all_bundles(self) -> Dict[str, PresetBundle]:
+        """获取所有预设包的副本"""
+        return self._bundles.copy()
+
+    def get_preset_filenames(self) -> List[str]:
+        """获取所有预设文件名列表（包括单预设和预设包）"""
+        filenames = list(self._presets.keys()) + list(self._bundles.keys())
+        return sorted(filenames)

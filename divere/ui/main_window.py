@@ -1509,7 +1509,7 @@ class MainWindow(QMainWindow):
                 available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
         # 打开保存设置对话框
-        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager)
+        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager, self.context)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         
@@ -1540,7 +1540,7 @@ class MainWindow(QMainWindow):
             if not available_spaces:
                 available_spaces = self.context.color_space_manager.get_available_color_spaces()
         
-        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager)
+        save_dialog = SaveImageDialog(self, None, is_bw_mode, self.context.color_space_manager, self.context)
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
             
@@ -1596,7 +1596,12 @@ class MainWindow(QMainWindow):
                 if not ok or not basename:
                     basename = default_basename
                 # 执行批量保存
-                self._execute_batch_save(settings, base_choice, basename, extension)
+                if "selected_files" in settings:
+                    # 新的选择性批量保存
+                    self._execute_selective_batch_save(settings, base_choice, basename, extension)
+                else:
+                    # 旧的批量保存（保存所有裁剪）
+                    self._execute_batch_save(settings, base_choice, basename, extension)
                 return
             else:
                 # 保存单张
@@ -1846,6 +1851,264 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage("没有需要保存的裁剪")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存所有失败: {e}")
+
+    def _execute_selective_batch_save(self, settings: dict, target_dir: str, basename: str, extension: str):
+        """执行选择性批量保存（基于用户在对话框中的选择）"""
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import Qt
+        
+        selected_files = settings.get("selected_files", [])
+        if not selected_files:
+            QMessageBox.information(self, "信息", "没有选择要导出的文件")
+            return
+            
+        # 创建进度条
+        progress = QProgressDialog("正在批量导出...", "取消", 0, len(selected_files), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setAutoClose(True)
+        progress.setAutoReset(True)
+        
+        try:
+            # 获取当前图像目录和预设管理器
+            current_image = self.context.get_current_image()
+            if not current_image:
+                return
+                
+            current_dir = Path(current_image.file_path).parent
+            auto_preset_manager = self.context.auto_preset_manager
+            auto_preset_manager.set_active_directory(str(current_dir))
+            
+            # 获取预设数据
+            presets = auto_preset_manager.get_all_presets()
+            bundles = auto_preset_manager.get_all_bundles()
+            
+            saved_count = 0
+            
+            for i, selected_file in enumerate(selected_files):
+                if progress.wasCanceled():
+                    break
+                    
+                progress.setValue(i)
+                progress.setLabelText(f"正在导出: {selected_file}")
+                
+                try:
+                    # 检查是否为crop项目（使用#分隔符）
+                    if "#" in selected_file:
+                        # Crop项目：filename#cropid格式
+                        parts = selected_file.split("#", 1)
+                        if len(parts) == 2:
+                            filename, crop_id = parts
+                            if filename in bundles:
+                                self._export_crop_item(filename, crop_id, target_dir, basename, extension, settings, bundles, current_dir, saved_count + 1)
+                                saved_count += 1
+                    elif selected_file in presets:
+                        # Single预设
+                        self._export_single_preset(selected_file, target_dir, basename, extension, settings, presets, current_dir, saved_count + 1)
+                        saved_count += 1
+                    elif selected_file in bundles:
+                        # ContactSheet预设
+                        self._export_contactsheet_preset(selected_file, target_dir, basename, extension, settings, bundles, current_dir, saved_count + 1)
+                        saved_count += 1
+                    
+                except Exception as e:
+                    print(f"导出 {selected_file} 失败: {e}")
+                    continue
+            
+            progress.setValue(len(selected_files))
+            
+            if saved_count > 0:
+                self.statusBar().showMessage(f"已成功导出 {saved_count} 个文件到: {target_dir}")
+            else:
+                self.statusBar().showMessage("没有文件被导出")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"批量导出失败: {e}")
+        finally:
+            progress.close()
+
+    def _export_single_preset(self, filename: str, target_dir: str, basename: str, extension: str, settings: dict, presets: dict, current_dir: Path, index: int):
+        """导出单个Single预设文件"""
+        # 检查文件存在
+        file_path = current_dir / filename
+        if not file_path.exists():
+            return
+            
+        # 加载图像
+        image_data = self.context.image_manager.load_image(str(file_path))
+        
+        # 加载预设
+        preset = presets[filename]
+        
+        # 生成输出文件名
+        output_filename = f"{basename}-{index:02d}{extension}"
+        output_path = str(Path(target_dir) / output_filename)
+        
+        # 使用预设参数进行完整处理
+        self._export_image_with_preset(image_data, preset, None, output_path, settings)
+
+    def _export_contactsheet_preset(self, filename: str, target_dir: str, basename: str, extension: str, settings: dict, bundles: dict, current_dir: Path, index: int):
+        """导出ContactSheet预设文件"""
+        # 检查文件存在
+        file_path = current_dir / filename
+        if not file_path.exists():
+            return
+            
+        # 加载图像
+        image_data = self.context.image_manager.load_image(str(file_path))
+        
+        # 获取Bundle并使用contactsheet预设
+        bundle = bundles[filename]
+        contactsheet_preset = bundle.contactsheet
+        
+        # 生成输出文件名
+        output_filename = f"{basename}-{index:02d}{extension}"
+        output_path = str(Path(target_dir) / output_filename)
+        
+        # 使用contactsheet预设参数进行完整处理
+        self._export_image_with_preset(image_data, contactsheet_preset, None, output_path, settings)
+
+    def _export_crop_item(self, filename: str, crop_id: str, target_dir: str, basename: str, extension: str, settings: dict, bundles: dict, current_dir: Path, index: int):
+        """导出Crop项目"""
+        # 检查文件存在
+        file_path = current_dir / filename
+        if not file_path.exists():
+            return
+            
+        if filename not in bundles:
+            return
+            
+        bundle = bundles[filename]
+        
+        # 找到对应的crop
+        target_crop = None
+        for crop_entry in bundle.crops:
+            if crop_entry.crop.id == crop_id or crop_entry.crop.name == crop_id:
+                target_crop = crop_entry
+                break
+                
+        if not target_crop:
+            return
+            
+        # 加载图像
+        image_data = self.context.image_manager.load_image(str(file_path))
+        
+        # 生成输出文件名
+        output_filename = f"{basename}-{index:02d}{extension}"
+        output_path = str(Path(target_dir) / output_filename)
+        
+        # 使用crop预设和裁剪参数进行完整处理
+        self._export_image_with_preset(image_data, target_crop.preset, target_crop.crop, output_path, settings)
+
+    def _export_image_with_preset(self, image_data, preset, crop_instance, output_path: str, settings: dict):
+        """使用预设和完整处理管道导出图像"""
+        try:
+            import numpy as np
+            from divere.core.data_types import ColorGradingParams
+            
+            # 从预设创建临时参数
+            if preset and preset.grading_params:
+                temp_params = ColorGradingParams.from_dict(preset.grading_params)
+            else:
+                temp_params = self.context.get_current_params()
+            
+            # 应用裁剪和旋转
+            if crop_instance:
+                rect_norm = crop_instance.rect_norm
+                orientation = crop_instance.orientation
+            elif preset and hasattr(preset, 'crop') and preset.crop:
+                rect_norm = preset.crop
+                orientation = getattr(preset, 'orientation', 0)
+            else:
+                rect_norm = None
+                orientation = 0
+                
+            final_image = self._apply_crop_and_rotation_for_export(image_data, rect_norm, orientation)
+            
+            # 设置输入色彩空间
+            input_cs_name = "sRGB"  # 默认
+            if preset and hasattr(preset, 'input_color_space_name') and preset.input_color_space_name:
+                input_cs_name = preset.input_color_space_name
+            elif preset and hasattr(preset, 'idt') and preset.idt:
+                # 从IDT构建临时色彩空间
+                input_cs_name = self._get_or_create_temp_colorspace_from_idt(preset.idt)
+                
+            working_image = self.context.color_space_manager.set_image_color_space(
+                final_image, input_cs_name
+            )
+            
+            # 前置IDT Gamma
+            try:
+                cs_info = self.context.color_space_manager.get_color_space_info(input_cs_name) or {}
+                idt_gamma = float(cs_info.get("gamma", 1.0))
+            except Exception:
+                idt_gamma = 1.0
+                
+            if abs(idt_gamma - 1.0) > 1e-6 and working_image.array is not None:
+                arr = self.context.the_enlarger.pipeline_processor.math_ops.apply_power(
+                    working_image.array, idt_gamma, use_optimization=False
+                )
+                working_image = working_image.copy_with_new_array(arr)
+                
+            # 转到工作色彩空间
+            working_image = self.context.color_space_manager.convert_to_working_space(
+                working_image, skip_gamma_inverse=True
+            )
+            
+            # 导出模式：提升为float64精度
+            if working_image.array is not None:
+                working_image.array = working_image.array.astype(np.float64)
+                working_image.dtype = np.float64
+            
+            # 应用调色参数（使用预设的参数，不是当前UI的参数）
+            result_image = self.context.the_enlarger.apply_full_pipeline(
+                working_image,
+                temp_params,
+                include_curve=settings["include_curve"],
+                for_export=True
+            )
+            
+            # 转换到输出色彩空间
+            result_image = self.context.color_space_manager.convert_to_display_space(
+                result_image, settings["color_space"]
+            )
+            
+            # Convert to grayscale for B&W film types
+            result_image = self._convert_to_grayscale_if_bw_mode(result_image)
+            
+            # 获取有效位深
+            ext = Path(output_path).suffix.lower()
+            requested_bit_depth = int(settings.get("bit_depth", 8))
+            if ext in [".jpg", ".jpeg"]:
+                effective_bit_depth = 8
+            elif ext in [".png", ".tif", ".tiff"]:
+                effective_bit_depth = 16 if requested_bit_depth == 16 else 8
+            else:
+                effective_bit_depth = requested_bit_depth
+                
+            # 保存图像
+            self.context.image_manager.save_image(
+                result_image,
+                output_path,
+                bit_depth=effective_bit_depth,
+                quality=95,
+                export_color_space=settings.get("color_space", "sRGB")
+            )
+            
+        except Exception as e:
+            print(f"导出图像失败: {e}")
+            
+    def _get_or_create_temp_colorspace_from_idt(self, idt_data):
+        """从IDT数据创建或获取临时色彩空间"""
+        # 简化实现：尝试根据IDT名称匹配现有色彩空间
+        if isinstance(idt_data, dict) and 'name' in idt_data:
+            idt_name = idt_data['name']
+            # 在现有色彩空间中查找匹配的
+            available_cs = self.context.color_space_manager.get_available_color_spaces()
+            for cs_name in available_cs:
+                if idt_name.lower() in cs_name.lower():
+                    return cs_name
+        # 回退到默认
+        return "sRGB"
     
     def _reset_parameters(self):
         """重置调色参数"""

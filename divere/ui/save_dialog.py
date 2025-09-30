@@ -5,23 +5,27 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, 
     QRadioButton, QComboBox, QCheckBox, QPushButton,
-    QLabel, QGridLayout, QDialogButtonBox
+    QLabel, QGridLayout, QDialogButtonBox, QSplitter,
+    QTreeWidget, QTreeWidgetItem, QProgressDialog
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 
 class SaveImageDialog(QDialog):
     """保存图像对话框"""
     
-    def __init__(self, parent=None, color_spaces=None, is_bw_mode=False, color_space_manager=None):
+    def __init__(self, parent=None, color_spaces=None, is_bw_mode=False, color_space_manager=None, app_context=None):
         super().__init__(parent)
         self.setWindowTitle("保存图像设置")
         self.setModal(True)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(800)  # 增加宽度以容纳左右布局
         self._save_mode = 'single'  # 'single' | 'all'
         self._is_bw_mode = is_bw_mode
         self._color_space_manager = color_space_manager
+        self._app_context = app_context
+        self._selected_files: Set[str] = set()  # 选中的文件名集合
         
         # 可用的色彩空间
         if color_spaces is None and color_space_manager:
@@ -39,6 +43,82 @@ class SaveImageDialog(QDialog):
     def _create_ui(self):
         """创建用户界面"""
         layout = QVBoxLayout(self)
+        
+        # 创建左右分割器
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter)
+        
+        # 左侧：现有的保存设置
+        left_widget = self._create_left_panel()
+        splitter.addWidget(left_widget)
+        
+        # 右侧：文件树和批量选择
+        right_widget = self._create_right_panel()
+        splitter.addWidget(right_widget)
+        
+        # 设置分割器比例 (左侧:右侧 = 1:1)
+        splitter.setSizes([400, 400])
+        
+        # 按钮
+        button_box = QDialogButtonBox()
+        # 标准"保存单张"按钮
+        ok_btn = button_box.addButton(QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("保存单张")
+        # 自定义"保存所有"按钮  
+        self.save_all_btn = QPushButton("保存所有")
+        button_box.addButton(self.save_all_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+        # 取消
+        cancel_btn = button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
+        
+        def _on_ok():
+            self._save_mode = 'single'
+            self.accept()
+        def _on_save_all():
+            self._save_mode = 'all'
+            self.accept()
+        def _on_cancel():
+            self.reject()
+        ok_btn.clicked.connect(_on_ok)
+        self.save_all_btn.clicked.connect(_on_save_all)
+        cancel_btn.clicked.connect(_on_cancel)
+        
+        layout.addWidget(button_box)
+        
+        # 连接信号
+        self.tiff_16bit_radio.toggled.connect(self._on_format_changed)
+        self.jpeg_8bit_radio.toggled.connect(self._on_format_changed)
+        
+        # 初始化文件树
+        self._load_file_tree()
+        
+    def _set_defaults(self):
+        """设置默认值"""
+        self.tiff_16bit_radio.setChecked(True)
+        self._on_format_changed()
+        
+    def _on_format_changed(self):
+        """格式选择改变时更新默认色彩空间"""
+        if self._is_bw_mode:
+            # B&W mode: prioritize grayscale color spaces
+            preferred = ["Gray_Gamma_2_2", "Gray Gamma 2.2", "Grayscale", "sRGB"]
+        else:
+            # Color mode: use existing logic
+            if self.tiff_16bit_radio.isChecked():
+                # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
+                preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
+            else:
+                # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
+                preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
+        
+        for name in preferred:
+            if name in self.color_spaces:
+                self.colorspace_combo.setCurrentText(name)
+                break
+    
+    def _create_left_panel(self):
+        """创建左侧面板：现有的保存设置"""
+        left_widget = QGroupBox("保存设置")
+        layout = QVBoxLayout(left_widget)
         
         # 文件格式选择
         format_group = QGroupBox("文件格式")
@@ -73,65 +153,251 @@ class SaveImageDialog(QDialog):
         
         layout.addWidget(options_group)
         
-        # 按钮
-        button_box = QDialogButtonBox()
-        # 标准“保存单张”按钮
-        ok_btn = button_box.addButton(QDialogButtonBox.StandardButton.Ok)
-        ok_btn.setText("保存单张")
-        # 自定义“保存所有”按钮
-        save_all_btn = QPushButton("保存所有")
-        button_box.addButton(save_all_btn, QDialogButtonBox.ButtonRole.AcceptRole)
-        # 取消
-        cancel_btn = button_box.addButton(QDialogButtonBox.StandardButton.Cancel)
+        return left_widget
         
-        def _on_ok():
-            self._save_mode = 'single'
-            self.accept()
-        def _on_save_all():
-            self._save_mode = 'all'
-            self.accept()
-        def _on_cancel():
-            self.reject()
-        ok_btn.clicked.connect(_on_ok)
-        save_all_btn.clicked.connect(_on_save_all)
-        cancel_btn.clicked.connect(_on_cancel)
+    def _create_right_panel(self):
+        """创建右侧面板：文件树和批量选择"""
+        right_widget = QGroupBox("批量导出选择")
+        layout = QVBoxLayout(right_widget)
         
-        layout.addWidget(button_box)
+        # 说明标签
+        info_label = QLabel("选择要导出的文件（基于当前文件夹的divere_presets.json）：")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
         
-        # 连接信号
-        self.tiff_16bit_radio.toggled.connect(self._on_format_changed)
-        self.jpeg_8bit_radio.toggled.connect(self._on_format_changed)
+        # 文件树
+        self.file_tree = QTreeWidget()
+        self.file_tree.setHeaderLabels(["文件", "类型"])
+        self.file_tree.itemChanged.connect(self._on_tree_item_changed)
+        layout.addWidget(self.file_tree)
         
-    def _set_defaults(self):
-        """设置默认值"""
-        self.tiff_16bit_radio.setChecked(True)
-        self._on_format_changed()
+        # 快速选择按钮
+        button_layout = QHBoxLayout()
         
-    def _on_format_changed(self):
-        """格式选择改变时更新默认色彩空间"""
-        if self._is_bw_mode:
-            # B&W mode: prioritize grayscale color spaces
-            preferred = ["Gray_Gamma_2_2", "Gray Gamma 2.2", "Grayscale", "sRGB"]
-        else:
-            # Color mode: use existing logic
-            if self.tiff_16bit_radio.isChecked():
-                # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
-                preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
+        select_all_btn = QPushButton("全选")
+        select_all_btn.clicked.connect(self._select_all)
+        button_layout.addWidget(select_all_btn)
+        
+        select_none_btn = QPushButton("全不选")
+        select_none_btn.clicked.connect(self._select_none)
+        button_layout.addWidget(select_none_btn)
+        
+        select_default_btn = QPushButton("默认选择")
+        select_default_btn.clicked.connect(self._select_default)
+        button_layout.addWidget(select_default_btn)
+        
+        layout.addLayout(button_layout)
+        
+        return right_widget
+
+    def _load_file_tree(self):
+        """加载文件树"""
+        if not self._app_context:
+            return
+            
+        self.file_tree.clear()
+        self._selected_files.clear()
+        
+        try:
+            # 获取当前目录的预设管理器
+            auto_preset_manager = self._app_context.auto_preset_manager
+            if not auto_preset_manager:
+                return
+                
+            # 获取当前图像的目录
+            current_image = self._app_context.get_current_image()
+            if not current_image:
+                return
+                
+            current_dir = Path(current_image.file_path).parent
+            
+            # 设置预设管理器的活动目录
+            auto_preset_manager.set_active_directory(str(current_dir))
+            
+            # 获取所有预设
+            presets = auto_preset_manager.get_all_presets()
+            bundles = auto_preset_manager.get_all_bundles()
+            
+            # 添加Single预设（平铺在根层）
+            for filename, preset in presets.items():
+                file_path = current_dir / filename
+                if file_path.exists():
+                    item = QTreeWidgetItem(self.file_tree, [filename, "Single"])
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    item.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
+                    item.setData(0, Qt.ItemDataRole.UserRole, {
+                        'filename': filename,
+                        'type': 'single'
+                    })
+                    self._selected_files.add(filename)
+            
+            # 添加ContactSheet预设和其crops（平铺在根层，crops作为子项）
+            for filename, bundle in bundles.items():
+                file_path = current_dir / filename  
+                if file_path.exists():
+                    # ContactSheet父项
+                    cs_item = QTreeWidgetItem(self.file_tree, [filename, "ContactSheet"])
+                    cs_item.setFlags(cs_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    cs_item.setCheckState(0, Qt.CheckState.Unchecked)  # 默认不选中
+                    cs_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        'filename': filename,
+                        'type': 'contactsheet'
+                    })
+                    
+                    # 添加该bundle的crops作为子项
+                    for crop_entry in bundle.crops:
+                        crop_display_name = crop_entry.crop.name or crop_entry.crop.id
+                        crop_item = QTreeWidgetItem(cs_item, [crop_display_name, "Crop"])
+                        crop_item.setFlags(crop_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                        crop_item.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
+                        # 存储完整信息以便后续处理
+                        crop_key = f"{filename}#{crop_entry.crop.id}"  # 使用#避免与文件名冲突
+                        crop_item.setData(0, Qt.ItemDataRole.UserRole, {
+                            'filename': filename,
+                            'crop_id': crop_entry.crop.id,
+                            'type': 'crop',
+                            'key': crop_key
+                        })
+                        self._selected_files.add(crop_key)
+            
+            # 展开所有分组
+            self.file_tree.expandAll()
+            
+            # 更新保存所有按钮状态
+            self._update_save_all_button()
+            
+        except Exception as e:
+            print(f"加载文件树失败: {e}")
+
+    def _on_tree_item_changed(self, item, column):
+        """树项目变化时的处理"""
+        if column != 0:  # 只处理第一列的勾选变化
+            return
+            
+        user_data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not user_data:
+            return
+            
+        item_type = user_data.get('type')
+        
+        if item_type == 'single':
+            # Single文件
+            filename = user_data['filename']
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self._selected_files.add(filename)
             else:
-                # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
-                preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
+                self._selected_files.discard(filename)
+                
+        elif item_type == 'contactsheet':
+            # ContactSheet文件
+            filename = user_data['filename']
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self._selected_files.add(filename)
+            else:
+                self._selected_files.discard(filename)
+                
+        elif item_type == 'crop':
+            # Crop项
+            crop_key = user_data['key']
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self._selected_files.add(crop_key)
+            else:
+                self._selected_files.discard(crop_key)
+                
+        self._update_save_all_button()
+
+    def _select_all(self):
+        """全选"""
+        self._selected_files.clear()
         
-        for name in preferred:
-            if name in self.color_spaces:
-                self.colorspace_combo.setCurrentText(name)
-                break
-    
+        def check_items(item):
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(0, Qt.CheckState.Checked)
+                user_data = item.data(0, Qt.ItemDataRole.UserRole)
+                if user_data:
+                    item_type = user_data.get('type')
+                    if item_type == 'single':
+                        self._selected_files.add(user_data['filename'])
+                    elif item_type == 'contactsheet':
+                        self._selected_files.add(user_data['filename'])
+                    elif item_type == 'crop':
+                        self._selected_files.add(user_data['key'])
+            
+            for i in range(item.childCount()):
+                check_items(item.child(i))
+                
+        root = self.file_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            check_items(root.child(i))
+            
+        self._update_save_all_button()
+
+    def _select_none(self):
+        """全不选"""
+        self._selected_files.clear()
+        
+        def uncheck_items(item):
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+            
+            for i in range(item.childCount()):
+                uncheck_items(item.child(i))
+                
+        root = self.file_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            uncheck_items(root.child(i))
+            
+        self._update_save_all_button()
+
+    def _select_default(self):
+        """默认选择：所有Single和Crops，ContactSheet不选"""
+        self._selected_files.clear()
+        
+        def default_select_items(item):
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                user_data = item.data(0, Qt.ItemDataRole.UserRole)
+                if user_data:
+                    item_type = user_data.get('type')
+                    if item_type in ['single', 'crop']:
+                        item.setCheckState(0, Qt.CheckState.Checked)
+                        if item_type == 'single':
+                            self._selected_files.add(user_data['filename'])
+                        elif item_type == 'crop':
+                            self._selected_files.add(user_data['key'])
+                    else:  # contactsheet
+                        item.setCheckState(0, Qt.CheckState.Unchecked)
+            
+            for i in range(item.childCount()):
+                default_select_items(item.child(i))
+                
+        root = self.file_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            default_select_items(root.child(i))
+            
+        self._update_save_all_button()
+
+    def _update_save_all_button(self):
+        """更新保存所有按钮的状态和文本"""
+        count = len(self._selected_files)
+        if count == 0:
+            self.save_all_btn.setText("保存所有")
+            self.save_all_btn.setEnabled(False)
+        else:
+            self.save_all_btn.setText(f"保存所有 ({count})")
+            self.save_all_btn.setEnabled(True)
+
     def get_settings(self):
         """获取保存设置"""
-        return {
+        settings = {
             "format": "tiff" if self.tiff_16bit_radio.isChecked() else "jpeg",
             "bit_depth": 16 if self.tiff_16bit_radio.isChecked() else 8,
             "color_space": self.colorspace_combo.currentText(),
             "include_curve": self.include_curve_checkbox.isChecked(),
             "save_mode": self._save_mode
         }
+        
+        # 如果是批量保存模式，添加选中的文件列表
+        if self._save_mode == 'all':
+            settings["selected_files"] = list(self._selected_files)
+            
+        return settings

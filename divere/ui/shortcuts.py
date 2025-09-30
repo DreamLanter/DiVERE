@@ -28,37 +28,51 @@ class ShortcutsBinder(QObject):
     def setup_default_shortcuts(self):
         add = self._add
 
-        # 导航：左右箭头
-        add(Qt.Key_Left,  self._act_go_prev)
-        add(Qt.Key_Right, self._act_go_next)
+        # ========== 导航功能 ==========
+        add(Qt.Key_Left,  self._act_go_prev)        # 上一张照片
+        add(Qt.Key_Right, self._act_go_next)        # 下一张照片
 
-        # 旋转：[ / ]
-        add(Qt.Key_BracketLeft,  self._act_rotate_left)
-        add(Qt.Key_BracketRight, self._act_rotate_right)
+        # ========== 裁剪功能 ==========
+        add(Qt.Key_Up,   self._act_cycle_crops_up)  # 向上切换裁剪
+        add(Qt.Key_Down, self._act_cycle_crops_down)# 向下切换裁剪
+        add("Ctrl+=", self._act_add_crop)           # 添加新裁剪
 
-        # AI校色：空格 / Ctrl+空格
-        add(Qt.Key_Space, self._act_auto_color)
-        if sys.platform == "darwin":
-            add("Shift+Space", self._act_auto_color_multi)
-        else:
-            add("Ctrl+Space", self._act_auto_color_multi)
+        # ========== 旋转功能 ==========
+        add(Qt.Key_BracketLeft,  self._act_rotate_left)  # 左旋转 90°
+        add(Qt.Key_BracketRight, self._act_rotate_right) # 右旋转 90°
 
-        # Ctrl+V：粘贴默认；Ctrl+C：复制为默认
-        add("Ctrl+V", self._act_reset_parameters)
-        add("Ctrl+C", self._act_set_folder_default)
+        # ========== AI校色功能 ==========
+        add(Qt.Key_Space, self._act_auto_color)     # AI校色一次
+        add("Shift+Space", self._act_auto_color_multi) # AI校色多次
 
-        # 参数调节：Q/E/A/D/W/S/R/F
-        add(Qt.Key_Q, self._act_R_down)  # R降曝光（增青）
-        add(Qt.Key_E, self._act_R_up)    # R增曝光（增红）
+        # ========== 参数管理 ==========
+        add("Ctrl+V", self._act_reset_parameters)  # 重置所有参数
+        add("Ctrl+C", self._act_set_folder_default) # 设为文件夹默认
 
-        add(Qt.Key_A, self._act_B_down)  # B降曝光（增黄）
-        add(Qt.Key_D, self._act_B_up)    # B增曝光（增蓝）
+        # ========== 参数调节功能 ==========
+        # R通道 (红色/青色)
+        add(Qt.Key_Q, self._act_R_down)         # Q: R通道-0.01 (增青)
+        add("Shift+Q", self._act_R_down_fine)   # Shift+Q: R通道-0.001 (精细)
+        add(Qt.Key_E, self._act_R_up)           # E: R通道+0.01 (增红)
+        add("Shift+E", self._act_R_up_fine)     # Shift+E: R通道+0.001 (精细)
 
-        add(Qt.Key_W, self._act_dmax_down)  # dmax降低（提升曝光）
-        add(Qt.Key_S, self._act_dmax_up)    # dmax增大（降低曝光）
+        # B通道 (蓝色/黄色)
+        add(Qt.Key_A, self._act_B_down)         # A: B通道-0.01 (增黄)
+        add("Shift+A", self._act_B_down_fine)   # Shift+A: B通道-0.001 (精细)
+        add(Qt.Key_D, self._act_B_up)           # D: B通道+0.01 (增蓝)
+        add("Shift+D", self._act_B_up_fine)     # Shift+D: B通道+0.001 (精细)
 
-        add(Qt.Key_R, self._act_gamma_up)   # gamma增大（增加反差）
-        add(Qt.Key_F, self._act_gamma_down) # gamma减小（降低反差）
+        # 最大密度 (整体曝光)
+        add(Qt.Key_W, self._act_dmax_down)      # W: 最大密度-0.01 (提亮)
+        add("Shift+W", self._act_dmax_down_fine) # Shift+W: 最大密度-0.001 (精细)
+        add(Qt.Key_S, self._act_dmax_up)        # S: 最大密度+0.01 (压暗)
+        add("Shift+S", self._act_dmax_up_fine)  # Shift+S: 最大密度+0.001 (精细)
+
+        # 密度反差 (对比度)
+        add(Qt.Key_R, self._act_gamma_up)       # R: 密度反差+0.01 (增对比)
+        add("Shift+R", self._act_gamma_up_fine) # Shift+R: 密度反差+0.001 (精细)
+        add(Qt.Key_F, self._act_gamma_down)     # F: 密度反差-0.01 (降对比)
+        add("Shift+F", self._act_gamma_down_fine) # Shift+F: 密度反差-0.001 (精细)
 
     # ---------- 内部：工具 ----------
     def _add(self, seq, slot, context=Qt.ApplicationShortcut):
@@ -68,9 +82,6 @@ class ShortcutsBinder(QObject):
         self._shortcuts.append(sc)
         return sc
 
-    def _step(self):
-        mods = QApplication.keyboardModifiers()
-        return 0.001 if (mods & Qt.ControlModifier) else 0.01
 
     def _with_params(self, fn):
         params = self.host.context.get_current_params()
@@ -111,65 +122,109 @@ class ShortcutsBinder(QObject):
 
     # R通道
     def _act_R_down(self):
-        step = self._step()
         def op(p):
             r, g, b = p.rgb_gains
-            p.rgb_gains = (max(-3.0, min(3.0, r - step)), g, b)
+            p.rgb_gains = (max(-3.0, min(3.0, r - 0.01)), g, b)
+            self.host._show_status_message(f"R通道: {p.rgb_gains[0]:.3f}")
+        self._with_params(op)
+
+    def _act_R_down_fine(self):
+        def op(p):
+            r, g, b = p.rgb_gains
+            p.rgb_gains = (max(-3.0, min(3.0, r - 0.001)), g, b)
             self.host._show_status_message(f"R通道: {p.rgb_gains[0]:.3f}")
         self._with_params(op)
 
     def _act_R_up(self):
-        step = self._step()
         def op(p):
             r, g, b = p.rgb_gains
-            p.rgb_gains = (max(-3.0, min(3.0, r + step)), g, b)
+            p.rgb_gains = (max(-3.0, min(3.0, r + 0.01)), g, b)
+            self.host._show_status_message(f"R通道: {p.rgb_gains[0]:.3f}")
+        self._with_params(op)
+
+    def _act_R_up_fine(self):
+        def op(p):
+            r, g, b = p.rgb_gains
+            p.rgb_gains = (max(-3.0, min(3.0, r + 0.001)), g, b)
             self.host._show_status_message(f"R通道: {p.rgb_gains[0]:.3f}")
         self._with_params(op)
 
     # B通道
     def _act_B_down(self):
-        step = self._step()
         def op(p):
             r, g, b = p.rgb_gains
-            p.rgb_gains = (r, g, max(-3.0, min(3.0, b - step)))
+            p.rgb_gains = (r, g, max(-3.0, min(3.0, b - 0.01)))
+            self.host._show_status_message(f"B通道: {p.rgb_gains[2]:.3f}")
+        self._with_params(op)
+
+    def _act_B_down_fine(self):
+        def op(p):
+            r, g, b = p.rgb_gains
+            p.rgb_gains = (r, g, max(-3.0, min(3.0, b - 0.001)))
             self.host._show_status_message(f"B通道: {p.rgb_gains[2]:.3f}")
         self._with_params(op)
 
     def _act_B_up(self):
-        step = self._step()
         def op(p):
             r, g, b = p.rgb_gains
-            p.rgb_gains = (r, g, max(-3.0, min(3.0, b + step)))
+            p.rgb_gains = (r, g, max(-3.0, min(3.0, b + 0.01)))
+            self.host._show_status_message(f"B通道: {p.rgb_gains[2]:.3f}")
+        self._with_params(op)
+
+    def _act_B_up_fine(self):
+        def op(p):
+            r, g, b = p.rgb_gains
+            p.rgb_gains = (r, g, max(-3.0, min(3.0, b + 0.001)))
             self.host._show_status_message(f"B通道: {p.rgb_gains[2]:.3f}")
         self._with_params(op)
 
     # dmax
     def _act_dmax_down(self):
-        step = self._step()
         def op(p):
-            p.density_dmax = max(0.0, min(4.8, p.density_dmax - step))
+            p.density_dmax = max(0.0, min(4.8, p.density_dmax - 0.01))
+            self.host._show_status_message(f"最大密度: {p.density_dmax:.3f}")
+        self._with_params(op)
+
+    def _act_dmax_down_fine(self):
+        def op(p):
+            p.density_dmax = max(0.0, min(4.8, p.density_dmax - 0.001))
             self.host._show_status_message(f"最大密度: {p.density_dmax:.3f}")
         self._with_params(op)
 
     def _act_dmax_up(self):
-        step = self._step()
         def op(p):
-            p.density_dmax = max(0.0, min(4.8, p.density_dmax + step))
+            p.density_dmax = max(0.0, min(4.8, p.density_dmax + 0.01))
+            self.host._show_status_message(f"最大密度: {p.density_dmax:.3f}")
+        self._with_params(op)
+
+    def _act_dmax_up_fine(self):
+        def op(p):
+            p.density_dmax = max(0.0, min(4.8, p.density_dmax + 0.001))
             self.host._show_status_message(f"最大密度: {p.density_dmax:.3f}")
         self._with_params(op)
 
     # gamma
     def _act_gamma_up(self):
-        step = self._step()
         def op(p):
-            p.density_gamma = max(0.1, min(4.0, p.density_gamma + step))
+            p.density_gamma = max(0.1, min(4.0, p.density_gamma + 0.01))
+            self.host._show_status_message(f"密度反差: {p.density_gamma:.3f}")
+        self._with_params(op)
+
+    def _act_gamma_up_fine(self):
+        def op(p):
+            p.density_gamma = max(0.1, min(4.0, p.density_gamma + 0.001))
             self.host._show_status_message(f"密度反差: {p.density_gamma:.3f}")
         self._with_params(op)
 
     def _act_gamma_down(self):
-        step = self._step()
         def op(p):
-            p.density_gamma = max(0.1, min(4.0, p.density_gamma - step))
+            p.density_gamma = max(0.1, min(4.0, p.density_gamma - 0.01))
+            self.host._show_status_message(f"密度反差: {p.density_gamma:.3f}")
+        self._with_params(op)
+
+    def _act_gamma_down_fine(self):
+        def op(p):
+            p.density_gamma = max(0.1, min(4.0, p.density_gamma - 0.001))
             self.host._show_status_message(f"密度反差: {p.density_gamma:.3f}")
         self._with_params(op)
 
@@ -180,6 +235,108 @@ class ShortcutsBinder(QObject):
     def _act_auto_color_multi(self):
         self.host._on_auto_color_iterative_requested()
         self.host._show_status_message("校色一次")
+
+    def _act_add_crop(self):
+        """添加新裁剪（相当于点击+按钮）"""
+        self.host.preview_widget._on_add_crop_clicked()
+        self.host._show_status_message("添加新裁剪")
+
+    # 裁剪循环切换
+    def _act_cycle_crops_up(self):
+        """向上循环切换crops (contactsheet -> 最后一个crop -> ... -> crop2 -> crop1 -> contactsheet)"""
+        try:
+            # 获取所有crops
+            all_crops = self.host.context.get_all_crops()
+            
+            # 获取当前状态
+            current_kind = getattr(self.host.context, '_current_profile_kind', 'contactsheet')
+            current_crop_id = self.host.context.get_active_crop_id()
+            
+            if not all_crops:
+                # 没有crops，保持在contactsheet
+                self.host.context.switch_to_contactsheet()
+                self.host._show_status_message("没有裁剪区域")
+                return
+            
+            if current_kind == 'contactsheet':
+                # 从contactsheet切换到最后一个crop (反向)
+                last_crop = all_crops[-1]
+                self.host.context.switch_to_crop_focused(last_crop.id)
+                self.host._show_status_message(f"切换到 {last_crop.name}")
+            else:
+                # 当前在某个crop上，找到上一个 (反向)
+                current_index = -1
+                for i, crop in enumerate(all_crops):
+                    if crop.id == current_crop_id:
+                        current_index = i
+                        break
+                
+                if current_index >= 0:
+                    if current_index > 0:
+                        # 切换到上一个crop (反向)
+                        prev_crop = all_crops[current_index - 1]
+                        self.host.context.switch_to_crop_focused(prev_crop.id)
+                        self.host._show_status_message(f"切换到 {prev_crop.name}")
+                    else:
+                        # 第一个crop，回到contactsheet
+                        self.host.context.switch_to_contactsheet()
+                        self.host.context.restore_crop_preview()
+                        self.host._show_status_message("切换到接触印相")
+                else:
+                    # 找不到当前crop，回到contactsheet
+                    self.host.context.switch_to_contactsheet()
+                    self.host.context.restore_crop_preview()
+                    self.host._show_status_message("切换到接触印相")
+        except Exception as e:
+            self.host._show_status_message(f"切换失败: {str(e)}")
+
+    def _act_cycle_crops_down(self):
+        """向下循环切换crops (contactsheet -> crop1 -> crop2 -> crop3 -> ... -> contactsheet)"""
+        try:
+            # 获取所有crops
+            all_crops = self.host.context.get_all_crops()
+            
+            # 获取当前状态
+            current_kind = getattr(self.host.context, '_current_profile_kind', 'contactsheet')
+            current_crop_id = self.host.context.get_active_crop_id()
+            
+            if not all_crops:
+                # 没有crops，保持在contactsheet
+                self.host.context.switch_to_contactsheet()
+                self.host._show_status_message("没有裁剪区域")
+                return
+            
+            if current_kind == 'contactsheet':
+                # 从contactsheet切换到第一个crop (正向)
+                first_crop = all_crops[0]
+                self.host.context.switch_to_crop_focused(first_crop.id)
+                self.host._show_status_message(f"切换到 {first_crop.name}")
+            else:
+                # 当前在某个crop上，找到下一个 (正向)
+                current_index = -1
+                for i, crop in enumerate(all_crops):
+                    if crop.id == current_crop_id:
+                        current_index = i
+                        break
+                
+                if current_index >= 0:
+                    if current_index < len(all_crops) - 1:
+                        # 切换到下一个crop (正向)
+                        next_crop = all_crops[current_index + 1]
+                        self.host.context.switch_to_crop_focused(next_crop.id)
+                        self.host._show_status_message(f"切换到 {next_crop.name}")
+                    else:
+                        # 最后一个crop，回到contactsheet
+                        self.host.context.switch_to_contactsheet()
+                        self.host.context.restore_crop_preview()
+                        self.host._show_status_message("切换到接触印相")
+                else:
+                    # 找不到当前crop，回到contactsheet
+                    self.host.context.switch_to_contactsheet()
+                    self.host.context.restore_crop_preview()
+                    self.host._show_status_message("切换到接触印相")
+        except Exception as e:
+            self.host._show_status_message(f"切换失败: {str(e)}")
 
 
 class ImeBracketFilter(QObject):

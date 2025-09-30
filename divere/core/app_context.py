@@ -947,7 +947,7 @@ class ApplicationContext(QObject):
             pass
         
         # 切换到 contactsheet profile
-        self._current_profile_kind = 'contactsheet'
+        # self._current_profile_kind = 'contactsheet'
         
         # NOTE: Do not apply film type overrides when loading presets
         # The preset's values should be preserved as-is

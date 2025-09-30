@@ -96,7 +96,8 @@ class EnhancedConfigManager:
             },
             "defaults": {
                 "input_color_space": "sRGB",
-                "output_color_space": "sRGB"
+                "output_color_space_16bit": "DisplayP3",
+                "output_color_space_8bit": "sRGB"
             },
             "config": {
                 "show_user_config_dir": True,

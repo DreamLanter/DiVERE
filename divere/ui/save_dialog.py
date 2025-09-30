@@ -27,6 +27,10 @@ class SaveImageDialog(QDialog):
         self._app_context = app_context
         self._selected_files: Set[str] = set()  # 选中的文件名集合
         
+        # 导入配置管理器
+        from divere.utils.enhanced_config_manager import enhanced_config_manager
+        self._config_manager = enhanced_config_manager
+        
         # 可用的色彩空间
         if color_spaces is None and color_space_manager:
             # 使用过滤后的regular色彩空间（有ICC文件的）
@@ -94,26 +98,42 @@ class SaveImageDialog(QDialog):
     def _set_defaults(self):
         """设置默认值"""
         self.tiff_16bit_radio.setChecked(True)
-        self._on_format_changed()
+        self._load_saved_color_space()
         
     def _on_format_changed(self):
         """格式选择改变时更新默认色彩空间"""
+        self._load_saved_color_space()
+        
+    def _load_saved_color_space(self):
+        """加载保存的色彩空间选择"""
         if self._is_bw_mode:
             # B&W mode: prioritize grayscale color spaces
             preferred = ["Gray_Gamma_2_2", "Gray Gamma 2.2", "Grayscale", "sRGB"]
+            for name in preferred:
+                if name in self.color_spaces:
+                    self.colorspace_combo.setCurrentText(name)
+                    break
         else:
-            # Color mode: use existing logic
+            # 从配置读取保存的色彩空间
             if self.tiff_16bit_radio.isChecked():
-                # 16-bit 默认使用 ACEScg_Linear（若不存在则退化到 ACEScg 或 DisplayP3/AdobeRGB）
-                preferred = ["ACEScg_Linear", "ACEScg", "DisplayP3", "AdobeRGB", "sRGB"]
+                saved_color_space = self._config_manager.get_default_setting("output_color_space_16bit", "DisplayP3")
             else:
-                # 8-bit JPEG 默认使用 DisplayP3（若不可用则退化到 sRGB/AdobeRGB）
-                preferred = ["DisplayP3", "sRGB", "AdobeRGB"]
-        
-        for name in preferred:
-            if name in self.color_spaces:
-                self.colorspace_combo.setCurrentText(name)
-                break
+                saved_color_space = self._config_manager.get_default_setting("output_color_space_8bit", "sRGB")
+            
+            # 检查保存的色彩空间是否在可用列表中
+            if saved_color_space in self.color_spaces:
+                self.colorspace_combo.setCurrentText(saved_color_space)
+            else:
+                # 如果保存的色彩空间不可用，使用默认的fallback逻辑
+                if self.tiff_16bit_radio.isChecked():
+                    fallback = ["DisplayP3", "AdobeRGB", "sRGB"]
+                else:
+                    fallback = ["sRGB", "DisplayP3", "AdobeRGB"]
+                
+                for name in fallback:
+                    if name in self.color_spaces:
+                        self.colorspace_combo.setCurrentText(name)
+                        break
     
     def _create_left_panel(self):
         """创建左侧面板：现有的保存设置"""
@@ -388,10 +408,19 @@ class SaveImageDialog(QDialog):
 
     def get_settings(self):
         """获取保存设置"""
+        current_color_space = self.colorspace_combo.currentText()
+        
+        # 保存当前选择的色彩空间到配置
+        if not self._is_bw_mode:
+            if self.tiff_16bit_radio.isChecked():
+                self._config_manager.set_default_setting("output_color_space_16bit", current_color_space)
+            else:
+                self._config_manager.set_default_setting("output_color_space_8bit", current_color_space)
+        
         settings = {
             "format": "tiff" if self.tiff_16bit_radio.isChecked() else "jpeg",
             "bit_depth": 16 if self.tiff_16bit_radio.isChecked() else 8,
-            "color_space": self.colorspace_combo.currentText(),
+            "color_space": current_color_space,
             "include_curve": self.include_curve_checkbox.isChecked(),
             "save_mode": self._save_mode
         }

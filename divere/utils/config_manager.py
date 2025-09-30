@@ -38,7 +38,8 @@ class ConfigManager:
             },
             "defaults": {
                 "input_color_space": "sRGB",
-                "output_color_space": "sRGB"
+                "output_color_space_16bit": "DisplayP3",
+                "output_color_space_8bit": "sRGB"
             }
         }
         

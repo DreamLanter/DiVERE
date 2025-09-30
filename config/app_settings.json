@@ -1,7 +1,7 @@
 {
   "directories": {
-    "open_image": "/Users/v7/Pictures/样片/X5 - 6487 kd400 3f",
-    "save_image": "/Users/v7/Pictures/样片/X5 - 6487 kd400 3f",
+    "open_image": "/Volumes/V7Disk/Pictures/Scan2025/122509001-gold200",
+    "save_image": "/Volumes/V7Disk/Pictures/Scan2025/122509001-gold200",
     "save_lut": "/Users/v7/Downloads",
     "save_matrix": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/config/matrices"
   },
@@ -17,8 +17,9 @@
     "proxy_max_size": 1000
   },
   "defaults": {
-    "input_color_space": "ACEScg",
-    "output_color_space": "sRGB",
+    "input_color_space": "sRGB",
+    "output_color_space_16bit": "ACEScg",
+    "output_color_space_8bit": "sRGB",
     "working_color_space": "KodakEnduraPremier"
   },
   "config": {

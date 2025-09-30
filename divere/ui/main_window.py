@@ -1547,12 +1547,21 @@ class MainWindow(QMainWindow):
         settings = save_dialog.get_settings()
         self._execute_save(settings, force_dialog=True)
 
-    def _execute_save(self, settings: dict, force_dialog: bool = False):
-        """执行保存操作"""
+    def _execute_save(self, settings: dict, force_dialog: bool = False, target_file_path: str = None):
+        """执行保存操作
+        
+        Args:
+            settings: 保存设置
+            force_dialog: 是否强制显示文件对话框
+            target_file_path: 直接指定保存路径（用于批量保存），如果提供则跳过对话框
+        """
         current_image = self.context.get_current_image()
         file_path = current_image.file_path if current_image else None
         
-        if force_dialog or not file_path:
+        # 如果提供了目标路径，直接使用，跳过对话框
+        if target_file_path:
+            file_path = target_file_path
+        elif force_dialog or not file_path:
             extension = ".tiff" if settings["format"] == "tiff" else ".jpg"
             filter_str = "TIFF文件 (*.tiff *.tif)" if settings["format"] == "tiff" else "JPEG文件 (*.jpg *.jpeg)"
             original_filename = Path(current_image.file_path).stem if current_image and current_image.file_path else "untitled"
@@ -1623,7 +1632,9 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
             
-        enhanced_config_manager.set_directory("save_image", str(Path(file_path).parent))
+        # 只有非批量保存时才更新配置目录
+        if not target_file_path:
+            enhanced_config_manager.set_directory("save_image", str(Path(file_path).parent))
             
         try:
             # 根据保存模式确定裁剪与方向
@@ -1853,7 +1864,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"保存所有失败: {e}")
 
     def _execute_selective_batch_save(self, settings: dict, target_dir: str, basename: str, extension: str):
-        """执行选择性批量保存（基于用户在对话框中的选择）"""
+        """执行选择性批量保存 - 通过状态切换+复用单张保存逻辑确保结果一致"""
         from PySide6.QtWidgets import QProgressDialog
         from PySide6.QtCore import Qt
         
@@ -1862,6 +1873,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "信息", "没有选择要导出的文件")
             return
             
+        # 备份当前Context状态
+        backup = self.context.backup_state()
+        
         # 创建进度条
         progress = QProgressDialog("正在批量导出...", "取消", 0, len(selected_files), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -1870,11 +1884,11 @@ class MainWindow(QMainWindow):
         
         try:
             # 获取当前图像目录和预设管理器
-            current_image = self.context.get_current_image()
-            if not current_image:
+            original_image = self.context.get_current_image()
+            if not original_image:
                 return
                 
-            current_dir = Path(current_image.file_path).parent
+            current_dir = Path(original_image.file_path).parent
             auto_preset_manager = self.context.auto_preset_manager
             auto_preset_manager.set_active_directory(str(current_dir))
             
@@ -1882,36 +1896,45 @@ class MainWindow(QMainWindow):
             presets = auto_preset_manager.get_all_presets()
             bundles = auto_preset_manager.get_all_bundles()
             
+            # 按树结构顺序排序选择的文件
+            ordered_files = self._sort_selected_files_by_tree_order(selected_files, presets, bundles)
+            
             saved_count = 0
             
-            for i, selected_file in enumerate(selected_files):
+            for i, file_entry in enumerate(ordered_files):
                 if progress.wasCanceled():
                     break
+                
+                file_type, filename, crop_id = file_entry
+                
+                # 显示名称
+                if file_type == 'crop':
+                    display_name = f"{filename}#{crop_id}"
+                else:
+                    display_name = filename
                     
                 progress.setValue(i)
-                progress.setLabelText(f"正在导出: {selected_file}")
+                progress.setLabelText(f"正在导出: {display_name}")
                 
                 try:
-                    # 检查是否为crop项目（使用#分隔符）
-                    if "#" in selected_file:
-                        # Crop项目：filename#cropid格式
-                        parts = selected_file.split("#", 1)
-                        if len(parts) == 2:
-                            filename, crop_id = parts
-                            if filename in bundles:
-                                self._export_crop_item(filename, crop_id, target_dir, basename, extension, settings, bundles, current_dir, saved_count + 1)
-                                saved_count += 1
-                    elif selected_file in presets:
-                        # Single预设
-                        self._export_single_preset(selected_file, target_dir, basename, extension, settings, presets, current_dir, saved_count + 1)
-                        saved_count += 1
-                    elif selected_file in bundles:
-                        # ContactSheet预设
-                        self._export_contactsheet_preset(selected_file, target_dir, basename, extension, settings, bundles, current_dir, saved_count + 1)
+                    # 生成输出文件路径
+                    output_filename = f"{basename}-{saved_count + 1:02d}{extension}"
+                    output_path = str(Path(target_dir) / output_filename)
+                    
+                    # 根据文件类型进行状态切换和保存
+                    success = False
+                    if file_type == 'single':
+                        success = self._export_with_context_switch_single(filename, presets, current_dir, output_path, settings)
+                    elif file_type == 'contactsheet':
+                        success = self._export_with_context_switch_contactsheet(filename, bundles, current_dir, output_path, settings)
+                    elif file_type == 'crop':
+                        success = self._export_with_context_switch_crop(filename, crop_id, bundles, current_dir, output_path, settings)
+                    
+                    if success:
                         saved_count += 1
                     
                 except Exception as e:
-                    print(f"导出 {selected_file} 失败: {e}")
+                    print(f"导出 {display_name} 失败: {e}")
                     continue
             
             progress.setValue(len(selected_files))
@@ -1924,191 +1947,139 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"批量导出失败: {e}")
         finally:
+            # 恢复原始Context状态
+            self.context.restore_state(backup)
             progress.close()
 
-    def _export_single_preset(self, filename: str, target_dir: str, basename: str, extension: str, settings: dict, presets: dict, current_dir: Path, index: int):
-        """导出单个Single预设文件"""
-        # 检查文件存在
-        file_path = current_dir / filename
-        if not file_path.exists():
-            return
+    def _sort_selected_files_by_tree_order(self, selected_files: set, presets: dict, bundles: dict) -> list:
+        """按树结构顺序排序选中的文件：Single -> ContactSheet -> Crops"""
+        ordered_files = []
+        
+        # 1. 首先添加所有Single文件（按文件名排序）
+        single_files = []
+        for filename in presets.keys():
+            if filename in selected_files:
+                single_files.append(('single', filename, None))
+        single_files.sort(key=lambda x: x[1])  # 按文件名排序
+        ordered_files.extend(single_files)
+        
+        # 2. 然后添加ContactSheet文件及其Crops（按文件名排序）
+        contactsheet_files = []
+        for filename in bundles.keys():
+            contactsheet_files.append(filename)
+        contactsheet_files.sort()  # 按文件名排序
+        
+        for filename in contactsheet_files:
+            # 添加ContactSheet本身（如果被选中）
+            if filename in selected_files:
+                ordered_files.append(('contactsheet', filename, None))
             
-        # 加载图像
-        image_data = self.context.image_manager.load_image(str(file_path))
+            # 添加该ContactSheet的所有Crops（按crop_id顺序）
+            bundle = bundles[filename]
+            crop_entries = []
+            for crop_entry in bundle.crops:
+                crop_key = f"{filename}#{crop_entry.crop.id}"
+                if crop_key in selected_files:
+                    crop_entries.append(('crop', filename, crop_entry.crop.id))
+            # Crops按照它们在bundle中的顺序
+            ordered_files.extend(crop_entries)
         
-        # 加载预设
-        preset = presets[filename]
-        
-        # 生成输出文件名
-        output_filename = f"{basename}-{index:02d}{extension}"
-        output_path = str(Path(target_dir) / output_filename)
-        
-        # 使用预设参数进行完整处理
-        self._export_image_with_preset(image_data, preset, None, output_path, settings)
+        return ordered_files
 
-    def _export_contactsheet_preset(self, filename: str, target_dir: str, basename: str, extension: str, settings: dict, bundles: dict, current_dir: Path, index: int):
-        """导出ContactSheet预设文件"""
-        # 检查文件存在
-        file_path = current_dir / filename
-        if not file_path.exists():
-            return
-            
-        # 加载图像
-        image_data = self.context.image_manager.load_image(str(file_path))
-        
-        # 获取Bundle并使用contactsheet预设
-        bundle = bundles[filename]
-        contactsheet_preset = bundle.contactsheet
-        
-        # 生成输出文件名
-        output_filename = f"{basename}-{index:02d}{extension}"
-        output_path = str(Path(target_dir) / output_filename)
-        
-        # 使用contactsheet预设参数进行完整处理
-        self._export_image_with_preset(image_data, contactsheet_preset, None, output_path, settings)
-
-    def _export_crop_item(self, filename: str, crop_id: str, target_dir: str, basename: str, extension: str, settings: dict, bundles: dict, current_dir: Path, index: int):
-        """导出Crop项目"""
-        # 检查文件存在
-        file_path = current_dir / filename
-        if not file_path.exists():
-            return
-            
-        if filename not in bundles:
-            return
-            
-        bundle = bundles[filename]
-        
-        # 找到对应的crop
-        target_crop = None
-        for crop_entry in bundle.crops:
-            if crop_entry.crop.id == crop_id or crop_entry.crop.name == crop_id:
-                target_crop = crop_entry
-                break
-                
-        if not target_crop:
-            return
-            
-        # 加载图像
-        image_data = self.context.image_manager.load_image(str(file_path))
-        
-        # 生成输出文件名
-        output_filename = f"{basename}-{index:02d}{extension}"
-        output_path = str(Path(target_dir) / output_filename)
-        
-        # 使用crop预设和裁剪参数进行完整处理
-        self._export_image_with_preset(image_data, target_crop.preset, target_crop.crop, output_path, settings)
-
-    def _export_image_with_preset(self, image_data, preset, crop_instance, output_path: str, settings: dict):
-        """使用预设和完整处理管道导出图像"""
+    def _export_with_context_switch_single(self, filename: str, presets: dict, current_dir: Path, output_path: str, settings: dict) -> bool:
+        """导出Single预设：临时切换Context状态并调用单张保存"""
         try:
-            import numpy as np
-            from divere.core.data_types import ColorGradingParams
-            
-            # 从预设创建临时参数
-            if preset and preset.grading_params:
-                temp_params = ColorGradingParams.from_dict(preset.grading_params)
-            else:
-                temp_params = self.context.get_current_params()
-            
-            # 应用裁剪和旋转
-            if crop_instance:
-                rect_norm = crop_instance.rect_norm
-                orientation = crop_instance.orientation
-            elif preset and hasattr(preset, 'crop') and preset.crop:
-                rect_norm = preset.crop
-                orientation = getattr(preset, 'orientation', 0)
-            else:
-                rect_norm = None
-                orientation = 0
+            # 检查文件存在
+            file_path = current_dir / filename
+            if not file_path.exists():
+                return False
                 
-            final_image = self._apply_crop_and_rotation_for_export(image_data, rect_norm, orientation)
+            # 临时切换Context状态
+            self.context.load_image(str(file_path))  # 加载图像
+            self.context.load_preset(presets[filename])  # 加载预设
             
-            # 设置输入色彩空间
-            input_cs_name = "sRGB"  # 默认
-            if preset and hasattr(preset, 'input_color_space_name') and preset.input_color_space_name:
-                input_cs_name = preset.input_color_space_name
-            elif preset and hasattr(preset, 'idt') and preset.idt:
-                # 从IDT构建临时色彩空间
-                input_cs_name = self._get_or_create_temp_colorspace_from_idt(preset.idt)
-                
-            working_image = self.context.color_space_manager.set_image_color_space(
-                final_image, input_cs_name
-            )
-            
-            # 前置IDT Gamma
-            try:
-                cs_info = self.context.color_space_manager.get_color_space_info(input_cs_name) or {}
-                idt_gamma = float(cs_info.get("gamma", 1.0))
-            except Exception:
-                idt_gamma = 1.0
-                
-            if abs(idt_gamma - 1.0) > 1e-6 and working_image.array is not None:
-                arr = self.context.the_enlarger.pipeline_processor.math_ops.apply_power(
-                    working_image.array, idt_gamma, use_optimization=False
-                )
-                working_image = working_image.copy_with_new_array(arr)
-                
-            # 转到工作色彩空间
-            working_image = self.context.color_space_manager.convert_to_working_space(
-                working_image, skip_gamma_inverse=True
-            )
-            
-            # 导出模式：提升为float64精度
-            if working_image.array is not None:
-                working_image.array = working_image.array.astype(np.float64)
-                working_image.dtype = np.float64
-            
-            # 应用调色参数（使用预设的参数，不是当前UI的参数）
-            result_image = self.context.the_enlarger.apply_full_pipeline(
-                working_image,
-                temp_params,
-                include_curve=settings["include_curve"],
-                for_export=True
-            )
-            
-            # 转换到输出色彩空间
-            result_image = self.context.color_space_manager.convert_to_display_space(
-                result_image, settings["color_space"]
-            )
-            
-            # Convert to grayscale for B&W film types
-            result_image = self._convert_to_grayscale_if_bw_mode(result_image)
-            
-            # 获取有效位深
-            ext = Path(output_path).suffix.lower()
-            requested_bit_depth = int(settings.get("bit_depth", 8))
-            if ext in [".jpg", ".jpeg"]:
-                effective_bit_depth = 8
-            elif ext in [".png", ".tif", ".tiff"]:
-                effective_bit_depth = 16 if requested_bit_depth == 16 else 8
-            else:
-                effective_bit_depth = requested_bit_depth
-                
-            # 保存图像
-            self.context.image_manager.save_image(
-                result_image,
-                output_path,
-                bit_depth=effective_bit_depth,
-                quality=95,
-                export_color_space=settings.get("color_space", "sRGB")
-            )
+            # 调用单张保存逻辑
+            self._execute_save(settings, target_file_path=output_path)
+            return True
             
         except Exception as e:
-            print(f"导出图像失败: {e}")
+            print(f"导出Single预设失败 {filename}: {e}")
+            return False
+
+    def _export_with_context_switch_contactsheet(self, filename: str, bundles: dict, current_dir: Path, output_path: str, settings: dict) -> bool:
+        """导出ContactSheet预设：临时切换Context状态并调用单张保存"""
+        try:
+            # 检查文件存在
+            file_path = current_dir / filename
+            if not file_path.exists():
+                return False
+                
+            # 临时切换Context状态
+            self.context.load_image(str(file_path))  # 加载图像
+            self.context.load_preset_bundle(bundles[filename])  # 加载预设Bundle
             
-    def _get_or_create_temp_colorspace_from_idt(self, idt_data):
-        """从IDT数据创建或获取临时色彩空间"""
-        # 简化实现：尝试根据IDT名称匹配现有色彩空间
-        if isinstance(idt_data, dict) and 'name' in idt_data:
-            idt_name = idt_data['name']
-            # 在现有色彩空间中查找匹配的
-            available_cs = self.context.color_space_manager.get_available_color_spaces()
-            for cs_name in available_cs:
-                if idt_name.lower() in cs_name.lower():
-                    return cs_name
-        # 回退到默认
-        return "sRGB"
+            # 调用单张保存逻辑
+            self._execute_save(settings, target_file_path=output_path)
+            return True
+            
+        except Exception as e:
+            print(f"导出ContactSheet预设失败 {filename}: {e}")
+            return False
+
+    def _export_with_context_switch_crop(self, filename: str, crop_id: str, bundles: dict, current_dir: Path, output_path: str, settings: dict) -> bool:
+        """导出Crop项目：临时切换Context状态并调用单张保存"""
+        try:
+            # 检查文件存在
+            file_path = current_dir / filename
+            if not file_path.exists():
+                return False
+                
+            if filename not in bundles:
+                return False
+                
+            bundle = bundles[filename]
+            
+            # 找到对应的crop
+            target_crop = None
+            for crop_entry in bundle.crops:
+                if crop_entry.crop.id == crop_id or crop_entry.crop.name == crop_id:
+                    target_crop = crop_entry
+                    break
+                    
+            if not target_crop:
+                print(f"未找到crop: {crop_id} in bundle {filename}")
+                return False
+                
+            # 临时切换Context状态
+            self.context.load_image(str(file_path))  # 加载图像
+            self.context.load_preset_bundle(bundle)  # 加载预设Bundle
+            self.context.switch_to_crop_focused(crop_id)  # 使用focused版本确保正确切换
+            
+            # 验证crop状态
+            current_crop = self.context.get_active_crop_instance()
+            if current_crop is None or current_crop.id != crop_id:
+                print(f"Crop状态切换失败: 期望{crop_id}, 实际{current_crop.id if current_crop else 'None'}")
+                return False
+                
+            print(f"[DEBUG] Crop导出: {filename}#{crop_id}")
+            print(f"[DEBUG] 活动crop: {current_crop.id if current_crop else 'None'}")
+            print(f"[DEBUG] 裁剪坐标: {current_crop.rect_norm if current_crop else 'None'}")
+            print(f"[DEBUG] 旋转角度: {current_crop.orientation if current_crop else 'None'}")
+            
+            # 强制设置为single模式，确保使用crop参数
+            crop_settings = settings.copy()
+            crop_settings["save_mode"] = "single"  # 确保使用crop参数
+            
+            # 调用单张保存逻辑
+            self._execute_save(crop_settings, target_file_path=output_path)
+            return True
+            
+        except Exception as e:
+            print(f"导出Crop项目失败 {filename}#{crop_id}: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
+
     
     def _reset_parameters(self):
         """重置调色参数"""

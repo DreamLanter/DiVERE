@@ -1890,3 +1890,65 @@ class ApplicationContext(QObject):
             self.status_message_changed.emit(f"Proxy长边尺寸已更新为: {size}")
         except Exception as e:
             self.status_message_changed.emit(f"更新Proxy尺寸失败: {e}")
+
+    # =================
+    # 状态备份/恢复方法（用于批量保存）
+    # =================
+    def backup_state(self) -> dict:
+        """备份当前Context状态，用于批量保存时的临时状态切换"""
+        try:
+            return {
+                # 核心状态
+                'current_image': self._current_image,
+                'current_proxy': self._current_proxy,
+                'current_params': self._current_params.copy() if self._current_params else None,
+                'current_film_type': self._current_film_type,
+                
+                # 裁剪相关状态
+                'crops': [crop for crop in self._crops],  # 浅拷贝CropInstance列表
+                'active_crop_id': self._active_crop_id,
+                'crop_focused': self._crop_focused,
+                'current_profile_kind': self._current_profile_kind,
+                'contactsheet_profile': self._contactsheet_profile.copy() if hasattr(self._contactsheet_profile, 'copy') else self._contactsheet_profile,
+                'per_crop_params': {k: v.copy() if v else None for k, v in self._per_crop_params.items()},
+                
+                # 其他状态
+                'loading_image': self._loading_image,
+                'preview_busy': self._preview_busy,
+                'preview_pending': self._preview_pending,
+            }
+        except Exception as e:
+            print(f"备份状态失败: {e}")
+            return {}
+
+    def restore_state(self, backup: dict):
+        """恢复Context状态"""
+        try:
+            if not backup:
+                return
+                
+            # 恢复核心状态
+            self._current_image = backup.get('current_image')
+            self._current_proxy = backup.get('current_proxy')
+            if backup.get('current_params'):
+                self._current_params = backup['current_params'].copy()
+            self._current_film_type = backup.get('current_film_type', 'color_negative_c41')
+            
+            # 恢复裁剪相关状态
+            self._crops = backup.get('crops', [])
+            self._active_crop_id = backup.get('active_crop_id')
+            self._crop_focused = backup.get('crop_focused', False)
+            self._current_profile_kind = backup.get('current_profile_kind', 'contactsheet')
+            if backup.get('contactsheet_profile'):
+                self._contactsheet_profile = backup['contactsheet_profile']
+            self._per_crop_params = backup.get('per_crop_params', {})
+            
+            # 恢复其他状态
+            self._loading_image = backup.get('loading_image', False)
+            self._preview_busy = backup.get('preview_busy', False)
+            self._preview_pending = backup.get('preview_pending', False)
+            
+            print("Context状态已恢复")
+            
+        except Exception as e:
+            print(f"恢复状态失败: {e}")

@@ -541,7 +541,11 @@ class CurveEditorWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.preset_curves = {}
-        self.current_curve_name = "自定义"
+        self.current_curve_name = "custom"
+        self.original_curve_name = None  # 记录用户选择的原始曲线名称
+        self.original_curve_key = None   # 记录用户选择的原始曲线key
+        self.is_modified = False         # 标记当前曲线是否被修改
+        self.modified_item_index = -1    # 记录修改状态选项的索引
         
         self._load_preset_curves()
         self._setup_ui()
@@ -657,7 +661,7 @@ class CurveEditorWidget(QWidget):
         # 已保存曲线选择
         control_layout.addWidget(QLabel("已保存曲线:"))
         self.curve_combo = QComboBox()
-        self.curve_combo.addItem("自定义", "custom")
+        # 不添加固定的custom选项，只添加实际的预设曲线
         for curve_key, curve_data in sorted(self.preset_curves.items(), key=lambda x: x[1]["name"]):
             self.curve_combo.addItem(curve_data["name"], curve_key)
         self.curve_combo.setMaximumWidth(200)
@@ -704,15 +708,34 @@ class CurveEditorWidget(QWidget):
         """预设曲线改变"""
         curve_key = self.curve_combo.currentData()
         
+        # 处理custom选项
         if curve_key == "custom":
-            self.current_curve_name = "自定义"
+            self.current_curve_name = "custom"
+            self.original_curve_name = None
+            self.original_curve_key = None
+            self.is_modified = False
             return
         
+        # 处理修改状态选项（用户切换回修改状态）
+        if isinstance(curve_key, str) and curve_key.startswith("*"):
+            # 用户选择了修改状态选项，需要加载对应的原始曲线数据并保持修改状态显示
+            original_name = curve_key[1:]  # 去掉*前缀
+            self._load_original_curve_as_modified(original_name)
+            return
+        
+        # 处理原始预设曲线选择
         if curve_key in self.preset_curves:
+            # 如果当前有修改状态，移除它
+            if self.is_modified:
+                self._remove_modified_option()
+            
             curve_data = self.preset_curves[curve_key]
             self.current_curve_name = curve_data["name"]
+            # 记录原始曲线信息
+            self.original_curve_name = curve_data["name"]
+            self.original_curve_key = curve_key
             
-            # 加载所有通道的曲线，不触发信号避免跳转到"自定义"
+            # 加载所有通道的曲线，不触发信号避免跳转到修改状态
             if "curves" in curve_data:
                 self.curve_edit_widget.set_all_curves(curve_data["curves"], emit_signal=False)
             else:
@@ -734,17 +757,46 @@ class CurveEditorWidget(QWidget):
             'B': linear_points
         }
         self.curve_edit_widget.set_all_curves(all_curves)
-        self.curve_combo.setCurrentText("自定义")
-        self.current_curve_name = "自定义"
+        
+        # 清理修改状态
+        if self.is_modified:
+            self._remove_modified_option()
+        
+        # 动态添加custom选项并选中
+        self.curve_combo.blockSignals(True)
+        # 检查是否已经有custom选项
+        custom_index = self.curve_combo.findData("custom")
+        if custom_index == -1:
+            # 没有custom选项，添加一个
+            self.curve_combo.addItem("custom", "custom")
+            custom_index = self.curve_combo.count() - 1
+        
+        self.curve_combo.setCurrentIndex(custom_index)
+        self.curve_combo.blockSignals(False)
+        
+        # 清除所有状态信息
+        self.current_curve_name = "custom"
+        self.original_curve_name = None
+        self.original_curve_key = None
+        self.is_modified = False
+        self.modified_item_index = -1
     
     def _save_curve(self):
         """保存当前曲线到文件"""
         # 获取曲线名称
+        # 如果current_curve_name带星号，取原始名称作为默认值
+        default_name = ""
+        if self.current_curve_name and self.current_curve_name != "custom":
+            if self.current_curve_name.startswith('*'):
+                default_name = self.current_curve_name[1:]  # 去掉星号
+            else:
+                default_name = self.current_curve_name
+        
         name, ok = QInputDialog.getText(
             self, 
             "保存曲线", 
             "请输入曲线名称:",
-            text=self.current_curve_name if self.current_curve_name != "自定义" else ""
+            text=default_name
         )
         
         if not ok or not name:
@@ -811,19 +863,31 @@ class CurveEditorWidget(QWidget):
 
     def _refresh_curve_combo(self):
         """刷新曲线下拉列表"""
-        # 保存当前选择
+        # 保存当前状态
         current_data = self.curve_combo.currentData()
+        was_modified = self.is_modified
         
-        # 清空并重新填充
+        # 清空并重新填充，不添加固定的custom选项
         self.curve_combo.clear()
-        self.curve_combo.addItem("自定义", "custom")
         for curve_key, curve_data in sorted(self.preset_curves.items(), key=lambda x: x[1]["name"]):
             self.curve_combo.addItem(curve_data["name"], curve_key)
         
-        # 恢复选择
-        index = self.curve_combo.findData(current_data)
-        if index >= 0:
-            self.curve_combo.setCurrentIndex(index)
+        # 恢复修改状态选项
+        if was_modified and self.original_curve_name:
+            modified_name = f"*{self.original_curve_name}"
+            modified_data = modified_name  # 保持一致性
+            self.curve_combo.insertItem(0, modified_name, modified_data)
+            self.curve_combo.setCurrentIndex(0)
+            self.modified_item_index = 0
+        else:
+            # 恢复普通选择
+            index = self.curve_combo.findData(current_data)
+            if index >= 0:
+                self.curve_combo.setCurrentIndex(index)
+            elif current_data == "custom":
+                # 如果之前选择的是custom，重新添加custom选项
+                self.curve_combo.addItem("custom", "custom")
+                self.curve_combo.setCurrentIndex(self.curve_combo.count() - 1)
 
     def _apply_saved_curve(self, curve_key: str):
         """自动应用刚保存的曲线"""
@@ -839,15 +903,62 @@ class CurveEditorWidget(QWidget):
     
     def _on_curve_changed(self, points):
         """曲线改变时的处理"""
-        # 当内部曲线变化时，自动将预设设置为"自定义"
-        if self.curve_combo.currentData() != "custom":
-            self.curve_combo.blockSignals(True)
-            self.curve_combo.setCurrentText("自定义")
-            self.curve_combo.blockSignals(False)
-        self.current_curve_name = "自定义"
+        # 如果有原始曲线，添加修改状态选项
+        if self.original_curve_name and self.original_curve_key and not self.is_modified:
+            self._add_modified_option()
+        elif not self.original_curve_name:
+            # 没有原始曲线信息（例如已经是custom状态）
+            self.current_curve_name = "custom"
 
         # 发出曲线改变信号，包含名称和点
         self.curve_changed.emit(self.current_curve_name, points)
+    
+    def _add_modified_option(self):
+        """添加修改状态选项"""
+        if not self.original_curve_name or self.is_modified:
+            return
+        
+        # 生成修改后的名称，UI显示和数据保持一致
+        modified_name = f"*{self.original_curve_name}"
+        modified_data = modified_name  # 保持一致性，而不是 f"modified_{self.original_curve_key}"
+        
+        # 在下拉框顶部添加修改状态选项
+        self.curve_combo.blockSignals(True)
+        self.curve_combo.insertItem(0, modified_name, modified_data)
+        self.curve_combo.setCurrentIndex(0)
+        self.curve_combo.blockSignals(False)
+        
+        # 更新状态
+        self.is_modified = True
+        self.modified_item_index = 0
+        self.current_curve_name = modified_name
+    
+    def _remove_modified_option(self):
+        """移除修改状态选项"""
+        if not self.is_modified or self.modified_item_index == -1:
+            return
+        
+        self.curve_combo.blockSignals(True)
+        self.curve_combo.removeItem(self.modified_item_index)
+        self.curve_combo.blockSignals(False)
+        
+        # 重置状态
+        self.is_modified = False
+        self.modified_item_index = -1
+    
+    def _load_original_curve_as_modified(self, original_name: str):
+        """加载原始曲线数据但保持修改状态显示"""
+        # 查找原始曲线数据
+        for curve_key, curve_data in self.preset_curves.items():
+            if curve_data["name"] == original_name:
+                # 更新状态信息
+                self.original_curve_name = original_name
+                self.original_curve_key = curve_key
+                self.current_curve_name = f"*{original_name}"
+                
+                # 注意：不加载曲线数据，保持当前修改后的曲线
+                # 这是用户从修改状态切换回修改状态，应该保持当前的修改
+                break
     
     def set_curve(self, points: List[Tuple[float, float]]):
         """设置曲线"""

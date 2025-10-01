@@ -1082,12 +1082,17 @@ class ApplicationContext(QObject):
         """
         if not curve_name:
             return None
+        
+        # 处理修改状态的曲线名（带*前缀）
+        original_curve_name = curve_name
+        if curve_name.startswith('*'):
+            original_curve_name = curve_name[1:]  # 去掉*前缀，使用原始名称查找
         try:
             from divere.utils.enhanced_config_manager import enhanced_config_manager
             def _norm(s: str) -> str:
                 return " ".join(str(s).strip().lower().replace('_', ' ').split())
 
-            target = _norm(curve_name)
+            target = _norm(original_curve_name)
             for json_path in enhanced_config_manager.get_config_files("curves"):
                 try:
                     data = enhanced_config_manager.load_config_file(json_path)

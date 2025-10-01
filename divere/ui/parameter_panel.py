@@ -943,9 +943,10 @@ class ParameterPanel(QWidget):
         """检查当前curves是否与原始预设不同"""
         try:
             current_curve_name = self.curve_editor.curve_combo.currentData() or self.curve_editor.curve_combo.currentText().strip('*')
+            current_display_name = self.curve_editor.curve_combo.currentText()
             
-            # 如果是自定义，则认为是修改的
-            if current_curve_name in ("custom", "自定义"):
+            # 如果是custom，或者显示名称以*开头，则认为是修改的
+            if current_curve_name == "custom" or current_display_name.startswith('*'):
                 return True
             
             # 获取原始curve数据

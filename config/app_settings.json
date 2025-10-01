@@ -1,7 +1,7 @@
 {
   "directories": {
-    "open_image": "/Volumes/V7Disk/Pictures/Scan2025/122509001-gold200",
-    "save_image": "/Volumes/V7Disk/Pictures/Scan2025/122509001-gold200",
+    "open_image": "/Volumes/V7Disk/Pictures/Scan2025/352110001-Ultramax400-早",
+    "save_image": "/Users/v7/Desktop",
     "save_lut": "/Users/v7/Downloads",
     "save_matrix": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/config/matrices"
   },
@@ -18,7 +18,7 @@
   },
   "defaults": {
     "input_color_space": "sRGB",
-    "output_color_space_16bit": "ACEScg",
+    "output_color_space_16bit": "KodakEnduraPremier",
     "output_color_space_8bit": "sRGB",
     "working_color_space": "KodakEnduraPremier",
     "jpeg_quality_level": "6"

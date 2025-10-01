@@ -893,6 +893,105 @@ class ParameterPanel(QWidget):
         self.glare_compensation_slider.setEnabled(enabled)
         self.glare_compensation_spinbox.setEnabled(enabled)
     
+    def _mark_as_modified(self, combo: QComboBox):
+        """给combo box的当前选中项添加星号标记"""
+        if self._is_updating_ui:
+            return
+            
+        current_text = combo.currentText()
+        current_data = combo.currentData()
+        
+        # 如果已经有星号，不需要再次添加
+        if current_text.startswith('*'):
+            return
+            
+        # 添加星号标记
+        modified_text = f"*{current_text}"
+        
+        # 更新当前项的显示文本，但保持data不变
+        current_index = combo.currentIndex()
+        if current_index >= 0:
+            combo.setItemText(current_index, modified_text)
+    
+    def _is_matrix_modified(self) -> bool:
+        """检查当前matrix是否与原始预设不同"""
+        try:
+            current_matrix_name = self.matrix_combo.currentData() or self.matrix_combo.currentText().strip('*')
+            
+            # 如果是自定义，则认为是修改的
+            if current_matrix_name in ("custom", "自定义"):
+                return True
+                
+            # 获取原始matrix数据
+            original_matrix = self.context.the_enlarger.pipeline_processor.get_density_matrix_array(current_matrix_name)
+            if original_matrix is None:
+                return True
+                
+            # 获取当前UI中的matrix数据
+            current_matrix = np.zeros((3, 3), dtype=np.float32)
+            for i in range(3):
+                for j in range(3):
+                    current_matrix[i, j] = self.matrix_editor_widgets[i][j].value()
+            
+            # 比较矩阵是否相同（使用较小的容差）
+            return not np.allclose(original_matrix, current_matrix, atol=1e-6)
+        except Exception:
+            # 出现异常，认为是修改的（安全的fallback）
+            return True
+    
+    def _is_curve_modified(self) -> bool:
+        """检查当前curves是否与原始预设不同"""
+        try:
+            current_curve_name = self.curve_editor.curve_combo.currentData() or self.curve_editor.curve_combo.currentText().strip('*')
+            
+            # 如果是自定义，则认为是修改的
+            if current_curve_name in ("custom", "自定义"):
+                return True
+            
+            # 获取原始curve数据
+            if hasattr(self.curve_editor, 'preset_curves') and current_curve_name in self.curve_editor.preset_curves:
+                original_curve_data = self.curve_editor.preset_curves[current_curve_name]
+                
+                # 获取当前curves
+                current_curves = self.curve_editor.get_all_curves()
+                
+                # 比较RGB曲线（主要的）
+                current_rgb_points = current_curves.get('RGB', [])
+                original_rgb_points = original_curve_data.get('points', {}).get('rgb', [])
+                
+                # 简单比较点的数量和值
+                if len(current_rgb_points) != len(original_rgb_points):
+                    return True
+                    
+                for i, (current_point, original_point) in enumerate(zip(current_rgb_points, original_rgb_points)):
+                    if not (abs(current_point[0] - original_point[0]) < 1e-6 and 
+                           abs(current_point[1] - original_point[1]) < 1e-6):
+                        return True
+            else:
+                # 找不到原始数据，认为是修改的
+                return True
+        except Exception:
+            # 出现异常，认为是修改的（安全的fallback）
+            return True
+            
+        return False
+    
+    def _is_idt_modified(self) -> bool:
+        """检查当前IDT参数是否与原始预设不同"""
+        try:
+            current_space_name = self.input_colorspace_combo.currentData() or self.input_colorspace_combo.currentText().strip('*')
+            current_gamma = self.idt_gamma_spinbox.value()
+            
+            # 获取原始色彩空间信息
+            original_info = self.context.color_space_manager.get_color_space_info(current_space_name) or {}
+            original_gamma = float(original_info.get('gamma', 1.0))
+            
+            # 比较gamma值是否相同
+            return not abs(current_gamma - original_gamma) < 1e-6
+        except Exception:
+            # 出现异常，认为是修改的（安全的fallback）
+            return True
+
     def _update_colorchecker_for_film_type(self, film_type: str):
         """根据胶片类型更新colorchecker参考文件选择"""
         from divere.core.data_types import FILM_TYPE_COLORCHECKER_MAPPING
@@ -1144,6 +1243,11 @@ class ParameterPanel(QWidget):
             g = max(0.5, min(2.8, g))
             space_name = self.input_colorspace_combo.currentData() or self.input_colorspace_combo.currentText().strip('*')
             self.context.color_space_manager.update_color_space_gamma(space_name, g)
+            
+            # 检查是否修改，并添加星号标记
+            if self._is_idt_modified():
+                self._mark_as_modified(self.input_colorspace_combo)
+            
             # 触发Context按当前色彩空间重建proxy（内部会skip逆伽马，并应用前置幂次）
             self.context._prepare_proxy(); self.context._trigger_preview_update()
         except Exception:
@@ -1184,6 +1288,10 @@ class ParameterPanel(QWidget):
                     u, v = coords_uv[key]
                     x, y = uv_to_xy(u, v)
                     primaries_xy[key] = (float(x), float(y))
+            
+            # 检查是否修改IDT，并添加星号标记（primaries修改也算IDT修改）
+            self._mark_as_modified(self.input_colorspace_combo)
+            
             # 发出两类信号：UI参数变更 + 基色更新
             self.parameter_changed.emit()
             if len(primaries_xy) == 3:
@@ -1397,6 +1505,11 @@ class ParameterPanel(QWidget):
 
     def _on_curve_changed(self, curve_name, points):
         if self._is_updating_ui: return
+        
+        # 检查是否修改，并添加星号标记
+        if self._is_curve_modified():
+            self._mark_as_modified(self.curve_editor.curve_combo)
+            
         self.parameter_changed.emit()
 
     def _on_matrix_value_changed(self, *args):
@@ -1406,6 +1519,11 @@ class ParameterPanel(QWidget):
         if not self.enable_density_matrix_checkbox.isChecked():
             # 用户开始编辑矩阵时，自动启用矩阵
             self.enable_density_matrix_checkbox.setChecked(True)
+        
+        # 检查是否修改，并添加星号标记
+        if self._is_matrix_modified():
+            self._mark_as_modified(self.matrix_combo)
+            
         self.parameter_changed.emit()
         
     def _on_debug_step_changed(self):

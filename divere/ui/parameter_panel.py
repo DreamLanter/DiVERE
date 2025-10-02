@@ -124,6 +124,7 @@ class ParameterPanel(QWidget):
         
         self._is_updating_ui = False
         self.context.params_changed.connect(self.on_context_params_changed)
+        self.context.image_loaded.connect(self.on_image_loaded)
         
         self._create_ui()
         self._connect_signals()
@@ -132,6 +133,12 @@ class ParameterPanel(QWidget):
         """当Context中的参数改变时，更新UI"""
         self.current_params = params.copy()
         self.update_ui_from_params()
+    
+    def on_image_loaded(self):
+        """当新图片加载时的处理"""
+        # 清理不属于当前预设的修改状态项目
+        # 这样每次切换图片时，下拉框会重新开始，只保留当前需要的状态
+        self._cleanup_stale_modified_items()
 
     def initialize_defaults(self, initial_params: ColorGradingParams):
         """由主窗口调用，在加载图像后设置并应用默认参数"""
@@ -762,14 +769,131 @@ class ParameterPanel(QWidget):
             return False
 
     def _sync_combo_box(self, combo: QComboBox, name: str):
+        # 首先尝试精确匹配
         for i in range(combo.count()):
-            if combo.itemData(i) == name or combo.itemText(i).strip('*') == name:
+            if combo.itemData(i) == name:
                 combo.setCurrentIndex(i)
                 return
         
+        # 如果是曲线下拉框，使用其专门的同步机制
+        if combo == self.curve_editor.curve_combo:
+            # 对于曲线，让curve_editor自己处理同步，避免重复添加*项目
+            self._sync_curve_combo_by_name(name)
+            return
+        
+        # 对于其他下拉框，尝试按显示名匹配
+        for i in range(combo.count()):
+            if combo.itemText(i).strip('*') == name:
+                combo.setCurrentIndex(i)
+                return
+        
+        # 只有当确实需要时才添加*项目（例如非曲线的情况）
         display_name = f"*{name}"
         combo.insertItem(0, display_name, name)
         combo.setCurrentIndex(0)
+    
+    def _sync_curve_combo_by_name(self, name: str):
+        """专门用于同步曲线下拉框的方法"""
+        combo = self.curve_editor.curve_combo
+        
+        # 首先尝试精确匹配
+        for i in range(combo.count()):
+            if combo.itemData(i) == name:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(i)
+                combo.blockSignals(False)
+                return
+        
+        # 如果name以*开头，说明是修改状态曲线
+        if name.startswith('*'):
+            original_name = name[1:]  # 去掉*前缀
+            
+            # 检查是否已经有这个修改状态项目（精确匹配）
+            for i in range(combo.count()):
+                if combo.itemData(i) == name:
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(i)
+                    combo.blockSignals(False)
+                    # 确保curve_editor状态正确
+                    self.curve_editor.current_curve_name = name
+                    self.curve_editor.is_modified = True
+                    return
+            
+            # 如果修改状态项目不存在，说明这可能是预设文件中保存的修改状态
+            # 需要恢复这个状态，但这应该由curve_editor的预设加载逻辑处理
+            # 参数同步不应该主动创建修改状态，只应该恢复已存在的状态
+            
+            # 尝试切换到对应的原始曲线，如果存在的话
+            for i in range(combo.count()):
+                if combo.itemData(i) in self.curve_editor.preset_curves:
+                    curve_data = self.curve_editor.preset_curves[combo.itemData(i)]
+                    if curve_data["name"] == original_name:
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(i)
+                        combo.blockSignals(False)
+                        # 设置状态但不创建修改选项（这应该由用户编辑触发）
+                        self.curve_editor.current_curve_name = curve_data["name"]
+                        self.curve_editor.original_curve_name = curve_data["name"]
+                        self.curve_editor.original_curve_key = combo.itemData(i)
+                        self.curve_editor.is_modified = False
+                        return
+        else:
+            # 普通曲线名称，尝试按显示名匹配
+            for i in range(combo.count()):
+                if combo.itemData(i) in self.curve_editor.preset_curves:
+                    curve_data = self.curve_editor.preset_curves[combo.itemData(i)]
+                    if curve_data["name"] == name:
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(i)
+                        combo.blockSignals(False)
+                        
+                        # 更新curve_editor的状态
+                        self.curve_editor.current_curve_name = name
+                        self.curve_editor.original_curve_name = name
+                        self.curve_editor.original_curve_key = combo.itemData(i)
+                        self.curve_editor.is_modified = False
+                        return
+    
+    def _cleanup_stale_modified_items(self):
+        """清理不属于当前状态的修改状态项目，并修复被污染的原始预设项目"""
+        combo = self.curve_editor.curve_combo
+        current_curve_name = self.current_params.density_curve_name
+        
+        # 收集需要处理的项目
+        items_to_remove = []
+        items_to_fix = []
+        
+        for i in range(combo.count()):
+            item_data = combo.itemData(i)
+            item_text = combo.itemText(i)
+            
+            # 检查是否为修改状态项目（显示文本以*开头）
+            if item_text.startswith('*'):
+                # 如果data不以*开头，说明这是被污染的原始预设项目
+                if isinstance(item_data, str) and not item_data.startswith('*'):
+                    # 修复被污染的原始预设项目：恢复原始显示名称
+                    original_name = item_text[1:]  # 去掉*前缀
+                    items_to_fix.append((i, original_name))
+                else:
+                    # 这是真正的修改状态项目
+                    # 如果不是当前正在使用的修改状态，则标记为移除
+                    if item_data != current_curve_name and item_text != current_curve_name:
+                        items_to_remove.append(i)
+        
+        # 修复被污染的原始预设项目
+        combo.blockSignals(True)
+        for i, original_name in items_to_fix:
+            combo.setItemText(i, original_name)
+        
+        # 移除不相关的修改状态项目
+        for i in reversed(items_to_remove):
+            combo.removeItem(i)
+        combo.blockSignals(False)
+        
+        # 如果当前曲线的修改状态被移除了，重置curve_editor的修改状态
+        if not current_curve_name.startswith('*'):
+            self.curve_editor.is_modified = False
+            self.curve_editor.modified_item_index = -1
 
     def get_current_params(self) -> ColorGradingParams:
         params = ColorGradingParams()
@@ -1507,10 +1631,10 @@ class ParameterPanel(QWidget):
     def _on_curve_changed(self, curve_name, points):
         if self._is_updating_ui: return
         
-        # 检查是否修改，并添加星号标记
-        if self._is_curve_modified():
-            self._mark_as_modified(self.curve_editor.curve_combo)
-            
+        # 修改状态管理完全由curve_editor_widget负责
+        # parameter_panel只负责响应变化，不主动管理修改状态
+        # 移除_mark_as_modified调用以避免污染原始预设项目
+        
         self.parameter_changed.emit()
 
     def _on_matrix_value_changed(self, *args):

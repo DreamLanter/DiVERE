@@ -546,6 +546,7 @@ class CurveEditorWidget(QWidget):
         self.original_curve_key = None   # 记录用户选择的原始曲线key
         self.is_modified = False         # 标记当前曲线是否被修改
         self.modified_item_index = -1    # 记录修改状态选项的索引
+        self._loading_preset = False     # 标记是否正在加载预设（防止误触发修改状态）
         
         self._load_preset_curves()
         self._setup_ui()
@@ -725,26 +726,32 @@ class CurveEditorWidget(QWidget):
         
         # 处理原始预设曲线选择
         if curve_key in self.preset_curves:
-            # 如果当前有修改状态，移除它
-            if self.is_modified:
-                self._remove_modified_option()
-            
-            curve_data = self.preset_curves[curve_key]
-            self.current_curve_name = curve_data["name"]
-            # 记录原始曲线信息
-            self.original_curve_name = curve_data["name"]
-            self.original_curve_key = curve_key
-            
-            # 加载所有通道的曲线，不触发信号避免跳转到修改状态
-            if "curves" in curve_data:
-                self.curve_edit_widget.set_all_curves(curve_data["curves"], emit_signal=False)
-            else:
-                # 兼容旧格式
-                points = curve_data.get("points", [(0.0, 0.0), (1.0, 1.0)])
-                self.curve_edit_widget.set_curve_points(points, emit_signal=False)
-            
-            # 手动触发曲线改变信号，通知主窗口更新预览
-            self.curve_changed.emit(self.current_curve_name, self.curve_edit_widget.get_curve_points())
+            # 设置加载标志，防止触发修改状态
+            self._loading_preset = True
+            try:
+                curve_data = self.preset_curves[curve_key]
+                self.current_curve_name = curve_data["name"]
+                # 记录原始曲线信息
+                self.original_curve_name = curve_data["name"]
+                self.original_curve_key = curve_key
+                
+                # 切换到原始曲线时，重置修改状态但保留修改选项
+                # 用户期望修改状态和原始状态可以共存，自由切换
+                self.is_modified = False
+                
+                # 加载所有通道的曲线，不触发信号避免跳转到修改状态
+                if "curves" in curve_data:
+                    self.curve_edit_widget.set_all_curves(curve_data["curves"], emit_signal=False)
+                else:
+                    # 兼容旧格式
+                    points = curve_data.get("points", [(0.0, 0.0), (1.0, 1.0)])
+                    self.curve_edit_widget.set_curve_points(points, emit_signal=False)
+                
+                # 手动触发曲线改变信号，通知主窗口更新预览
+                self.curve_changed.emit(self.current_curve_name, self.curve_edit_widget.get_curve_points())
+            finally:
+                # 确保标志被重置
+                self._loading_preset = False
     
     def _reset_to_linear(self):
         """重置为线性曲线"""
@@ -903,6 +910,10 @@ class CurveEditorWidget(QWidget):
     
     def _on_curve_changed(self, points):
         """曲线改变时的处理"""
+        # 如果正在加载预设，不要触发修改状态
+        if self._loading_preset:
+            return
+            
         # 如果有原始曲线，添加修改状态选项
         if self.original_curve_name and self.original_curve_key and not self.is_modified:
             self._add_modified_option()
@@ -945,6 +956,28 @@ class CurveEditorWidget(QWidget):
         # 重置状态
         self.is_modified = False
         self.modified_item_index = -1
+    
+    def cleanup_modified_curve_items(self):
+        """清理所有修改状态的曲线项目（用于图片切换时重置状态）"""
+        # 收集所有以*开头的项目索引
+        items_to_remove = []
+        for i in range(self.curve_combo.count()):
+            item_data = self.curve_combo.itemData(i)
+            item_text = self.curve_combo.itemText(i)
+            if (isinstance(item_data, str) and item_data.startswith('*')) or item_text.startswith('*'):
+                items_to_remove.append(i)
+        
+        # 倒序删除，避免索引变化
+        self.curve_combo.blockSignals(True)
+        for i in reversed(items_to_remove):
+            self.curve_combo.removeItem(i)
+        self.curve_combo.blockSignals(False)
+        
+        # 重置修改状态
+        self.is_modified = False
+        self.modified_item_index = -1
+        self.original_curve_name = None
+        self.original_curve_key = None
     
     def _load_original_curve_as_modified(self, original_name: str):
         """加载原始曲线数据但保持修改状态显示"""

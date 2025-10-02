@@ -126,39 +126,53 @@ class SmartPresetLoader:
                 if 'density_curve' in processed_params and isinstance(processed_params['density_curve'], dict):
                     curve_data = processed_params['density_curve']
                     if curve_data.get('name'):
-                        rgb_points = curve_data.get('points', {}).get('rgb', [])
-                        if self._is_identity_curve(rgb_points):
-                            # RGB是线性的，但需要检查单通道曲线是否包含真实数据
+                        curve_name = curve_data['name']
+                        
+                        # 特殊处理：修改版曲线（以*开头）应该保留实际曲线数据，不要触发按名称加载
+                        if curve_name.startswith('*'):
+                            debug(f"Detected modified curve '{curve_name}', preserving actual curve data", "SmartPresetLoader")
+                            processed_params['density_curve_name'] = curve_name
+                            # 保留所有曲线点数据，确保修改版曲线完整恢复
                             points_data = curve_data.get('points', {})
-                            has_real_channel_curves = any([
-                                not self._is_identity_curve(points_data.get(ch, []))
-                                for ch in ['r', 'g', 'b']
-                                if points_data.get(ch)  # 只检查存在的通道
-                            ])
-                            
-                            if has_real_channel_curves:
-                                # 保留单通道曲线，只清空RGB线性数据
-                                new_points = points_data.copy()
-                                new_points['rgb'] = []  # 只清空RGB，保留r/g/b真实曲线
-                                debug(f"Preserving channel curves for '{curve_data['name']}', clearing only RGB linear data", "SmartPresetLoader")
-                                processed_params['density_curve'] = {
-                                    'name': curve_data['name'],
-                                    'points': new_points
-                                }
-                                # 关键修复：将单通道曲线数据映射到ColorGradingParams期望的格式
-                                processed_params['density_curve_name'] = curve_data['name']
-                                for src_key, dst_key in [('r', 'curve_points_r'), ('g', 'curve_points_g'), ('b', 'curve_points_b')]:
-                                    if src_key in points_data and points_data[src_key]:
-                                        processed_params[dst_key] = points_data[src_key]
-                                        debug(f"Mapped {src_key} curve data to {dst_key}: {len(points_data[src_key])} points", "SmartPresetLoader")
-                            else:
-                                # 全是线性曲线，按名称重新加载
-                                debug(f"All curves are linear for '{curve_data['name']}', clearing all points to trigger name-based loading", "SmartPresetLoader")
-                                processed_params['density_curve'] = {
-                                    'name': curve_data['name'],
-                                    'points': {'rgb': []}  # 触发按名称加载
-                                }
-                                processed_params['density_curve_name'] = curve_data['name']
+                            for src_key, dst_key in [('rgb', 'curve_points'), ('r', 'curve_points_r'), ('g', 'curve_points_g'), ('b', 'curve_points_b')]:
+                                if src_key in points_data and points_data[src_key]:
+                                    processed_params[dst_key] = points_data[src_key]
+                                    debug(f"Preserved modified curve data {src_key} -> {dst_key}: {len(points_data[src_key])} points", "SmartPresetLoader")
+                        else:
+                            # 原有逻辑：处理普通曲线名
+                            rgb_points = curve_data.get('points', {}).get('rgb', [])
+                            if self._is_identity_curve(rgb_points):
+                                # RGB是线性的，但需要检查单通道曲线是否包含真实数据
+                                points_data = curve_data.get('points', {})
+                                has_real_channel_curves = any([
+                                    not self._is_identity_curve(points_data.get(ch, []))
+                                    for ch in ['r', 'g', 'b']
+                                    if points_data.get(ch)  # 只检查存在的通道
+                                ])
+                                
+                                if has_real_channel_curves:
+                                    # 保留单通道曲线，只清空RGB线性数据
+                                    new_points = points_data.copy()
+                                    new_points['rgb'] = []  # 只清空RGB，保留r/g/b真实曲线
+                                    debug(f"Preserving channel curves for '{curve_data['name']}', clearing only RGB linear data", "SmartPresetLoader")
+                                    processed_params['density_curve'] = {
+                                        'name': curve_data['name'],
+                                        'points': new_points
+                                    }
+                                    # 关键修复：将单通道曲线数据映射到ColorGradingParams期望的格式
+                                    processed_params['density_curve_name'] = curve_data['name']
+                                    for src_key, dst_key in [('r', 'curve_points_r'), ('g', 'curve_points_g'), ('b', 'curve_points_b')]:
+                                        if src_key in points_data and points_data[src_key]:
+                                            processed_params[dst_key] = points_data[src_key]
+                                            debug(f"Mapped {src_key} curve data to {dst_key}: {len(points_data[src_key])} points", "SmartPresetLoader")
+                                else:
+                                    # 全是线性曲线，按名称重新加载
+                                    debug(f"All curves are linear for '{curve_data['name']}', clearing all points to trigger name-based loading", "SmartPresetLoader")
+                                    processed_params['density_curve'] = {
+                                        'name': curve_data['name'],
+                                        'points': {'rgb': []}  # 触发按名称加载
+                                    }
+                                    processed_params['density_curve_name'] = curve_data['name']
                 
                 preset.grading_params = processed_params
                 

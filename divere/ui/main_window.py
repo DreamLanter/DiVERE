@@ -886,9 +886,6 @@ class MainWindow(QMainWindow):
             current_params = self.context.get_current_params()
             self.context.update_params(current_params)
             
-            # 自动适应窗口大小
-            self.preview_widget.fit_to_window()
-            
         except Exception as e:
             QMessageBox.critical(self, "错误", f"重新处理图像失败: {str(e)}")
     
@@ -901,9 +898,6 @@ class MainWindow(QMainWindow):
             # 简单触发参数更新，让系统重新处理图像和工作空间
             current_params = self.context.get_current_params()
             self.context.update_params(current_params)
-            
-            # 自动适应窗口大小
-            self.preview_widget.fit_to_window()
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"重新加载图像失败: {str(e)}")

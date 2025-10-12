@@ -2489,8 +2489,6 @@ class PreviewWidget(QWidget):
             self.rotate_right()
         elif event.key() == Qt.Key.Key_0:  # 数字0键重置视图
             self.reset_view()
-        elif event.key() == Qt.Key.Key_F:  # F键适应窗口
-            self.fit_to_window()
         elif event.key() == Qt.Key.Key_C:  # C键居中
             self.center_image()
         elif event.key() == Qt.Key.Key_Escape:

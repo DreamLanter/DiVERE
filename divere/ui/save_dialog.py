@@ -213,7 +213,7 @@ class SaveImageDialog(QDialog):
         colorspace_group = QGroupBox("输出色彩管理")
         colorspace_layout = QGridLayout(colorspace_group)
         
-        colorspace_layout.addWidget(QLabel("色彩空间:"), 0, 0)
+        colorspace_layout.addWidget(QLabel("输出色彩空间（内嵌icc）:"), 0, 0)
         self.colorspace_combo = QComboBox()
         self.colorspace_combo.addItems(self.color_spaces)
         colorspace_layout.addWidget(self.colorspace_combo, 0, 1)

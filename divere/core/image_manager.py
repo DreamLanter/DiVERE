@@ -408,47 +408,73 @@ class ImageManager:
         def _read_bytes(path: Path) -> Optional[bytes]:
             try:
                 with open(path, 'rb') as f:
-                    return f.read()
-            except Exception:
+                    data = f.read()
+                    print(f"[ImageManager] Successfully read ICC file: {path} ({len(data)} bytes)")
+                    return data
+            except FileNotFoundError:
+                print(f"[ImageManager] ICC file not found: {path}")
+                return None
+            except PermissionError:
+                print(f"[ImageManager] Permission denied reading ICC file: {path}")
+                return None
+            except Exception as e:
+                print(f"[ImageManager] Error reading ICC file {path}: {e}")
                 return None
 
-        def _resolve_icc_path(color_space_name: str) -> Optional[Path]:
-            if not color_space_name:
-                return None
-            # 建立输出色彩空间到ICC文件名的映射（按优先名）
-            name = str(color_space_name).strip().lower()
-            candidates: list[str] = []
-            if name in {"srgb"}:
-                candidates = ["sRGB Profile.icc"]
-            elif name in {"displayp3", "display p3"}:
-                candidates = ["Display P3.icc"]
-            elif name in {"acescg_linear", "acescg", "acescg linear"}:
-                candidates = ["ACESCG Linear.icc"]
-            elif name in {"adobergb", "adobe rgb", "adobe rgb (1998)"}:
-                candidates = ["Adobe RGB (1998).icc", "AdobeRGB1998.icc"]
-            elif name in {"gray_gamma_2_2", "gray gamma 2.2", "grayscale", "greyscale", "gray", "grey"}:
-                candidates = ["Gray Gamma 2.2.icc"]
-            else:
-                # 兜底：尝试直接用传入名称加 .icc
-                candidates = [f"{color_space_name}.icc"]
-            try:
-                icc_dir = get_data_dir("config").joinpath("colorspace", "icc")
-            except Exception:
-                icc_dir = Path("config").joinpath("colorspace", "icc")
-            for fname in candidates:
-                p = icc_dir / fname
-                if p.exists():
-                    return p
-            return None
 
         def _get_icc_bytes_for_export(image: ImageData, export_cs_name: Optional[str]) -> Optional[bytes]:
             try:
                 if image and getattr(image, 'icc_profile', None):
+                    print(f"[ImageManager] Using ICC profile from image data")
                     return image.icc_profile
             except Exception:
                 pass
-            icc_path = _resolve_icc_path(export_cs_name) if export_cs_name else None
-            return _read_bytes(icc_path) if icc_path else None
+            
+            if not export_cs_name:
+                print(f"[ImageManager] No export color space specified")
+                return None
+                
+            # First try to get ICC filename from ColorSpaceManager
+            try:
+                from divere.core.color_space import ColorSpaceManager
+                # Try to get a global instance or create one
+                if hasattr(self, '_color_space_manager'):
+                    csm = self._color_space_manager
+                else:
+                    csm = ColorSpaceManager()
+                
+                cs_info = csm.get_color_space_info(export_cs_name)
+                if cs_info and cs_info.get('icc_profile'):
+                    icc_filename = cs_info['icc_profile']
+                    print(f"[ImageManager] Found ICC filename in JSON config: {icc_filename}")
+                    
+                    # Resolve the full path
+                    try:
+                        icc_dir = get_data_dir("config").joinpath("colorspace", "icc")
+                    except Exception as e:
+                        icc_dir = Path("config").joinpath("colorspace", "icc")
+                        print(f"[ImageManager] Using fallback ICC directory: {icc_dir} (get_data_dir failed: {e})")
+                    
+                    icc_path = icc_dir / icc_filename
+                    print(f"[ImageManager] Resolved ICC path: {icc_path}")
+                    
+                    if icc_path.exists():
+                        return _read_bytes(icc_path)
+                    else:
+                        print(f"[ImageManager] ⚠️  ICC file referenced in JSON but not found: {icc_path}")
+                        print(f"[ImageManager] Please check if the ICC file exists or update the JSON configuration")
+                elif cs_info:
+                    print(f"[ImageManager] ℹ️  Color space '{export_cs_name}' found but no 'icc_profile' field in JSON configuration")
+                    print(f"[ImageManager] To enable ICC embedding, add 'icc_profile': 'filename.icc' to the JSON file")
+                else:
+                    print(f"[ImageManager] ❌ Color space '{export_cs_name}' not found in configuration")
+            except Exception as e:
+                print(f"[ImageManager] Error accessing ColorSpaceManager: {e}")
+            
+            # No hardcoded fallback - purely configuration driven  
+            print(f"[ImageManager] 📋 ICC embedding summary for '{export_cs_name}': No ICC profile available")
+            print(f"[ImageManager] Image will be saved without embedded ICC profile")
+            return None
 
         # 归一化形状：灰度 squeeze 到 (H,W)，JPEG 只允许 3 通道
         def _normalize_shape_for_saving(arr: np.ndarray, expect_rgb: bool) -> np.ndarray:
@@ -478,13 +504,17 @@ class ImageManager:
                 pil_img = Image.fromarray(image_jpeg)
                 try:
                     pil_img.save(str(output_path), format='JPEG', quality=int(quality), subsampling=0, optimize=True, icc_profile=icc_bytes)
+                    print(f"[ImageManager] JPEG saved successfully with ICC profile: {output_path}")
                 except Exception as e:
+                    print(f"[ImageManager] Failed to save JPEG with ICC: {e}")
                     raise RuntimeError(f"保存JPEG失败(ICC): {e}")
             else:
+                print(f"[ImageManager] Saving JPEG without ICC profile (no ICC data available)")
                 bgr_image = cv2.cvtColor(image_jpeg, cv2.COLOR_RGB2BGR)
                 ok = cv2.imwrite(str(output_path), bgr_image, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
                 if not ok:
                     raise RuntimeError(f"保存JPEG失败: {output_path}")
+                print(f"[ImageManager] JPEG saved successfully without ICC: {output_path}")
         
         elif ext in ['.png']:
             image_png = _normalize_shape_for_saving(image_array, expect_rgb=False)
@@ -506,6 +536,7 @@ class ImageManager:
                 try:
                     import tifffile as tiff
                 except Exception as e:
+                    print(f"[ImageManager] tifffile not available: {e}")
                     raise RuntimeError("需要安装 'tifffile' 以在 TIFF 中嵌入 ICC")
 
                 try:
@@ -529,9 +560,12 @@ class ImageManager:
                         extratags=extratags,
                         compression='lzw'
                     )
+                    print(f"[ImageManager] TIFF saved successfully with ICC profile: {output_path}")
                 except Exception as e:
+                    print(f"[ImageManager] Failed to save TIFF with ICC: {e}")
                     raise RuntimeError(f"保存TIFF失败(ICC): {e}")
             else:
+                print(f"[ImageManager] Saving TIFF without ICC profile (no ICC data available)")
                 if image_tif.ndim == 3 and image_tif.shape[2] in (3, 4):
                     code = cv2.COLOR_RGB2BGR if image_tif.shape[2] == 3 else cv2.COLOR_RGBA2BGRA
                     bgr_or_bgra = cv2.cvtColor(image_tif, code)
@@ -540,6 +574,7 @@ class ImageManager:
                     ok = cv2.imwrite(str(output_path), image_tif)
                 if not ok:
                     raise RuntimeError(f"保存TIFF失败: {output_path}")
+                print(f"[ImageManager] TIFF saved successfully without ICC: {output_path}")
         
         else:
             # 默认使用PIL保存（尽量兼容）

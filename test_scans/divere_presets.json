@@ -3254,11 +3254,11 @@
     },
     "cc_params": {
       "density_gamma": 1.0,
-      "density_dmax": 2.959999999999993,
+      "density_dmax": 2.709999999999998,
       "rgb_gains": [
         0.5018841216488733,
         0.0,
-        -0.1498528864239067
+        -0.1398528864239067
       ],
       "density_matrix": {
         "name": "Cineon_States_M_to_Print_Density",
@@ -4220,11 +4220,11 @@
     },
     "cc_params": {
       "density_gamma": 1.0,
-      "density_dmax": 2.959999999999993,
+      "density_dmax": 2.859999999999995,
       "rgb_gains": [
-        0.5018841216488733,
+        0.45350590690346326,
         0.0,
-        -0.1498528864239067
+        -0.13975419270661588
       ],
       "density_matrix": {
         "name": "Cineon_States_M_to_Print_Density",

@@ -2145,13 +2145,16 @@ class MainWindow(QMainWindow):
 
     def _on_preview_updated(self, result_image: ImageData):
         self.preview_widget.set_image(result_image)
+        # 禁用自动适应窗口功能，保持用户当前的视图状态
+        # if self._fit_after_next_preview:
+        #     try:
+        #         # 确保图像设置完成后再适应窗口
+        #         from PySide6.QtCore import QTimer
+        #         QTimer.singleShot(10, self.preview_widget.fit_to_window)
+        #     finally:
+        #         self._fit_after_next_preview = False
         if self._fit_after_next_preview:
-            try:
-                # 确保图像设置完成后再适应窗口
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(10, self.preview_widget.fit_to_window)
-            finally:
-                self._fit_after_next_preview = False
+            self._fit_after_next_preview = False  # 重置标志但不执行适应窗口
         # 更新工具可用性
         try:
             self._update_apply_contactsheet_enabled()

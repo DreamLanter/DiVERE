@@ -80,6 +80,9 @@ class MainWindow(QMainWindow):
         self.is_dragging = False
         # 首次加载后在首帧预览到达时适应窗口
         self._fit_after_next_preview: bool = False
+        # 控制fit时机的新标志
+        self._should_fit_after_image_load: bool = False
+        self._should_fit_after_rotation: bool = False
         
         # 预览后台线程池 - 逻辑迁移到 Context
         # self.thread_pool: QThreadPool = QThreadPool.globalInstance()
@@ -163,6 +166,8 @@ class MainWindow(QMainWindow):
         self.context.autosave_requested.connect(self._on_autosave_requested)
         # 连接curves配置重载信号
         self.context.curves_config_reloaded.connect(self._on_curves_config_reloaded)
+        # 连接旋转完成信号
+        self.context.rotation_completed.connect(self._on_rotation_completed)
         try:
             self.context.preview_updated.connect(lambda _: self._update_apply_contactsheet_enabled())
         except Exception:
@@ -495,6 +500,7 @@ class MainWindow(QMainWindow):
 
     def _on_image_loaded(self):
         self._fit_after_next_preview = True
+        self._should_fit_after_image_load = True  # 设置图像加载后fit标志
         # 图像加载后刷新裁剪选择条（基于 Context 内部列表）
         try:
             crops = getattr(self.context, '_crops', [])
@@ -2145,16 +2151,23 @@ class MainWindow(QMainWindow):
 
     def _on_preview_updated(self, result_image: ImageData):
         self.preview_widget.set_image(result_image)
-        # 禁用自动适应窗口功能，保持用户当前的视图状态
-        # if self._fit_after_next_preview:
-        #     try:
-        #         # 确保图像设置完成后再适应窗口
-        #         from PySide6.QtCore import QTimer
-        #         QTimer.singleShot(10, self.preview_widget.fit_to_window)
-        #     finally:
-        #         self._fit_after_next_preview = False
+        # 图像加载后自动适应窗口（保持旧逻辑兼容）
         if self._fit_after_next_preview:
-            self._fit_after_next_preview = False  # 重置标志但不执行适应窗口
+            try:
+                # 确保图像设置完成后再适应窗口
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self.preview_widget.fit_to_window)
+            finally:
+                self._fit_after_next_preview = False
+        
+        # 新的精确控制fit时机
+        if self._should_fit_after_image_load or self._should_fit_after_rotation:
+            try:
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self.preview_widget.fit_to_window)
+            finally:
+                self._should_fit_after_image_load = False
+                self._should_fit_after_rotation = False
         # 更新工具可用性
         try:
             self._update_apply_contactsheet_enabled()
@@ -2481,8 +2494,13 @@ class MainWindow(QMainWindow):
         """处理图像旋转：委托给 ApplicationContext 维护朝向与预览更新"""
         try:
             self.context.rotate(int(direction))
+            self._should_fit_after_rotation = True  # 设置旋转后fit标志
         except Exception:
             pass
+    
+    def _on_rotation_completed(self):
+        """处理旋转完成信号：设置fit标志"""
+        self._should_fit_after_rotation = True
     
     def _on_lut_export_requested(self, lut_type: str, file_path: str, size: int):
         """处理LUT导出请求"""

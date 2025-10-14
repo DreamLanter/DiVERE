@@ -72,6 +72,8 @@ class ApplicationContext(QObject):
     film_type_changed = Signal(str)
     # curves配置重载信号
     curves_config_reloaded = Signal()
+    # 旋转完成信号
+    rotation_completed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -130,7 +132,7 @@ class ApplicationContext(QObject):
         # 防抖自动保存
         self._autosave_timer = QTimer()
         self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(500) # 500ms delay for autosave
+        self._autosave_timer.setInterval(50) # 500ms delay for autosave
         self._autosave_timer.timeout.connect(self.autosave_requested.emit)
 
         # 应用集中式"默认预设"（config/defaults/default.json 或内置回退）
@@ -1772,6 +1774,9 @@ class ApplicationContext(QObject):
                 new_deg = (current_orientation + step) % 360
                 self.set_orientation(new_deg)
                 # 注意：不同步crop的orientation，保持完全分离
+            
+            # 发射旋转完成信号，让MainWindow知道需要fit to window
+            self.rotation_completed.emit()
         except Exception:
             pass
 

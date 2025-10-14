@@ -1255,9 +1255,8 @@ class PreviewWidget(QWidget):
             self._detect_black_cutoff_pixels()
             
         self.image_label.update()
-        # 旋转后不再自动适应窗口，保持用户当前的缩放状态
-        # 移除有问题的锚点机制，保留当前视图状态
-        # QTimer.singleShot(0, self.fit_to_window)
+        # 不再在每次set_image时自动适应窗口
+        # fit_to_window的调用已移至MainWindow中精确控制时机
 
     def get_current_image_data(self) -> Optional[ImageData]:
         """返回当前显示的ImageData对象"""

@@ -371,6 +371,12 @@ class MainWindow(QMainWindow):
         file_classification_action.setToolTip("管理文件分类规则和默认预设文件")
         file_classification_action.triggered.connect(self._open_file_classification_manager)
         tools_menu.addAction(file_classification_action)
+        
+        # 精确通道分离IDT计算工具
+        idt_calculator_action = QAction("精确通道分离IDT计算工具", self)
+        idt_calculator_action.setToolTip("通过三张光谱分离图片计算精确的IDT色彩空间")
+        idt_calculator_action.triggered.connect(self._open_idt_calculator)
+        tools_menu.addAction(idt_calculator_action)
 
         # 配置管理
         tools_menu.addSeparator()
@@ -2138,6 +2144,14 @@ class MainWindow(QMainWindow):
             self.file_classification_manager = launch_file_classification_manager(self)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法打开文件分类规则管理器: {str(e)}")
+    
+    def _open_idt_calculator(self):
+        """打开精确通道分离IDT计算工具"""
+        try:
+            from divere.standalone_tools.launcher import launch_idt_calculator
+            self.idt_calculator = launch_idt_calculator(self)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法打开IDT计算工具: {str(e)}")
     
     def _show_shortcuts_help(self):
         """显示快捷键帮助对话框"""

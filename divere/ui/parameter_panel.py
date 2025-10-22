@@ -504,7 +504,7 @@ class ParameterPanel(QWidget):
         proxy_layout.addStretch()
         layout.addWidget(proxy_group)
         
-        pipeline_group = QGroupBox("管道步骤控制")
+        pipeline_group = QGroupBox("管线控制")
         pipeline_layout = QVBoxLayout(pipeline_group)
         self.enable_density_inversion_checkbox = QCheckBox("启用密度反相")
         self.enable_density_matrix_checkbox = QCheckBox("启用密度矩阵")

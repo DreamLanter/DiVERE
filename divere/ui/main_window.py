@@ -1327,11 +1327,14 @@ class MainWindow(QMainWindow):
             if not ok:
                 description = "用户自定义色卡数据"
             
+            # 获取当前working colorspace名称
+            current_working_space = self.context.color_space_manager.get_current_working_space()
+            
             # 构造保存数据
             colorchecker_data = {
                 "description": description,
-                "color_space": "ACEScg (AP1 primaries, D60 white point)",
-                "conversion_path": "直接从原图像读取RGB值（假设为ACEScg）",
+                "type": "DensityExp",
+                "required_working_colorspace": current_working_space,
                 "data": {}
             }
             
@@ -1383,10 +1386,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", f"保存色卡颜色时出错：\n{str(e)}")
     
     def _extract_original_colorchecker_patches(self):
-        """从原图像中直接读取色卡区域的RGB值，假设为ACEScg色彩空间"""
+        """从pipeline处理后的图像中读取色卡区域的working space RGB值"""
         try:
             import numpy as np
             import cv2
+            from copy import deepcopy
             
             # 检查必要条件
             if not (self.preview_widget.cc_enabled and 
@@ -1394,25 +1398,39 @@ class MainWindow(QMainWindow):
                     self.context.get_current_image()):
                 return None
             
-            # 获取原图像数据
-            original_image = self.context.get_current_image()
-            original_array = original_image.array
-            if original_array is None:
+            # 获取当前proxy图像和参数
+            proxy_image = self.context._current_proxy
+            if proxy_image is None:
+                return None
+                
+            current_params = deepcopy(self.context.get_current_params())
+            
+            # 通过pipeline处理图像，获取working space RGB
+            processed_image = self.context.the_enlarger.apply_full_pipeline(
+                proxy_image, 
+                current_params,
+                convert_to_monochrome_in_idt=self.context.should_convert_to_monochrome(),
+                monochrome_converter=self.context.color_space_manager.convert_to_monochrome if self.context.should_convert_to_monochrome() else None
+            )
+            
+            # 获取处理后的图像数组
+            processed_array = processed_image.array
+            if processed_array is None:
                 return None
             
             # 确保数据为float32格式
-            if original_array.dtype == np.uint8:
-                original_array = original_array.astype(np.float32) / 255.0
+            if processed_array.dtype == np.uint8:
+                processed_array = processed_array.astype(np.float32) / 255.0
             else:
-                original_array = np.clip(original_array, 0.0, 1.0).astype(np.float32)
+                processed_array = np.clip(processed_array, 0.0, 1.0).astype(np.float32)
             
             # 获取图像尺寸
-            H_img, W_img = original_array.shape[:2]
+            H_img, W_img = processed_array.shape[:2]
             
             # 获取色卡角点的归一化坐标
             cc_corners_norm = self.preview_widget.cc_corners_norm
             
-            # 转换归一化坐标到原图像坐标
+            # 转换归一化坐标到图像坐标
             corners_img = []
             for x_norm, y_norm in cc_corners_norm:
                 x_img = x_norm * W_img
@@ -1454,19 +1472,19 @@ class MainWindow(QMainWindow):
                     mask = np.zeros((H_img, W_img), dtype=np.uint8)
                     cv2.fillPoly(mask, [poly_int], 255)
                     
-                    # 提取色块的平均RGB值（直接假设为ACEScg）
+                    # 提取色块的平均RGB值（pipeline处理后的working space RGB）
                     m = mask.astype(bool)
                     if not np.any(m):
                         rgb = np.array([0.0, 0.0, 0.0], dtype=np.float32)
                     else:
-                        rgb = original_array[m].reshape(-1, original_array.shape[2]).mean(axis=0)
+                        rgb = processed_array[m].reshape(-1, processed_array.shape[2]).mean(axis=0)
                     
                     rgb_list.append(rgb.astype(np.float32))
             
             return np.stack(rgb_list, axis=0)
             
         except Exception as e:
-            print(f"提取原图色卡色块失败: {e}")
+            print(f"提取pipeline处理后色卡色块失败: {e}")
             return None
     
     def _initialize_color_space_info(self):

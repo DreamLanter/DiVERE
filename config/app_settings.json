@@ -1,6 +1,6 @@
 {
   "directories": {
-    "open_image": "/Volumes/V7Disk/Pictures/Scan2025/352304002-半格-Ultramax",
+    "open_image": "/Volumes/V7Disk/Pictures/Scan2025/macbookpro拷贝/样片/nikon9000ed/9000edChannels",
     "save_image": "/Volumes/V7Disk/Pictures/Scan2025/122510001-portra160",
     "save_lut": "/Users/v7/Downloads",
     "save_matrix": "/Users/v7/Workspace/Photography/Film/Code/FilmCCSoftware/config/matrices"
@@ -14,7 +14,7 @@
       100,
       100
     ],
-    "proxy_max_size": 1000
+    "proxy_max_size": 1500
   },
   "defaults": {
     "input_color_space": "sRGB",

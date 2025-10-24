@@ -437,7 +437,7 @@ class IDTCalculatorWindow(QMainWindow):
             # CCM矩阵
             if 'ccm_matrix' in result:
                 ccm = result['ccm_matrix']
-                text += "归一化CCM矩阵:\n"
+                text += "计算得到的CCM矩阵:\n"
                 for i in range(3):
                     row_text = "[" + ", ".join([f"{ccm[i,j]:8.6f}" for j in range(3)]) + "]\n"
                     text += row_text

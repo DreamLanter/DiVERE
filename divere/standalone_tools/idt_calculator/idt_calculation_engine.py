@@ -99,28 +99,29 @@ class IDTCalculationEngine:
         
         return rgb_matrix
     
-    def normalize_ccm_rows(self, ccm: np.ndarray) -> np.ndarray:
+    def validate_ccm_matrix(self, ccm: np.ndarray) -> np.ndarray:
         """
-        对CCM矩阵的每一行进行归一化，确保行和为1.0
+        验证CCM矩阵的有效性，但不进行归一化
         
         Args:
             ccm: 3x3 CCM矩阵
             
         Returns:
-            归一化后的CCM矩阵
+            验证后的CCM矩阵（原样返回）
         """
-        normalized_ccm = ccm.copy()
+        if ccm.shape != (3, 3):
+            raise ValueError(f"CCM矩阵必须是3x3，当前形状: {ccm.shape}")
         
-        for i in range(3):
-            row_sum = np.sum(normalized_ccm[i, :])
-            if abs(row_sum) > 1e-10:  # 避免除零
-                normalized_ccm[i, :] /= row_sum
-            else:
-                # 如果行和接近0，设置为单位矩阵的对应行
-                normalized_ccm[i, :] = 0.0
-                normalized_ccm[i, i] = 1.0
+        # 检查是否有NaN或无穷大值
+        if not np.isfinite(ccm).all():
+            raise ValueError("CCM矩阵包含NaN或无穷大值")
         
-        return normalized_ccm
+        # 检查行列式是否接近零（不可逆）
+        det = np.linalg.det(ccm)
+        if abs(det) < 1e-10:
+            raise ValueError(f"CCM矩阵接近奇异矩阵，行列式: {det}")
+        
+        return ccm.copy()
     
     def calculate_source_colorspace(self, ccm: np.ndarray, target_primaries: np.ndarray, 
                                    target_whitepoint: np.ndarray, target_colorspace: str,
@@ -187,12 +188,14 @@ class IDTCalculationEngine:
             rgb_values = rgb_values.reshape(1, -1)
         
         # 获取目标色彩空间的xy信息
-        primaries_xy, white_point_xy = self.get_target_colorspace_xy_info(
+        target_xy_info = self.get_target_colorspace_xy_info(
             target_colorspace, color_space_manager
         )
         
         # 构建RGB到XYZ转换矩阵
-        rgb_to_xyz_matrix = self.build_rgb_to_xyz_matrix(primaries_xy, white_point_xy)
+        rgb_to_xyz_matrix = self.build_rgb_to_xyz_matrix(
+            target_xy_info['primaries'], target_xy_info['white_point']
+        )
         
         # 转换为XYZ
         xyz_values = rgb_values @ rgb_to_xyz_matrix.T
@@ -308,7 +311,7 @@ class IDTCalculationEngine:
         return primaries_rgb, whitepoint_rgb
     
     def get_target_colorspace_xy_info(self, colorspace_name: str, 
-                                     color_space_manager=None) -> Tuple[Dict, List[float]]:
+                                     color_space_manager=None) -> Dict[str, any]:
         """
         获取目标色彩空间的xy色度坐标信息
         
@@ -317,34 +320,34 @@ class IDTCalculationEngine:
             color_space_manager: ColorSpaceManager实例
             
         Returns:
-            (primaries_xy, white_point_xy) - 原色xy坐标字典和白点xy坐标
+            包含primaries和white_point的字典
         """
         # 尝试从ColorSpaceManager获取真实的色彩空间信息
         if color_space_manager:
             try:
-                colorspace_info = color_space_manager._color_spaces.get(colorspace_name)
-                if colorspace_info and 'primaries' in colorspace_info:
-                    primaries_array = colorspace_info['primaries']
-                    white_point_array = colorspace_info.get('white_point', [0.3127, 0.3290])
+                colorspace_info = color_space_manager.get_color_space_definition(colorspace_name)
+                if colorspace_info:
+                    # ColorSpaceManager返回格式: {'primaries_xy': [[x,y], [x,y], [x,y]], 'white_point_xy': [x,y], 'gamma': float}
+                    primaries_array = colorspace_info.get('primaries_xy', [])
+                    white_point_array = colorspace_info.get('white_point_xy', [0.3127, 0.3290])
                     
-                    # 将numpy数组转换为字典格式
-                    if isinstance(primaries_array, np.ndarray) and primaries_array.shape == (3, 2):
+                    # 转换为字典格式
+                    if len(primaries_array) == 3:
                         primaries_xy = {
-                            'R': [float(primaries_array[0, 0]), float(primaries_array[0, 1])],
-                            'G': [float(primaries_array[1, 0]), float(primaries_array[1, 1])],
-                            'B': [float(primaries_array[2, 0]), float(primaries_array[2, 1])]
+                            'R': [float(primaries_array[0][0]), float(primaries_array[0][1])],
+                            'G': [float(primaries_array[1][0]), float(primaries_array[1][1])],
+                            'B': [float(primaries_array[2][0]), float(primaries_array[2][1])]
                         }
                     else:
-                        # 如果已经是字典格式，直接使用
-                        primaries_xy = primaries_array
+                        raise ValueError(f"Invalid primaries format: {primaries_array}")
                     
                     # 确保白点是列表格式
-                    if isinstance(white_point_array, np.ndarray):
-                        white_point_xy = white_point_array.tolist()
-                    else:
-                        white_point_xy = white_point_array
+                    white_point_xy = [float(white_point_array[0]), float(white_point_array[1])]
                     
-                    return primaries_xy, white_point_xy
+                    return {
+                        'primaries': primaries_xy,
+                        'white_point': white_point_xy
+                    }
             except Exception as e:
                 print(f"从ColorSpaceManager获取色彩空间信息失败: {e}")
                 import traceback
@@ -384,11 +387,14 @@ class IDTCalculationEngine:
             }
             white_point_xy = [0.3127, 0.3290]
         
-        return primaries_xy, white_point_xy
+        return {
+            'primaries': primaries_xy,
+            'white_point': white_point_xy
+        }
     
     def set_optimized_ccm(self, ccm: np.ndarray):
         """设置优化后的CCM矩阵"""
-        self.ccm_matrix = self.normalize_ccm_rows(ccm)
+        self.ccm_matrix = self.validate_ccm_matrix(ccm)
     
     def calculate_final_colorspace(self, target_colorspace: str, 
                                    color_space_manager=None) -> Dict:

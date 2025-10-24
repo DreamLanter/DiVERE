@@ -1390,7 +1390,55 @@ class MainWindow(QMainWindow):
                     
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"保存色卡颜色时出错：\n{str(e)}")
-    
+
+    def _apply_rotation_to_point(self, x, y, orig_w, orig_h, orientation):
+        """应用旋转变换到点坐标
+
+        将原图坐标系中的点坐标变换到旋转后坐标系中。
+
+        Args:
+            x, y: 原图坐标系中的点坐标（像素）
+            orig_w, orig_h: 原图尺寸（宽，高）
+            orientation: 旋转角度（0, 90, 180, 270度）
+
+        Returns:
+            (x_rot, y_rot): 旋转后坐标系中的点坐标（像素）
+        """
+        k = (orientation // 90) % 4
+        if k == 0:  # 无旋转
+            return x, y
+        elif k == 1:  # 左旋90度
+            # 原图的(x, y) -> 旋转后图像中的(y, orig_w - 1 - x)
+            # 像素坐标从0开始，需要 -1
+            return y, orig_w - 1 - x
+        elif k == 2:  # 旋转180度
+            return orig_w - 1 - x, orig_h - 1 - y
+        elif k == 3:  # 右旋90度（左旋270度）
+            return orig_h - 1 - y, x
+        return x, y
+
+    def _rotate_normalized_coords(self, x_norm, y_norm, orientation):
+        """旋转归一化坐标（0-1范围）
+
+        Args:
+            x_norm, y_norm: 原图归一化坐标 [0, 1]
+            orientation: 旋转角度（0, 90, 180, 270度）
+
+        Returns:
+            (x_rot_norm, y_rot_norm): 旋转后的归一化坐标 [0, 1]
+        """
+        k = (orientation // 90) % 4
+        if k == 0:  # 无旋转
+            return x_norm, y_norm
+        elif k == 1:  # 左旋90度
+            # 归一化坐标变换：(x, y) → (y, 1-x)
+            return y_norm, 1.0 - x_norm
+        elif k == 2:  # 旋转180度
+            return 1.0 - x_norm, 1.0 - y_norm
+        elif k == 3:  # 右旋90度
+            return 1.0 - y_norm, x_norm
+        return x_norm, y_norm
+
     def _extract_original_colorchecker_patches(self):
         """从pipeline处理后的图像中读取色卡区域的working space RGB值"""
         try:
@@ -1430,17 +1478,32 @@ class MainWindow(QMainWindow):
             else:
                 processed_array = np.clip(processed_array, 0.0, 1.0).astype(np.float32)
             
-            # 获取图像尺寸
+            # 获取处理后（已旋转）的图像尺寸
             H_img, W_img = processed_array.shape[:2]
-            
-            # 获取色卡角点的归一化坐标
+
+            # 获取色卡角点的归一化坐标（相对原图）
             cc_corners_norm = self.preview_widget.cc_corners_norm
-            
-            # 转换归一化坐标到图像坐标
+
+            # 获取当前旋转角度
+            global_orientation = self.context.get_current_orientation()
+
+            # 关键修复：proxy_image 已经被旋转，processed_array 也已旋转
+            # 需要将归一化坐标从原图坐标系旋转到processed_array坐标系
+            # 然后直接乘以processed_array的尺寸
             corners_img = []
             for x_norm, y_norm in cc_corners_norm:
-                x_img = x_norm * W_img
-                y_img = y_norm * H_img
+                # 先旋转归一化坐标到旋转后的坐标系
+                if global_orientation % 360 != 0:
+                    x_norm_rot, y_norm_rot = self._rotate_normalized_coords(
+                        x_norm, y_norm, global_orientation
+                    )
+                else:
+                    x_norm_rot, y_norm_rot = x_norm, y_norm
+
+                # 再乘以旋转后图像的尺寸得到像素坐标
+                x_img = x_norm_rot * W_img
+                y_img = y_norm_rot * H_img
+
                 corners_img.append([x_img, y_img])
             
             # 计算透视变换矩阵

@@ -571,13 +571,26 @@ class PreviewWidget(QWidget):
                     crop_height = h * src_h
                     
                     # 原图坐标 → crop坐标
-                    crop_x = (source_x - crop_left) * disp_w / crop_width
-                    crop_y = (source_y - crop_top) * disp_h / crop_height
-                    
+                    # 修复：缩放时需要考虑crop的orientation
+                    if crop_instance.orientation % 180 == 0:  # 0°或180°
+                        crop_x = (source_x - crop_left) * disp_w / crop_width
+                        crop_y = (source_y - crop_top) * disp_h / crop_height
+                    else:  # 90°或270°（宽高交换）
+                        crop_x = (source_x - crop_left) * disp_h / crop_width
+                        crop_y = (source_y - crop_top) * disp_w / crop_height
+
                     # 处理crop的独立orientation
                     if crop_instance.orientation % 360 != 0:
+                        # 修复：传入未旋转的crop尺寸
+                        # 缩放后坐标在未旋转的crop坐标系中
+                        # 对于90°/270°，未旋转尺寸是(disp_h, disp_w)
+                        if crop_instance.orientation % 180 == 0:
+                            rot_crop_w, rot_crop_h = disp_w, disp_h
+                        else:
+                            rot_crop_w, rot_crop_h = disp_h, disp_w
+
                         crop_x, crop_y = self._apply_rotate_point(
-                            crop_x, crop_y, disp_w, disp_h, crop_instance.orientation
+                            crop_x, crop_y, rot_crop_w, rot_crop_h, crop_instance.orientation
                         )
                     
                     display_corners.append((crop_x, crop_y))
@@ -586,19 +599,26 @@ class PreviewWidget(QWidget):
             else:
                 # 非聚焦模式：原图坐标 → 显示坐标
                 global_orientation = md.get('global_orientation', 0)
-                
+
                 if global_orientation % 180 == 0:  # 0°或180°
                     img_x = source_x * disp_w / src_w
                     img_y = source_y * disp_h / src_h
                 else:  # 90°或270°（宽高交换）
                     img_x = source_x * disp_h / src_w
                     img_y = source_y * disp_w / src_h
-                
+
                 if global_orientation % 360 != 0:
+                    # 修复：传入未旋转的图像尺寸作为输入坐标系
+                    # 对于90°/270°，缩放后坐标在(disp_h, disp_w)坐标系中
+                    if global_orientation % 180 == 0:
+                        rot_img_w, rot_img_h = disp_w, disp_h
+                    else:
+                        rot_img_w, rot_img_h = disp_h, disp_w
+
                     img_x, img_y = self._apply_rotate_point(
-                        img_x, img_y, disp_w, disp_h, global_orientation
+                        img_x, img_y, rot_img_w, rot_img_h, global_orientation
                     )
-                
+
                 display_corners.append((img_x, img_y))
         
         return display_corners
@@ -2458,17 +2478,20 @@ class PreviewWidget(QWidget):
 
     # ===== 旋转锚点支持代码已移除 =====
     # 简化旋转逻辑，旋转后自动适应窗口显示
-        
+    # cc_corners_norm 保持相对物理原图不变，显示/提取时根据 orientation 自动应用旋转
+
     def rotate_left(self):
         """左旋90度"""
         if self.current_image and self.current_image.array is not None:
             # 直接通知主窗口执行旋转，不使用锚点机制
+            # cc_corners_norm 保持相对物理原图不变，显示时会自动应用旋转
             self.image_rotated.emit(1)  # 1表示左旋
-            
+
     def rotate_right(self):
         """右旋90度"""
         if self.current_image and self.current_image.array is not None:
             # 直接通知主窗口执行旋转，不使用锚点机制
+            # cc_corners_norm 保持相对物理原图不变，显示时会自动应用旋转
             self.image_rotated.emit(-1)  # -1表示右旋
             
     def keyPressEvent(self, event):

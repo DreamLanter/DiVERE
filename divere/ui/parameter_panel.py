@@ -197,7 +197,7 @@ class ParameterPanel(QWidget):
         layout.addWidget(colorspace_group)
         
         # --- Spectral Sharpening Section ---
-        self.enable_scanner_spectral_checkbox = QCheckBox("扫描仪光谱锐化")
+        self.enable_scanner_spectral_checkbox = QCheckBox("扫描仪光谱锐化（硬件校正）")
         layout.addWidget(self.enable_scanner_spectral_checkbox)
 
         self.ucs_widget = UcsTriangleWidget()
@@ -248,16 +248,16 @@ class ParameterPanel(QWidget):
         layout.addLayout(cc_selector_layout)
 
         # 读取并保存色卡颜色按钮
-        self.save_colorchecker_colors_button = QPushButton("读取并保存色卡颜色")
-        self.save_colorchecker_colors_button.setToolTip("从当前色卡选择器中读取24个色块的平均颜色并保存为JSON文件")
+        self.save_colorchecker_colors_button = QPushButton("读取并保存色卡密度")
+        self.save_colorchecker_colors_button.setToolTip("从当前色卡选择器中读取24个色块的平均密度，转换为透过率并保存为JSON文件")
         self.save_colorchecker_colors_button.setVisible(False)
         self.save_colorchecker_colors_button.setEnabled(False)
         layout.addWidget(self.save_colorchecker_colors_button)
 
-        # 光谱锐化优化配置开关
+        # 光谱锐化（硬件校正）优化配置开关
         spectral_config_layout = QHBoxLayout()
-        self.optimize_idt_checkbox = QCheckBox("优化IDT基色")
-        self.optimize_idt_checkbox.setToolTip("优化IDT基色消除光源-传感器引入的串扰")
+        self.optimize_idt_checkbox = QCheckBox("优化IDT线性变换基色")
+        self.optimize_idt_checkbox.setToolTip("优化IDT线性变换基色，消除光源-传感器串扰")
         self.optimize_idt_checkbox.setChecked(False)  # 默认禁用
         self.optimize_idt_checkbox.setVisible(False)
         spectral_config_layout.addWidget(self.optimize_idt_checkbox)
@@ -1003,7 +1003,7 @@ class ParameterPanel(QWidget):
         self.idt_gamma_slider.setEnabled(enabled)
         self.idt_gamma_spinbox.setEnabled(enabled)
         
-        # 控制光谱锐化相关控件（如果启用）
+        # 控制光谱锐化（硬件校正）相关控件（如果启用）
         if hasattr(self, 'enable_scanner_spectral_checkbox'):
             self.enable_scanner_spectral_checkbox.setEnabled(enabled)
     
@@ -1546,7 +1546,7 @@ class ParameterPanel(QWidget):
             print(f"回滚ColorChecker选择失败: {e}")
     
     def get_spectral_sharpening_config(self):
-        """获取当前的光谱锐化配置（优先使用用户选择的参考文件）"""
+        """获取当前的光谱锐化（硬件校正）配置（优先使用用户选择的参考文件）"""
         from divere.core.data_types import SpectralSharpeningConfig, FILM_TYPE_COLORCHECKER_MAPPING
         
         # 优先使用用户在dropdown中的选择

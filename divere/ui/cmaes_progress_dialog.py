@@ -20,7 +20,7 @@ class CMAESProgressDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("光谱锐化优化进度")
+        self.setWindowTitle("光谱锐化（硬件校正）优化进度")
         self.setModal(True)
         self.resize(500, 400)
         
@@ -41,7 +41,7 @@ class CMAESProgressDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # 标题
-        title_label = QLabel("正在根据色卡优化光谱锐化参数...")
+        title_label = QLabel("正在根据色卡优化光谱锐化（硬件校正）参数...")
         title_font = QFont()
         title_font.setBold(True)
         title_font.setPointSize(12)

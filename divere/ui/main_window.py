@@ -917,7 +917,7 @@ class MainWindow(QMainWindow):
     # ===== Spectral Sharpening Hooks =====
 
     def _on_ccm_optimize_requested(self):
-        """根据色卡执行光谱锐化优化（后台），更新输入色彩空间与参数。"""
+        """根据色卡执行光谱锐化（硬件校正）优化（后台），更新输入色彩空间与参数。"""
         current_image = self.context.get_current_image()
         if not (current_image and current_image.array is not None):
             QMessageBox.warning(self, "提示", "请先打开一张图片")
@@ -946,7 +946,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "错误", "无法获取源图像坐标")
             return
 
-        # 获取光谱锐化配置
+        # 获取光谱锐化（硬件校正）配置
         sharpening_config = self.parameter_panel.get_spectral_sharpening_config()
         
         # 取当前密度校正矩阵
@@ -969,7 +969,7 @@ class MainWindow(QMainWindow):
         
         # 激活优化状态，避免其他状态消息干扰
         self.context.set_ccm_optimization_active(True)
-        self.statusBar().showMessage("正在进行光谱锐化优化...")
+        self.statusBar().showMessage("正在进行光谱锐化（硬件校正）优化...")
         
         # 获取UI当前参数作为优化初值
         current_params = self.context.get_current_params()
@@ -1081,7 +1081,7 @@ class MainWindow(QMainWindow):
                     self.context.set_ccm_optimization_active(False)
                     progress_dialog.finish_optimization(False)
                     QMessageBox.critical(self, "优化失败", worker.error)
-                    self.statusBar().showMessage("光谱锐化优化失败")
+                    self.statusBar().showMessage("光谱锐化（硬件校正）优化失败")
                     return
                 res = worker.result or {}
                 params_dict = res.get('parameters', {})
@@ -1094,7 +1094,7 @@ class MainWindow(QMainWindow):
                         self.context.set_ccm_optimization_active(False)
                         progress_dialog.finish_optimization(False)
                         QMessageBox.warning(self, "结果无效", "未获得有效的基色坐标")
-                        self.statusBar().showMessage("光谱锐化优化完成但结果无效")
+                        self.statusBar().showMessage("光谱锐化（硬件校正）优化完成但结果无效")
                         return
 
                     # 注册并切换到自定义输入色彩空间
@@ -1138,7 +1138,7 @@ class MainWindow(QMainWindow):
                 self.context.set_ccm_optimization_active(False)
                 progress_dialog.finish_optimization(True, final_log_rmse)
                 
-                completion_message = f"光谱锐化完成：最终log-RMSE={final_log_rmse:.4f}"
+                completion_message = f"光谱锐化（硬件校正）完成：最终log-RMSE={final_log_rmse:.4f}"
                 self.statusBar().showMessage(completion_message)
                 print(f"[DEBUG] 优化完成，显示消息: '{completion_message}'")
             finally:

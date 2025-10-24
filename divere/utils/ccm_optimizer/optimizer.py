@@ -56,7 +56,7 @@ class CCMOptimizer:
             reference_file: 参考RGB值文件路径
             weights_config_path: 权重配置文件路径
             bounds_config_path: 参数边界配置文件路径
-            sharpening_config: 光谱锐化配置，决定哪些参数参与优化
+            sharpening_config: 光谱锐化（硬件校正）配置，决定哪些参数参与优化
             status_callback: 状态回调函数
             app_context: ApplicationContext实例（必需），用于获取统一的reference color数据
         """

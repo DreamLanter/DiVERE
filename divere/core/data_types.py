@@ -960,7 +960,7 @@ class Curve:
 
 @dataclass
 class SpectralSharpeningConfig:
-    """光谱锐化优化配置"""
+    """光谱锐化（硬件校正）优化配置"""
     # 优化控制开关
     optimize_idt_transformation: bool = True    # IDT color transformation是否参与优化
     optimize_density_matrix: bool = False       # density matrix是否参与优化

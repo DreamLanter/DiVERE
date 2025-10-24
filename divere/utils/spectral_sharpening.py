@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-光谱锐化（Spectral Sharpening）接口封装
+光谱锐化（硬件校正）（Spectral Sharpening）接口封装
 
 职责：
 - 从图像与色卡四角点提取 24 色块（线性RGB）
@@ -57,7 +57,7 @@ def run(
     app_context: Any = None,  # ApplicationContext实例（必需），用于获取统一reference color
 ) -> Dict[str, Any]:
     """
-    执行光谱锐化优化，返回优化结果（不改动核心算法）。
+    执行光谱锐化（硬件校正）优化，返回优化结果（不改动核心算法）。
 
     Args:
         image_array: 原始图像数组（UI层提供）。
@@ -68,7 +68,7 @@ def run(
         optimizer_max_iter: CMA-ES 最大迭代数。
         optimizer_tolerance: 收敛容差。
         reference_file: 参考色卡 RGB 文件名。
-        sharpening_config: 光谱锐化配置对象，控制优化参数。
+        sharpening_config: 光谱锐化（硬件校正）配置对象，控制优化参数。
         ui_params: 来自UI的当前参数，用作优化初值。
         color_space_manager: 已废弃参数，log-RMSE不需要色彩空间管理器。
         working_colorspace: 已废弃参数，log-RMSE直接在RGB空间操作。
@@ -89,7 +89,7 @@ def run(
     # 检查必需参数
     if app_context is None:
         raise ValueError(
-            "app_context 是必需参数。光谱锐化需要 ApplicationContext "
+            "app_context 是必需参数。光谱锐化（硬件校正）需要 ApplicationContext "
             "以确保与 Preview 显示使用相同的 reference color 数据。"
         )
     

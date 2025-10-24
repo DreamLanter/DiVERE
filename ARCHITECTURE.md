@@ -102,7 +102,7 @@ graph TD
 
 这套架构有效地将“做什么”（UI层）和“怎么做”（核心层）分离开来，使得代码更加清晰、模块化，并易于未来的扩展。
 
-## 光谱锐化（Spectral Sharpening）
+## 光谱锐化（硬件校正）（Spectral Sharpening）
 
 ### 目标
 - 基于 ColorChecker 24 色块，从实际扫描图像中优化扫描仪输入色彩变换（primaries），并联合微调密度域参数（gamma、dmax）与 RB 对数增益。
@@ -111,7 +111,7 @@ graph TD
 ### 模块与职责
 - UI 层：
   - `ParameterPanel`：
-    - 提供“扫描仪光谱锐化”入口（开关、色卡选择器、优化/保存按钮）。
+    - 提供“扫描仪光谱锐化（硬件校正）”入口（开关、色卡选择器、优化/保存按钮）。
     - 发出 `ccm_optimize_requested`、`save_custom_colorspace_requested`、`toggle_color_checker_requested` 等信号。
   - `PreviewWidget`：
     - 色卡选择器交互（四角点），负责在预览中叠加网格与参考色块。
@@ -128,7 +128,7 @@ graph TD
     - `set_input_color_space()` 应用输入空间并重建代理；`update_params()` 合并参数并触发 `params_changed` 与后台预览；`preview_updated` 驱动 UI 刷新。
 
 ### 数据流
-1. 用户在 `ParameterPanel` 勾选色卡选择器并调整四角点 → 点击“根据色卡计算光谱锐化转换”。
+1. 用户在 `ParameterPanel` 勾选色卡选择器并调整四角点 → 点击“根据色卡计算光谱锐化（硬件校正）转换”。
 2. `ParameterPanel` 发出 `ccm_optimize_requested` → `MainWindow` 响应：
    - 读取当前图像数组与输入空间 gamma、色卡角点、密度校正矩阵启用状态；
    - 后台调用 `divere/utils/spectral_sharpening.run()`：
@@ -141,7 +141,7 @@ graph TD
    - `ApplicationContext` 触发预览后台任务 → `preview_updated(ImageData)` → `PreviewWidget` 刷新。
 4. 用户可点击“保存输入色彩变换结果”，`MainWindow` 将 UCS 三角坐标保存为用户目录 `config/colorspace/<name>_custom.json`（UTF-8，`ensure_ascii=False`）。
 
-### 光谱锐化交互图 (Mermaid.js)
+### 光谱锐化（硬件校正）交互图 (Mermaid.js)
 
 ```mermaid
 graph TD
@@ -173,6 +173,6 @@ graph TD
 ```
 
 ### 设计约束与非目标
-- 不修改 `math_ops`、`pipeline_processor`、`the_enlarger` 的核心算法与流程；光谱锐化仅作为接口层功能接入。
+- 不修改 `math_ops`、`pipeline_processor`、`the_enlarger` 的核心算法与流程；光谱锐化（硬件校正）仅作为接口层功能接入。
 - 色卡提取与优化调用在后台线程运行，避免阻塞 UI；预览线程由 `ApplicationContext` 统一管理。
 - 自定义输入色彩空间仅注册于运行时；是否持久化由用户显式保存控制。
